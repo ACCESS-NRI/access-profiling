@@ -13,7 +13,7 @@ Ocean thermodynamics and tracers     72     27.377185     33.281659     29.95014
  MPP_STACK high water mark=           0
 """
 
-from access.profiling.profiling import ProfilingParser, _convert_from_string
+from access.profiling.parser import ProfilingParser, _convert_from_string
 import re
 
 

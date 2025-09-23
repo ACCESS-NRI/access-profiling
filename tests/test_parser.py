@@ -3,7 +3,7 @@
 
 import pytest
 
-from access.profiling.profiling import ProfilingParser, _convert_from_string
+from access.profiling.parser import ProfilingParser, _convert_from_string
 
 
 class MockProfilingParser(ProfilingParser):

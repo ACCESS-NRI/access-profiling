@@ -11,8 +11,8 @@ except PackageNotFoundError:
     # package is not installed
     pass
 
-from .profiling import ProfilingParser
-from .fms_profiling import FMSProfilingParser
+from .parser import ProfilingParser
+from .fms_parser import FMSProfilingParser
 
 __all__ = [
     "ProfilingParser",
