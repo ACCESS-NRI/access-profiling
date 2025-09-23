@@ -13,8 +13,10 @@ except PackageNotFoundError:
 
 from access.profiling.parser import ProfilingParser
 from access.profiling.fms_parser import FMSProfilingParser
+from access.profiling.payujson_parser import PayuJSONProfilingParser
 
 __all__ = [
     "ProfilingParser",
     "FMSProfilingParser",
+    "PayuJSONProfilingParser",
 ]
