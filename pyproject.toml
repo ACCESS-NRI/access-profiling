@@ -1,0 +1,48 @@
+[project]
+name = "access-profiling"
+dynamic = ["version"]
+description = "Tools and utilities to profile the ACCESS climate models."
+authors = [
+  {name = "Micael Oliveira", email="micael.oliveira@anu.edu.au"},
+  {name = "Manodeep Sinha", email="manodeep.sinha@anu.edu.au"},
+  {name = "Edward Yang", email="edward.yang@anu.edu.au"},  
+]
+readme = "README.md"
+keywords = ["profiling", "access"]
+classifiers = [
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Topic :: Utilities",
+]
+dependencies = [
+    "xarray",
+]
+
+[build-system]
+requires = ["setuptools>=80", "setuptools_scm[toml]>=8"]
+build-backend = "setuptools.build_meta"
+
+[project.optional-dependencies]
+devel = [
+    "flake8",
+    "black",
+    "pre-commit",
+]
+test = [
+    "pytest",
+    "pytest-cov",
+]
+
+[tool.pytest.ini_options]
+addopts = ["--cov=access.profiling", "--cov-report=term", "--cov-report=html", "--cov-report=xml"]
+testpaths = ["tests"]
+
+[tool.coverage.run]
+omit = ["src/access/profiling/__init__.py"]
+
+[tool.black]
+line-length = 120
+
+[tool.flake8]
+max-line-length = 120
