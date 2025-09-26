@@ -31,10 +31,6 @@ from access.profiling.parser import ProfilingParser
 class CICE5ProfilingParser(ProfilingParser):
     """CICE5 profiling output parser."""
 
-    def __init__(self):
-        super().__init__()
-        self._metrics = ["min", "max", "mean"]
-
     @property
     def metrics(self) -> list:
         """Implements "metrics" abstract method/property.
@@ -42,7 +38,7 @@ class CICE5ProfilingParser(ProfilingParser):
         Returns:
             list: the metric names captured by this parser.
         """
-        return self._metrics
+        return ["min", "max", "mean"]
 
     def read(self, stream: str) -> dict:
         """Implements "read" abstract method to parse profiling data in CICE5 log output.

@@ -45,19 +45,14 @@ logger = logging.getLogger(__name__)
 class UMProfilingParser(ProfilingParser):
     """UM profiling output parser."""
 
-    def __init__(self):
-        """Instantiate the UM profiling parser."""
-        super().__init__()
+    @property
+    def metrics(self) -> list:
+        """ "Return a list of metrics (i.e., columns in the profiling data)"""
 
         # The parsed column names that will be kept. The order needs to match
         # the order of the column names in the input data (defined as ``raw_headers``
         # in the ``read``` method), after discarding the ignored columns.
-        self._metrics = ["tavg", "tmed", "tstd", "tmax", "pemax", "tmin", "pemin"]
-
-    @property
-    def metrics(self) -> list:
-        """ "Return a list of metrics (i.e., columns in the profiling data)"""
-        return self._metrics
+        return ["tavg", "tmed", "tstd", "tmax", "pemax", "tmin", "pemin"]
 
     def read(self, stream: str) -> dict:
         """Parse UM profiling data from a string.

@@ -21,6 +21,8 @@ from access.profiling.parser import ProfilingParser, _convert_from_string
 class FMSProfilingParser(ProfilingParser):
     """FMS profiling output parser."""
 
+    has_hits: bool  # whether FMS timings contains "hits" column.
+
     def __init__(self, has_hits: bool = True):
         """Instantiate FMS profiling parser.
 
@@ -29,20 +31,21 @@ class FMSProfilingParser(ProfilingParser):
         """
         super().__init__()
 
-        # FMS provides the following metrics:
-        if has_hits:
-            self._metrics = ["hits"]
-        else:
-            self._metrics = []
-        self._metrics += ["tmin", "tmax", "tavg", "tstd", "tfrac", "grain", "pemin", "pemax"]
+        self.has_hits = has_hits
 
     @property
-    def metrics(self) -> list:
-        return self._metrics
+    def metrics(self) -> list[str]:
+        # FMS provides the following metrics:
+        if self.has_hits:
+            metrics = ["hits"]
+        else:
+            metrics = []
+        metrics += ["tmin", "tmax", "tavg", "tstd", "tfrac", "grain", "pemin", "pemax"]
+        return metrics
 
     def read(self, stream: str) -> dict:
         # Regular expression to extract the profiling section from the file
-        header = r"\s*" + r"\s*".join(self._metrics) + r"\s*"
+        header = r"\s*" + r"\s*".join(self.metrics) + r"\s*"
         footer = r" MPP_STACK high water mark=\s*\d*"
         profiling_section_p = re.compile(header + r"(.*)" + footer, re.DOTALL)
 
