@@ -4,11 +4,12 @@
 import pytest
 
 from access.profiling import CICE5ProfilingParser
+from access.profiling.metrics import tavg, tmax, tmin
 
 
 @pytest.fixture(scope="module")
 def cice5_required_metrics():
-    return ("min", "max", "mean")
+    return (tmin, tmax, tavg)
 
 
 @pytest.fixture(scope="module")
@@ -22,9 +23,9 @@ def cice5_profiling():
     """Fixture returning a dict holding the parsed CICE5 timing content."""
     return {
         "region": ["Total", "TimeLoop"],
-        "min": [16197.42, 16197.14],
-        "max": [16197.47, 16197.19],
-        "mean": [16197.44, 16197.16],
+        tmin: [16197.42, 16197.14],
+        tmax: [16197.47, 16197.19],
+        tavg: [16197.44, 16197.16],
     }
 
 
@@ -78,8 +79,8 @@ def test_cice5_profiling(cice5_required_metrics, cice5_parser, cice5_log_file, c
 
     # check metrics are present in parser and parsed output
     for metric in cice5_required_metrics:
-        assert metric in cice5_parser.metrics, f"{metric} metric not found in CICE5 parser metrics."
-        assert metric in parsed_log, f"{metric} metric not found in CICE5 parsed log."
+        assert metric in cice5_parser.metrics, f"{metric.name} metric not found in CICE5 parser metrics."
+        assert metric in parsed_log, f"{metric.name} metric not found in CICE5 parsed log."
 
     # check content for each metric is correct
     for idx, region in enumerate(cice5_profiling["region"]):

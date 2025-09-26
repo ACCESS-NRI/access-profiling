@@ -15,7 +15,10 @@ Ocean thermodynamics and tracers    72     27.377185     33.281659     29.950144
 
 import re
 
+from access.profiling.metrics import ProfilingMetric, count, pemax, pemin, tavg, tfrac, tmax, tmin, tstd
 from access.profiling.parser import ProfilingParser, _convert_from_string
+
+grain = ProfilingMetric("grain", "dimensionless", "Grain")
 
 
 class FMSProfilingParser(ProfilingParser):
@@ -34,25 +37,25 @@ class FMSProfilingParser(ProfilingParser):
         self.has_hits = has_hits
 
     @property
-    def metrics(self) -> list[str]:
+    def metrics(self) -> list[ProfilingMetric]:
         # FMS provides the following metrics:
-        if self.has_hits:
-            metrics = ["hits"]
-        else:
-            metrics = []
-        metrics += ["tmin", "tmax", "tavg", "tstd", "tfrac", "grain", "pemin", "pemax"]
+        metrics = [count] if self.has_hits else []
+        metrics += [tmin, tmax, tavg, tstd, tfrac, grain, pemin, pemax]
         return metrics
 
     def read(self, stream: str) -> dict:
+        labels = ["hits"] if self.has_hits else []
+        labels += ["tmin", "tmax", "tavg", "tstd", "tfrac", "grain", "pemin", "pemax"]
+
         # Regular expression to extract the profiling section from the file
-        header = r"\s*" + r"\s*".join(self.metrics) + r"\s*"
+        header = r"\s*" + r"\s*".join(labels) + r"\s*"
         footer = r" MPP_STACK high water mark=\s*\d*"
         profiling_section_p = re.compile(header + r"(.*)" + footer, re.DOTALL)
 
         # Regular expression to parse the data for each region
         profile_line = r"^\s*(?P<region>[a-zA-Z:()_/\-*&\s]+(?<!\s))"
-        for metric in self.metrics:
-            profile_line += r"\s+(?P<" + metric + r">[0-9.]+)"
+        for label in labels:
+            profile_line += r"\s+(?P<" + label + r">[0-9.]+)"
         profile_line += r"$"
         profiling_region_p = re.compile(profile_line, re.MULTILINE)
 
@@ -66,7 +69,10 @@ class FMSProfilingParser(ProfilingParser):
             profiling_section = match.group(1)
         for line in profiling_region_p.finditer(profiling_section):
             stats["region"].append(line.group("region"))
-            for metric in self.metrics:
-                stats[str(metric)].append(_convert_from_string(line.group(metric)))
+            for label, metric in zip(labels, self.metrics):
+                stats[metric].append(_convert_from_string(line.group(label)))
+
+        # Convert time fraction to percentage
+        stats[tfrac] = [val * 100 for val in stats[tfrac]]
 
         return stats

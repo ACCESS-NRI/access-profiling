@@ -3,6 +3,7 @@
 
 import pytest
 
+from access.profiling.metrics import tmax
 from access.profiling.payujson_parser import PayuJSONProfilingParser
 
 
@@ -23,7 +24,7 @@ def payujson_profiling():
             "payu_archive_duration_seconds",
             "payu_total_duration_seconds",
         ],
-        "walltime": [47.73822930175811, 6776.044810215011, 6779.385873348918, 8.063649574294686, 6838.225644],
+        tmax: [47.73822930175811, 6776.044810215011, 6779.385873348918, 8.063649574294686, 6838.225644],
     }
 
 
@@ -53,11 +54,11 @@ def payujson_log_file():
 
 def test_payujson_profiling(payujson_parser, payujson_log_file, payujson_profiling):
     """Test the correct parsing of Payu JSON timing information."""
-    assert "walltime" in payujson_parser.metrics, "walltime metric not found in parsed log."
+    assert payujson_parser.metrics == [tmax], "tmax metric not found in parsed log."
     parsed_log = payujson_parser.read(payujson_log_file)
     for idx, region in enumerate(payujson_profiling.keys()):
         assert region in parsed_log, f"{region} not found in Payu JSON parsed log."
-        assert payujson_profiling["walltime"][idx] == parsed_log["walltime"][idx], (
+        assert payujson_profiling[tmax][idx] == parsed_log[tmax][idx], (
             f"Incorrect walltime for region {region} (idx: {idx})."
         )
 

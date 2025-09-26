@@ -6,6 +6,8 @@
 from abc import ABC, abstractmethod
 from typing import Any
 
+from access.profiling.metrics import ProfilingMetric
+
 
 class ProfilingParser(ABC):
     """Abstract parser of profiling data.
@@ -28,7 +30,7 @@ class ProfilingParser(ABC):
 
     @property
     @abstractmethod
-    def metrics(self) -> list:
+    def metrics(self) -> list[ProfilingMetric]:
         """list: Metrics available when using this parser."""
 
     @abstractmethod

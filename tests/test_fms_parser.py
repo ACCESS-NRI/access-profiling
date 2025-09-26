@@ -4,6 +4,7 @@
 import pytest
 
 from access.profiling import FMSProfilingParser
+from access.profiling.metrics import count, tavg, tmax, tmin, tstd
 
 
 @pytest.fixture(scope="module")
@@ -32,10 +33,10 @@ def fms_nohits_profiling():
             "oasis_recv",
             "oasis_send",
         ],
-        "tmin": [16282.797785, 15969.542784, 4.288529, 0.0, 0.024143, 0.231678, 168.797136, 2.468914],
-        "tmax": [16282.797792, 16000.704550, 4.296586, 0.0, 0.077235, 0.232671, 171.648384, 2.756777],
-        "tavg": [16282.797789, 15986.765795, 4.291991, 0.0, 0.040902, 0.232397, 170.460762, 2.593809],
-        "tstd": [0.000001, 8.643639, 0.001470, 0.0, 0.013836, 0.000242, 0.650894, 0.079459],
+        tmin: [16282.797785, 15969.542784, 4.288529, 0.0, 0.024143, 0.231678, 168.797136, 2.468914],
+        tmax: [16282.797792, 16000.704550, 4.296586, 0.0, 0.077235, 0.232671, 171.648384, 2.756777],
+        tavg: [16282.797789, 15986.765795, 4.291991, 0.0, 0.040902, 0.232397, 170.460762, 2.593809],
+        tstd: [0.000001, 8.643639, 0.001470, 0.0, 0.013836, 0.000242, 0.650894, 0.079459],
     }
 
 
@@ -77,8 +78,8 @@ def fms_hits_profiling():
             "Ocean Other",
             "(Ocean tracer advection)",
         ],
-        "hits": [1, 1, 1, 1, 2, 24, 192, 72, 0, 192, 48],
-        "tmin": [
+        count: [1, 1, 1, 1, 2, 24, 192, 72, 0, 192, 48],
+        tmin: [
             100.641190,
             0.987726,
             98.930085,
@@ -91,7 +92,7 @@ def fms_hits_profiling():
             1.710326,
             4.427230,
         ],
-        "tmax": [
+        tmax: [
             100.641190,
             0.987726,
             98.930085,
@@ -104,7 +105,7 @@ def fms_hits_profiling():
             1.710326,
             4.427230,
         ],
-        "tavg": [
+        tavg: [
             100.641190,
             0.987726,
             98.930085,
@@ -117,7 +118,7 @@ def fms_hits_profiling():
             1.710326,
             4.427230,
         ],
-        "tstd": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        tstd: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
     }
 
 
@@ -162,7 +163,7 @@ def test_fms_nohits_profiling(fms_nohits_parser, fms_nohits_log_file, fms_nohits
     parsed_log = fms_nohits_parser.read(fms_nohits_log_file)
     for idx, region in enumerate(fms_nohits_profiling.keys()):
         assert region in parsed_log, f"{region} not found in mom5 parsed log"
-        for metric in ("tmin", "tmax", "tavg", "tstd"):
+        for metric in (tmin, tmax, tavg, tstd):
             assert fms_nohits_profiling[metric][idx] == parsed_log[metric][idx], (
                 f"Incorrect {metric} for region {region} (idx: {idx})."
             )
@@ -173,7 +174,7 @@ def test_fms_hits_profiling(fms_hits_parser, fms_hits_log_file, fms_hits_profili
     parsed_log = fms_hits_parser.read(fms_hits_log_file)
     for idx, region in enumerate(fms_hits_profiling.keys()):
         assert region in parsed_log, f"{region} not found in mom6 parsed log"
-        for metric in ("hits", "tmin", "tmax", "tavg", "tstd"):
+        for metric in (count, tmin, tmax, tavg, tstd):
             assert fms_hits_profiling[metric][idx] == parsed_log[metric][idx], (
                 f"Incorrect {metric} for region {region} (idx: {idx})."
             )

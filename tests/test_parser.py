@@ -3,6 +3,7 @@
 
 import pytest
 
+from access.profiling.metrics import count, tavg, tmax, tmin
 from access.profiling.parser import ProfilingParser, _convert_from_string
 
 
@@ -10,12 +11,11 @@ class MockProfilingParser(ProfilingParser):
     """A Mock concrete Profiling Parser."""
 
     def __init__(self, data: dict):
-        self._metrics = ["hits", "tmin", "tmax", "tavg"]
         self._data = data
 
     @property
     def metrics(self) -> list:
-        return self._metrics
+        return [count, tmin, tmax, tavg]
 
     def read(self, stream: str) -> dict:
         return self._data[stream]
@@ -26,28 +26,27 @@ def profiling_data():
     """Fixture instantiating fake parsed profiling data."""
     return {
         "1cpu_stream": {
-            "regions": ["Total runtime", "Ocean Initialization"],
-            "hits": [1, 2],
-            "tmin": [138.600364, 2.344926],
-            "tmax": [138.600366, 2.345701],
-            "tavg": [600365, 2.345388],
+            "region": ["Total runtime", "Ocean Initialization"],
+            count: [1, 2],
+            tmin: [138.600364, 2.344926],
+            tmax: [138.600366, 2.345701],
+            tavg: [600365, 2.345388],
         },
         "2cpu_stream": {
-            "regions": ["Total runtime", "Ocean Initialization"],
-            "hits": [3, 4],
-            "tmin": [69.300182, 1.162463],
-            "tmax": [49.300182, 1.162463],
-            "tavg": [300182.5, 1.172694],
+            "region": ["Total runtime", "Ocean Initialization"],
+            count: [3, 4],
+            tmin: [69.300182, 1.162463],
+            tmax: [49.300182, 1.162463],
+            tavg: [300182.5, 1.172694],
         },
     }
 
 
 def test_base_parser(profiling_data):
     """Tests methods and properties of abstract base class, ProfilingParser."""
-
     parser = MockProfilingParser(profiling_data)
 
-    assert parser.metrics == ["hits", "tmin", "tmax", "tavg"], "Incorrect metrics returned in MockProfilingParser!"
+    assert parser.metrics == [count, tmin, tmax, tavg], "Incorrect metrics returned in MockProfilingParser!"
     for stream in ("1cpu_stream", "2cpu_stream"):
         assert parser.read(stream) == profiling_data[stream], f'Incorrect profiling stats returned for "{stream}"'
 
