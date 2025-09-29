@@ -60,7 +60,10 @@ class CICE5ProfilingParser(ProfilingParser):
 
         # Regex pattern to match timer blocks
         # This captures the region name and the three node timing values
-        pattern = r"Timer\s+\d+:\s+(\w+)\s+[\d.]+\s+seconds\s+Timer stats \(node\): min =\s+([\d.]+) seconds\s+max =\s+([\d.]+) seconds\s+mean=\s+([\d.]+) seconds"
+        pattern = (
+            r"Timer\s+\d+:\s+(\w+)\s+[\d.]+\s+seconds\s+Timer stats \(node\): min =\s+([\d.]+) seconds\s+max ="
+            r"\s+([\d.]+) seconds\s+mean=\s+([\d.]+) seconds"
+        )
 
         # Find all matches
         matches = re.findall(pattern, stream, re.MULTILINE | re.DOTALL)

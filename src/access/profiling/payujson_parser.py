@@ -58,7 +58,7 @@ class PayuJSONProfilingParser(ProfilingParser):
 
         try:
             timings = json.loads(stream)["timings"]
-        except:
+        except Exception:
             raise ValueError(errmsg)
 
         # remove known keys not relevant to profiling

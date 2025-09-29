@@ -47,7 +47,8 @@ class ProfilingParser(ABC):
 
 
 def _convert_from_string(value: str) -> Any:
-    """Tries to convert a string to the most appropriate numeric type. Leaves it unchanged if conversion does not succeed.
+    """Tries to convert a string to the most appropriate numeric type. Leaves it unchanged if conversion does not
+    succeed.
 
     Args:
         value (str): string to convert.
@@ -58,6 +59,6 @@ def _convert_from_string(value: str) -> Any:
     for type_conversion in (int, float):
         try:
             return type_conversion(value)
-        except:
+        except Exception:
             continue
     return value

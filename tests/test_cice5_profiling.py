@@ -85,9 +85,9 @@ def test_cice5_profiling(cice5_required_metrics, cice5_parser, cice5_log_file, c
     for idx, region in enumerate(cice5_profiling["region"]):
         assert region in parsed_log["region"], f"{region} not found in CICE5 parsed log"
         for metric in cice5_required_metrics:
-            assert (
-                cice5_profiling[metric][idx] == parsed_log[metric][idx]
-            ), f"Incorrect {metric} for region {region} (idx: {idx})."
+            assert cice5_profiling[metric][idx] == parsed_log[metric][idx], (
+                f"Incorrect {metric} for region {region} (idx: {idx})."
+            )
 
 
 def test_cice5_incorrect_profiling(cice5_parser, cice5_incorrect_log_file):

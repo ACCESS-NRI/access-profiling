@@ -57,9 +57,9 @@ def test_payujson_profiling(payujson_parser, payujson_log_file, payujson_profili
     parsed_log = payujson_parser.read(payujson_log_file)
     for idx, region in enumerate(payujson_profiling.keys()):
         assert region in parsed_log, f"{region} not found in Payu JSON parsed log."
-        assert (
-            payujson_profiling["walltime"][idx] == parsed_log["walltime"][idx]
-        ), f"Incorrect walltime for region {region} (idx: {idx})."
+        assert payujson_profiling["walltime"][idx] == parsed_log["walltime"][idx], (
+            f"Incorrect walltime for region {region} (idx: {idx})."
+        )
 
 
 def test_payujson_incorrect_profiling(payujson_parser):

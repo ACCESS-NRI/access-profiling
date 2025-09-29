@@ -55,13 +55,13 @@ def test_base_parser(profiling_data):
 def test_str2num():
     """Tests conversion of numbers to most appropriate type."""
     str2int = _convert_from_string("42")
-    assert type(str2int) == int
+    assert type(str2int) is int
     assert str2int == 42
     str2float = _convert_from_string("-1.23")
-    assert type(str2float) == float
+    assert type(str2float) is float
     assert str2float == -1.23
     str2float = _convert_from_string("0.00000")
     assert str2float == 0.0
     str2str = _convert_from_string("somestr")
-    assert type(str2str) == str
+    assert type(str2str) is str
     assert str2str == "somestr"
