@@ -38,7 +38,7 @@ addopts = ["--cov=access.profiling", "--cov-report=term", "--cov-report=html", "
 testpaths = ["tests"]
 
 [tool.coverage.run]
-omit = ["src/access/profiling/__init__.py"]
+omit = ["setup.py"]
 
 [tool.ruff]
 line-length = 120
