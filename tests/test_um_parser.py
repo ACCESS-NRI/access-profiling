@@ -15,7 +15,7 @@ def um_parser():
 @pytest.fixture(scope="module")
 def um_required_metrics():
     """Fixture for required metrics for the UM parser"""
-    return set(["tavg", "tmed", "tstd", "tmax", "pemax", "tmin", "pemin"])
+    return {"tavg", "tmed", "tstd", "tmax", "pemax", "tmin", "pemin"}
 
 
 @pytest.fixture(scope="module")

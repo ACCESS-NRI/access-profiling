@@ -34,10 +34,10 @@ not present in the output from UM v7.x .
 
 """
 
-from access.profiling.parser import ProfilingParser, _convert_from_string
-
-import re
 import logging
+import re
+
+from access.profiling.parser import ProfilingParser, _convert_from_string
 
 logger = logging.getLogger(__name__)
 

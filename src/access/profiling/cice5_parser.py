@@ -23,8 +23,9 @@ These timers are printed at the end of the CICE5 run and can be an arbitrary num
 For example, ESM1.6 has 17 timers printed at the end of ice_diag.d output log.
 """
 
-from access.profiling.parser import ProfilingParser
 import re
+
+from access.profiling.parser import ProfilingParser
 
 
 class CICE5ProfilingParser(ProfilingParser):

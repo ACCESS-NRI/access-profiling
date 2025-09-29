@@ -26,8 +26,9 @@ class ProfilingParser(ABC):
     values, one for each profiling region. Therefore, 'val1a', is the value for metric a of region 1.
     """
 
+    @abstractmethod
     def __init__(self):
-        pass
+        """Instantiate a ProfilingParser."""
 
     @property
     @abstractmethod

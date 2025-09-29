@@ -44,4 +44,4 @@ omit = ["src/access/profiling/__init__.py"]
 line-length = 120
 
 [tool.ruff.lint]
-select = ["E", "F"]
+select = ["E", "F", "B", "C4", "SIM", "PTH", "UP", "I", "N", "C901"]
