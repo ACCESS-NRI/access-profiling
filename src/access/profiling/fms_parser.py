@@ -15,10 +15,12 @@ Ocean thermodynamics and tracers    72     27.377185     33.281659     29.950144
 
 import re
 
+from pint import Unit
+
 from access.profiling.metrics import ProfilingMetric, count, pemax, pemin, tavg, tfrac, tmax, tmin, tstd
 from access.profiling.parser import ProfilingParser, _convert_from_string
 
-grain = ProfilingMetric("grain", "dimensionless", "Grain")
+grain = ProfilingMetric("grain", Unit("dimensionless"), "Grain")
 
 
 class FMSProfilingParser(ProfilingParser):
