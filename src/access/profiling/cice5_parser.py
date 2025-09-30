@@ -25,21 +25,14 @@ For example, ESM1.6 has 17 timers printed at the end of ice_diag.d output log.
 
 import re
 
-from access.profiling.metrics import ProfilingMetric, tavg, tmax, tmin
+from access.profiling.metrics import tavg, tmax, tmin
 from access.profiling.parser import ProfilingParser
 
 
 class CICE5ProfilingParser(ProfilingParser):
     """CICE5 profiling output parser."""
 
-    @property
-    def metrics(self) -> list[ProfilingMetric]:
-        """Implements "metrics" abstract method/property.
-
-        Returns:
-            list: the metric names captured by this parser.
-        """
-        return [tmin, tmax, tavg]
+    _metrics = [tmin, tmax, tavg]
 
     def read(self, stream: str) -> dict:
         """Implements "read" abstract method to parse profiling data in CICE5 log output.

@@ -28,10 +28,12 @@ class ProfilingParser(ABC):
     values, one for each profiling region. Therefore, 'val1a', is the value for metric a of region 1.
     """
 
+    _metrics: list[ProfilingMetric]
+
     @property
-    @abstractmethod
     def metrics(self) -> list[ProfilingMetric]:
         """list: Metrics available when using this parser."""
+        return self._metrics
 
     @abstractmethod
     def read(self, stream: str) -> dict:

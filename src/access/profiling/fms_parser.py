@@ -35,13 +35,9 @@ class FMSProfilingParser(ProfilingParser):
         super().__init__()
 
         self.has_hits = has_hits
-
-    @property
-    def metrics(self) -> list[ProfilingMetric]:
         # FMS provides the following metrics:
-        metrics = [count] if self.has_hits else []
-        metrics += [tmin, tmax, tavg, tstd, tfrac, grain, pemin, pemax]
-        return metrics
+        self._metrics = [count] if self.has_hits else []
+        self._metrics += [tmin, tmax, tavg, tstd, tfrac, grain, pemin, pemax]
 
     def read(self, stream: str) -> dict:
         labels = ["hits"] if self.has_hits else []

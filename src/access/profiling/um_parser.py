@@ -37,7 +37,7 @@ not present in the output from UM v7.x .
 import logging
 import re
 
-from access.profiling.metrics import ProfilingMetric, pemax, pemin, tavg, tmax, tmed, tmin, tstd
+from access.profiling.metrics import pemax, pemin, tavg, tmax, tmed, tmin, tstd
 from access.profiling.parser import ProfilingParser, _convert_from_string
 
 logger = logging.getLogger(__name__)
@@ -46,14 +46,10 @@ logger = logging.getLogger(__name__)
 class UMProfilingParser(ProfilingParser):
     """UM profiling output parser."""
 
-    @property
-    def metrics(self) -> list[ProfilingMetric]:
-        """ "Return a list of metrics (i.e., columns in the profiling data)"""
-
-        # The parsed column names that will be kept. The order needs to match
-        # the order of the column names in the input data (defined as ``raw_headers``
-        # in the ``read``` method), after discarding the ignored columns.
-        return [tavg, tmed, tstd, tmax, pemax, tmin, pemin]
+    # The parsed column names that will be kept. The order needs to match
+    # the order of the column names in the input data (defined as ``raw_headers``
+    # in the ``read``` method), after discarding the ignored columns.
+    _metrics = [tavg, tmed, tstd, tmax, pemax, tmin, pemin]
 
     def read(self, stream: str) -> dict:
         """Parse UM profiling data from a string.
