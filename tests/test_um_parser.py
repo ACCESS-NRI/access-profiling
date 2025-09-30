@@ -15,7 +15,7 @@ def um_parser():
 @pytest.fixture(scope="module")
 def um_required_metrics():
     """Fixture for required metrics for the UM parser"""
-    return set(["tavg", "tmed", "tstd", "tmax", "pemax", "tmin", "pemin"])
+    return {"tavg", "tmed", "tstd", "tmax", "pemax", "tmin", "pemin"}
 
 
 @pytest.fixture(scope="module")
@@ -295,15 +295,15 @@ def test_um7_parsing(um_parser, um7_raw_profiling_data, um7_parsed_profile_data)
     stats = um_parser.read(um7_raw_profiling_data)
 
     # Might also be worthwhile to check that the 'region' key exists first
-    assert len(stats["region"]) == len(
-        um7_parsed_profile_data["region"]
-    ), f"Number of matched regions should be *exactly* {len(um7_parsed_profile_data['region'])}"
+    assert len(stats["region"]) == len(um7_parsed_profile_data["region"]), (
+        f"Number of matched regions should be *exactly* {len(um7_parsed_profile_data['region'])}"
+    )
 
     for metric in um_parser.metrics:
         for idx, region in enumerate(stats["region"]):
-            assert (
-                stats[metric][idx] == um7_parsed_profile_data[metric][idx]
-            ), f"Incorrect {metric} for region {region} (index: {idx})."
+            assert stats[metric][idx] == um7_parsed_profile_data[metric][idx], (
+                f"Incorrect {metric} for region {region} (index: {idx})."
+            )
 
 
 def test_um7_parser_missing_header(um_parser, um7_malformed_profiling_data_missing_header):
@@ -349,15 +349,15 @@ def test_um7_parser_extra_front_column_integer(
     stats = um_parser.read(um7_malformed_data_extra_front_column_with_integer_data)
 
     # Might also be worthwhile to check that the 'region' key exists first
-    assert len(stats["region"]) == len(
-        um7_parsed_profile_data["region"]
-    ), f"Number of matched regions should be *exactly* {len(um7_parsed_profile_data['region'])}"
+    assert len(stats["region"]) == len(um7_parsed_profile_data["region"]), (
+        f"Number of matched regions should be *exactly* {len(um7_parsed_profile_data['region'])}"
+    )
 
     for metric in um_parser.metrics:
         for idx, region in enumerate(stats["region"]):
-            assert (
-                stats[metric][idx] == um7_parsed_profile_data[metric][idx]
-            ), f"Incorrect {metric} for region {region} (index: {idx})."
+            assert stats[metric][idx] == um7_parsed_profile_data[metric][idx], (
+                f"Incorrect {metric} for region {region} (index: {idx})."
+            )
 
 
 def test_um7_parser_extra_front_column_string(um_parser, um7_malformed_data_extra_front_column_with_string_data):
@@ -378,12 +378,12 @@ def test_um13_parsing(um_parser, um13_raw_profiling_data, um13_parsed_profile_da
     stats = um_parser.read(um13_raw_profiling_data)
 
     # Might also be worthwhile to check that the 'region' key exists first
-    assert len(stats["region"]) == len(
-        um13_parsed_profile_data["region"]
-    ), f"Number of matched regions should be *exactly* {len(um13_parsed_profile_data['region'])}"
+    assert len(stats["region"]) == len(um13_parsed_profile_data["region"]), (
+        f"Number of matched regions should be *exactly* {len(um13_parsed_profile_data['region'])}"
+    )
 
     for metric in um_parser.metrics:
         for idx, region in enumerate(stats["region"]):
-            assert (
-                stats[metric][idx] == um13_parsed_profile_data[metric][idx]
-            ), f"Incorrect {metric} for region {region} (index: {idx})."
+            assert stats[metric][idx] == um13_parsed_profile_data[metric][idx], (
+                f"Incorrect {metric} for region {region} (index: {idx})."
+            )

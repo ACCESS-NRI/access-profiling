@@ -21,8 +21,9 @@ The data to be parsed is written in the following form:
 }
 """
 
-from access.profiling.parser import ProfilingParser
 import json
+
+from access.profiling.parser import ProfilingParser
 
 
 class PayuJSONProfilingParser(ProfilingParser):
@@ -58,8 +59,8 @@ class PayuJSONProfilingParser(ProfilingParser):
 
         try:
             timings = json.loads(stream)["timings"]
-        except:
-            raise ValueError(errmsg)
+        except Exception as e:
+            raise ValueError(errmsg) from e
 
         # remove known keys not relevant to profiling
         for unwanted_key in ("payu_start_time", "payu_finish_time"):

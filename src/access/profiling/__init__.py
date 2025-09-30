@@ -2,20 +2,18 @@
 access-profiling package.
 """
 
-__version__ = "0.1.0"
-from importlib.metadata import version, PackageNotFoundError
+from contextlib import suppress
+from importlib.metadata import PackageNotFoundError, version
 
-try:
+__version__ = "unknown"
+with suppress(PackageNotFoundError):
     __version__ = version("access-profiling")
-except PackageNotFoundError:
-    # package is not installed
-    pass
 
-from access.profiling.parser import ProfilingParser
-from access.profiling.fms_parser import FMSProfilingParser
-from access.profiling.um_parser import UMProfilingParser
-from access.profiling.payujson_parser import PayuJSONProfilingParser
 from access.profiling.cice5_parser import CICE5ProfilingParser
+from access.profiling.fms_parser import FMSProfilingParser
+from access.profiling.parser import ProfilingParser
+from access.profiling.payujson_parser import PayuJSONProfilingParser
+from access.profiling.um_parser import UMProfilingParser
 
 __all__ = [
     "ProfilingParser",

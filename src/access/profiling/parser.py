@@ -26,8 +26,9 @@ class ProfilingParser(ABC):
     values, one for each profiling region. Therefore, 'val1a', is the value for metric a of region 1.
     """
 
+    @abstractmethod
     def __init__(self):
-        pass
+        """Instantiate a ProfilingParser."""
 
     @property
     @abstractmethod
@@ -47,7 +48,8 @@ class ProfilingParser(ABC):
 
 
 def _convert_from_string(value: str) -> Any:
-    """Tries to convert a string to the most appropriate numeric type. Leaves it unchanged if conversion does not succeed.
+    """Tries to convert a string to the most appropriate numeric type. Leaves it unchanged if conversion does not
+    succeed.
 
     Args:
         value (str): string to convert.
@@ -58,6 +60,6 @@ def _convert_from_string(value: str) -> Any:
     for type_conversion in (int, float):
         try:
             return type_conversion(value)
-        except:
+        except Exception:
             continue
     return value

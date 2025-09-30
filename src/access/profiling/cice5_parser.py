@@ -23,8 +23,9 @@ These timers are printed at the end of the CICE5 run and can be an arbitrary num
 For example, ESM1.6 has 17 timers printed at the end of ice_diag.d output log.
 """
 
-from access.profiling.parser import ProfilingParser
 import re
+
+from access.profiling.parser import ProfilingParser
 
 
 class CICE5ProfilingParser(ProfilingParser):
@@ -60,7 +61,10 @@ class CICE5ProfilingParser(ProfilingParser):
 
         # Regex pattern to match timer blocks
         # This captures the region name and the three node timing values
-        pattern = r"Timer\s+\d+:\s+(\w+)\s+[\d.]+\s+seconds\s+Timer stats \(node\): min =\s+([\d.]+) seconds\s+max =\s+([\d.]+) seconds\s+mean=\s+([\d.]+) seconds"
+        pattern = (
+            r"Timer\s+\d+:\s+(\w+)\s+[\d.]+\s+seconds\s+Timer stats \(node\): min =\s+([\d.]+) seconds\s+max ="
+            r"\s+([\d.]+) seconds\s+mean=\s+([\d.]+) seconds"
+        )
 
         # Find all matches
         matches = re.findall(pattern, stream, re.MULTILINE | re.DOTALL)
