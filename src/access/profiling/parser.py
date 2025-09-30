@@ -6,6 +6,8 @@
 from abc import ABC, abstractmethod
 from typing import Any
 
+from access.profiling.metrics import ProfilingMetric
+
 
 class ProfilingParser(ABC):
     """Abstract parser of profiling data.
@@ -26,14 +28,12 @@ class ProfilingParser(ABC):
     values, one for each profiling region. Therefore, 'val1a', is the value for metric a of region 1.
     """
 
-    @abstractmethod
-    def __init__(self):
-        """Instantiate a ProfilingParser."""
+    _metrics: list[ProfilingMetric]
 
     @property
-    @abstractmethod
-    def metrics(self) -> list:
+    def metrics(self) -> list[ProfilingMetric]:
         """list: Metrics available when using this parser."""
+        return self._metrics
 
     @abstractmethod
     def read(self, stream: str) -> dict:

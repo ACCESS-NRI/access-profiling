@@ -37,6 +37,7 @@ not present in the output from UM v7.x .
 import logging
 import re
 
+from access.profiling.metrics import pemax, pemin, tavg, tmax, tmed, tmin, tstd
 from access.profiling.parser import ProfilingParser, _convert_from_string
 
 logger = logging.getLogger(__name__)
@@ -45,19 +46,10 @@ logger = logging.getLogger(__name__)
 class UMProfilingParser(ProfilingParser):
     """UM profiling output parser."""
 
-    def __init__(self):
-        """Instantiate the UM profiling parser."""
-        super().__init__()
-
-        # The parsed column names that will be kept. The order needs to match
-        # the order of the column names in the input data (defined as ``raw_headers``
-        # in the ``read``` method), after discarding the ignored columns.
-        self._metrics = ["tavg", "tmed", "tstd", "tmax", "pemax", "tmin", "pemin"]
-
-    @property
-    def metrics(self) -> list:
-        """ "Return a list of metrics (i.e., columns in the profiling data)"""
-        return self._metrics
+    # The parsed column names that will be kept. The order needs to match
+    # the order of the column names in the input data (defined as ``raw_headers``
+    # in the ``read``` method), after discarding the ignored columns.
+    _metrics = [tavg, tmed, tstd, tmax, pemax, tmin, pemin]
 
     def read(self, stream: str) -> dict:
         """Parse UM profiling data from a string.
@@ -72,7 +64,7 @@ class UMProfilingParser(ProfilingParser):
                     To keep consistent column names across all parsers, the following
                     mapping is used:
                         ==================  ==================
-                        UM column name      Standard column name
+                        UM column name      Standard metric
                         ==================  ==================
                         N                   - (ignored)
                         ROUTINE             region
@@ -154,34 +146,34 @@ class UMProfilingParser(ProfilingParser):
         # the future. Made heavy use of the regex debugger at regex101.com :) - MS 19/9/2025
         profile_line = r"^\s*[\d\s]+\s+(?P<region>[a-zA-Z][a-zA-Z:()_/\-*&0-9\s\.]+(?<!\s))"
         for metric in metrics:
-            logger.debug(f"Adding {metric=}")
-            if metric in ["pemax", "pemin"]:
+            logger.debug(f"Adding {metric.name=}")
+            if metric in [pemax, pemin]:
                 # the pemax and pemin values are enclosed within brackets '()',
                 # so we need to ignore both the opening and closing brackets
-                add_pattern = r"\s+\(\s*(?P<" + metric + r">[0-9.]+)\s*\)"
-            elif metric == "tstd":
+                add_pattern = r"\s+\(\s*(?P<" + metric.name + r">[0-9.]+)\s*\)"
+            elif metric == tstd:
                 add_pattern = (
-                    r"\s+(?P<" + metric + r">[0-9.]+)\s+[\S]+"
+                    r"\s+(?P<" + metric.name + r">[0-9.]+)\s+[\S]+"
                 )  # SD is followed by % of mean -> ignore that column
             else:
                 add_pattern = (
-                    r"\s+(?P<" + metric + r">[0-9.]+)"
+                    r"\s+(?P<" + metric.name + r">[0-9.]+)"
                 )  # standard white-space followed by a sequence of digits or '.'
 
-            logger.debug(f"{add_pattern=} for {metric=}")
+            logger.debug(f"{add_pattern=} for {metric.name=}")
             profile_line += add_pattern
-            logger.debug(f"{profile_line=} after {metric=}")
+            logger.debug(f"{profile_line=} after {metric.name=}")
 
         profile_line += r"$"  # the regex should match till the end of line.
         profiling_region_p = re.compile(profile_line, re.MULTILINE)
 
         stats = {"region": []}
-        stats.update(dict(zip(metrics, [[] for _ in metrics])))
+        stats.update({m: [] for m in self.metrics})
         for line in profiling_region_p.finditer(profiling_section):
             logger.debug(f"Matched line: {line.group(0)}")
             stats["region"].append(line.group("region"))
             for metric in metrics:
-                stats[str(metric)].append(_convert_from_string(line.group(metric)))
+                stats[metric].append(_convert_from_string(line.group(metric.name)))
 
         # Parsing is done - let's run some checks
         num_lines = len(profiling_section.strip().split("\n"))

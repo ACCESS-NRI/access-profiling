@@ -25,24 +25,14 @@ For example, ESM1.6 has 17 timers printed at the end of ice_diag.d output log.
 
 import re
 
+from access.profiling.metrics import tavg, tmax, tmin
 from access.profiling.parser import ProfilingParser
 
 
 class CICE5ProfilingParser(ProfilingParser):
     """CICE5 profiling output parser."""
 
-    def __init__(self):
-        super().__init__()
-        self._metrics = ["min", "max", "mean"]
-
-    @property
-    def metrics(self) -> list:
-        """Implements "metrics" abstract method/property.
-
-        Returns:
-            list: the metric names captured by this parser.
-        """
-        return self._metrics
+    _metrics = [tmin, tmax, tavg]
 
     def read(self, stream: str) -> dict:
         """Implements "read" abstract method to parse profiling data in CICE5 log output.
@@ -57,7 +47,7 @@ class CICE5ProfilingParser(ProfilingParser):
             ValueError: If matching timings aren't found.
         """
         # Initialize result dictionary
-        result = {"region": [], "min": [], "max": [], "mean": []}
+        result = {"region": [], tmin: [], tmax: [], tavg: []}
 
         # Regex pattern to match timer blocks
         # This captures the region name and the three node timing values
@@ -76,8 +66,8 @@ class CICE5ProfilingParser(ProfilingParser):
         for match in matches:
             region, min_time, max_time, mean_time = match
             result["region"].append(region)
-            result["min"].append(float(min_time))
-            result["max"].append(float(max_time))
-            result["mean"].append(float(mean_time))
+            result[tmin].append(float(min_time))
+            result[tmax].append(float(max_time))
+            result[tavg].append(float(mean_time))
 
         return result

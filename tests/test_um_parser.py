@@ -3,6 +3,7 @@
 
 import pytest
 
+from access.profiling.metrics import pemax, pemin, tavg, tmax, tmed, tmin, tstd
 from access.profiling.um_parser import UMProfilingParser
 
 
@@ -15,7 +16,7 @@ def um_parser():
 @pytest.fixture(scope="module")
 def um_required_metrics():
     """Fixture for required metrics for the UM parser"""
-    return {"tavg", "tmed", "tstd", "tmax", "pemax", "tmin", "pemin"}
+    return {tavg, tmed, tstd, tmax, pemax, tmin, pemin}
 
 
 @pytest.fixture(scope="module")
@@ -249,13 +250,13 @@ def um7_parsed_profile_data():
             "AS1 Atmos_Phys1",
             "AP2 Convection",
         ],
-        "tavg": [1308.3, 956.5, 884.63, 746.73, 561.27, 493.73],
-        "tmed": [1308.3, 956.14, 885.53, 746.73, 562.54, 493.82],
-        "tstd": [0.02, 3.26, 2.89, 0.01, 10.63, 0.18],
-        "tmax": [1308.33, 981.28, 889.49, 746.74, 580.32, 493.93],
-        "pemax": [118, 136, 48, 47, 42, 76],
-        "tmin": [1308.26, 953.28, 879.37, 746.71, 538.58, 493.34],
-        "pemin": [221, 43, 212, 181, 212, 20],
+        tavg: [1308.3, 956.5, 884.63, 746.73, 561.27, 493.73],
+        tmed: [1308.3, 956.14, 885.53, 746.73, 562.54, 493.82],
+        tstd: [0.02, 3.26, 2.89, 0.01, 10.63, 0.18],
+        tmax: [1308.33, 981.28, 889.49, 746.74, 580.32, 493.93],
+        pemax: [118, 136, 48, 47, 42, 76],
+        tmin: [1308.26, 953.28, 879.37, 746.71, 538.58, 493.34],
+        pemin: [221, 43, 212, 181, 212, 20],
     }
 
 
@@ -271,17 +272,17 @@ def um13_parsed_profile_data():
             "AS UKCA_MAIN1",
             "AS Atmos_Phys2 (AP2)",
         ],
-        "tavg": [1314.55, 1272.16, 466.83, 180.79, 173.52, 144.45],
-        "tmed": [1314.55, 1273.09, 466.81, 181.45, 174.45, 144.33],
-        "tstd": [0.06, 4.6, 0.21, 1.67, 4.6, 2.71],
-        "tmax": [1315.88, 1279.04, 467.36, 183.17, 180.4, 150.18],
-        "pemax": [0, 240, 83, 104, 240, 390],
-        "tmin": [1314.55, 1257.69, 466.37, 175.98, 159.06, 138.25],
-        "pemin": [433, 27, 377, 21, 27, 160],
+        tavg: [1314.55, 1272.16, 466.83, 180.79, 173.52, 144.45],
+        tmed: [1314.55, 1273.09, 466.81, 181.45, 174.45, 144.33],
+        tstd: [0.06, 4.6, 0.21, 1.67, 4.6, 2.71],
+        tmax: [1315.88, 1279.04, 467.36, 183.17, 180.4, 150.18],
+        pemax: [0, 240, 83, 104, 240, 390],
+        tmin: [1314.55, 1257.69, 466.37, 175.98, 159.06, 138.25],
+        pemin: [433, 27, 377, 21, 27, 160],
     }
 
 
-def test_um_metric_names(um_parser, um_required_metrics):
+def test_um_metrics(um_parser, um_required_metrics):
     """Test that parsed metrics *exactly* match the expected metrics"""
     assert set(um_parser.metrics) == um_required_metrics, (
         f"Expected to find *exactly* these metrics = {um_required_metrics},"
@@ -302,7 +303,7 @@ def test_um7_parsing(um_parser, um7_raw_profiling_data, um7_parsed_profile_data)
     for metric in um_parser.metrics:
         for idx, region in enumerate(stats["region"]):
             assert stats[metric][idx] == um7_parsed_profile_data[metric][idx], (
-                f"Incorrect {metric} for region {region} (index: {idx})."
+                f"Incorrect {metric.name} for region {region} (index: {idx})."
             )
 
 
