@@ -18,6 +18,7 @@ classifiers = [
 dependencies = [
     "xarray",
     "pint",
+    "pint-xarray",
 ]
 
 [build-system]

@@ -4,7 +4,12 @@
 """Classes and utilities to build profiling parsers for reading profiling data."""
 
 from abc import ABC, abstractmethod
+from collections.abc import Iterable
 from typing import Any
+
+# Next import is required to register pint with xarray
+import pint_xarray  # noqa: F401
+import xarray as xr
 
 from access.profiling.metrics import ProfilingMetric
 
@@ -45,6 +50,50 @@ class ProfilingParser(ABC):
         Returns:
             dict: profiling data.
         """
+
+    def parse_data_series(self, logs: list[str], varname: str, vars: Iterable) -> xr.Dataset:
+        """Given a list of logs containing profiling data, parse the data and return it as a xarray dataset.
+
+        For example, if the logs correspond to different runs of the same application with different number of CPUs,
+        then varname should be "ncpus" and vars could be a list with core counts:
+
+            log_1cpu = open("log_1cpu.txt").read()
+            log_2cpu = open("log_2cpu.txt").read()
+            log_4cpu = open("log_4cpu.txt").read()
+            scaling_data = parser.parse_data_series(
+                logs= [log_1cpu, log_2cpu, log_4cpu],
+                varname="ncpus",
+                vars=[1, 2, 4]
+            )
+
+        Args:
+            Logs (list[str]): Logs to parse.
+            varname (str): Name of the variable that changes between logs.
+            vars (Iterable): An iterable returning the value of the variable that changes between logs.
+
+        Returns:
+            Dataset: Series profiling data.
+        """
+        datasets = []
+        for var, log in zip(vars, logs):
+            data = self.read(log)
+            datasets.append(
+                xr.Dataset(
+                    data_vars=dict(
+                        zip(
+                            self.metrics,
+                            [
+                                xr.DataArray([data[metric]], dims=[varname, "region"]).pint.quantify(metric.units)
+                                for metric in self.metrics
+                            ],
+                        )
+                    ),
+                    coords={varname: [var], "region": data["region"]},
+                )
+            )
+
+        # Create dataset with all the data
+        return xr.concat(datasets, dim=varname)
 
 
 def _convert_from_string(value: str) -> Any:
