@@ -19,6 +19,7 @@ dependencies = [
     "xarray",
     "pint",
     "pint-xarray",
+    "matplotlib",
 ]
 
 [build-system]

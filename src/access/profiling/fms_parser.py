@@ -67,7 +67,7 @@ class FMSProfilingParser(ProfilingParser):
             profiling_section = match.group(1)
         for line in profiling_region_p.finditer(profiling_section):
             stats["region"].append(line.group("region"))
-            for label, metric in zip(labels, self.metrics):
+            for label, metric in zip(labels, self.metrics, strict=True):
                 stats[metric].append(_convert_from_string(line.group(label)))
 
         # Convert time fraction to percentage
