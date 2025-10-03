@@ -1,9 +1,14 @@
+# Copyright 2025 ACCESS-NRI and contributors. See the top-level COPYRIGHT file for details.
+# SPDX-License-Identifier: Apache-2.0
+
+from unittest import mock
+
 import pint
 import pytest
 import xarray as xr
 
 from access.profiling.metrics import count, tavg
-from access.profiling.scaling import parallel_efficiency, parallel_speedup
+from access.profiling.scaling import parallel_efficiency, parallel_speedup, plot_scaling_metrics
 
 
 @pytest.fixture()
@@ -79,3 +84,16 @@ def test_incorrect_units(simple_scaling_data):
     """Test calculation with incorrect units."""
     with pytest.raises(ValueError):
         parallel_speedup(simple_scaling_data, count)
+
+
+@mock.patch("matplotlib.pyplot.show", autospec=True)
+def test_plot_scaling_metrics(mock_plt, simple_scaling_data):
+    """Test plotting scaling metrics. Currently only checks that the function runs without errors."""
+
+    plot_scaling_metrics(
+        stats=[simple_scaling_data],
+        regions=[["Region 1", "Region 2"]],
+        metric=tavg,
+        xcoordinate="ncpus",
+    )
+    mock_plt.assert_called_once()
