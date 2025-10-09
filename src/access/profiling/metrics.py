@@ -40,6 +40,9 @@ class ProfilingMetric:
     def description(self) -> str:
         return self._description
 
+    def __str__(self) -> str:
+        return self._name
+
 
 # Define common metrics
 count = ProfilingMetric("count", Unit("dimensionless"), "Number of calls to region")
