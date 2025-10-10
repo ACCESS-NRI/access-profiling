@@ -75,7 +75,7 @@ class ProfilingParser(ABC):
             Dataset: Series profiling data.
         """
         datasets = []
-        for var, log in zip(vars, logs):
+        for var, log in zip(vars, logs, strict=True):
             data = self.read(log)
             datasets.append(
                 xr.Dataset(
@@ -86,6 +86,7 @@ class ProfilingParser(ABC):
                                 xr.DataArray([data[metric]], dims=[varname, "region"]).pint.quantify(metric.units)
                                 for metric in self.metrics
                             ],
+                            strict=True,
                         )
                     ),
                     coords={varname: [var], "region": data["region"]},
