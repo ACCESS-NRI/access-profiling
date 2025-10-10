@@ -13,6 +13,7 @@ def test_metric():
     assert metric.name == "test_name"
     assert metric.units == "second"
     assert metric.description == "test_description"
+    assert f"{metric}" == "test_name"
 
 
 def test_metric_empty_name():

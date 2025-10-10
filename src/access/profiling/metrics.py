@@ -40,14 +40,17 @@ class ProfilingMetric:
     def description(self) -> str:
         return self._description
 
+    def __str__(self) -> str:
+        return self._name
+
 
 # Define common metrics
 count = ProfilingMetric("count", Unit("dimensionless"), "Number of calls to region")
-tmin = ProfilingMetric("time_minimum", Unit("second"), "Minimum time spent in region")
-tmax = ProfilingMetric("time_maximum", Unit("second"), "Maximum time spent in region")
-pemin = ProfilingMetric("pe_minimum", Unit("dimensionless"), "Processing element where minimum time was recorded")
-pemax = ProfilingMetric("pe_maximum", Unit("dimensionless"), "Processing element where maximum time was recorded")
-tavg = ProfilingMetric("time_average", Unit("second"), "Average time spent in region")
-tmed = ProfilingMetric("time_mediam", Unit("second"), "Median time spent in region")
-tstd = ProfilingMetric("time_std", Unit("second"), "Standard deviation of time spent in region")
-tfrac = ProfilingMetric("time_fraction", Unit("%"), "Fraction of total time spent in region")
+tmin = ProfilingMetric("minimum time", Unit("second"), "Minimum time spent in region")
+tmax = ProfilingMetric("maximum time", Unit("second"), "Maximum time spent in region")
+pemin = ProfilingMetric("minimum PE", Unit("dimensionless"), "Processing element where minimum time was recorded")
+pemax = ProfilingMetric("maximum PE", Unit("dimensionless"), "Processing element where maximum time was recorded")
+tavg = ProfilingMetric("average time", Unit("second"), "Average time spent in region")
+tmed = ProfilingMetric("median time", Unit("second"), "Median time spent in region")
+tstd = ProfilingMetric("time std", Unit("second"), "Standard deviation of time spent in region")
+tfrac = ProfilingMetric("time fraction", Unit("%"), "Fraction of total time spent in region")

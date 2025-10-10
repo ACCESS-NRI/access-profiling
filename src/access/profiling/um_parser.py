@@ -147,17 +147,18 @@ class UMProfilingParser(ProfilingParser):
         profile_line = r"^\s*[\d\s]+\s+(?P<region>[a-zA-Z][a-zA-Z:()_/\-*&0-9\s\.]+(?<!\s))"
         for metric in metrics:
             logger.debug(f"Adding {metric.name=}")
+            group_name = "".join(metric.name.split())  # remove any white-space from metric name to create group name
             if metric in [pemax, pemin]:
                 # the pemax and pemin values are enclosed within brackets '()',
                 # so we need to ignore both the opening and closing brackets
-                add_pattern = r"\s+\(\s*(?P<" + metric.name + r">[0-9.]+)\s*\)"
+                add_pattern = r"\s+\(\s*(?P<" + group_name + r">[0-9.]+)\s*\)"
             elif metric == tstd:
                 add_pattern = (
-                    r"\s+(?P<" + metric.name + r">[0-9.]+)\s+[\S]+"
+                    r"\s+(?P<" + group_name + r">[0-9.]+)\s+[\S]+"
                 )  # SD is followed by % of mean -> ignore that column
             else:
                 add_pattern = (
-                    r"\s+(?P<" + metric.name + r">[0-9.]+)"
+                    r"\s+(?P<" + group_name + r">[0-9.]+)"
                 )  # standard white-space followed by a sequence of digits or '.'
 
             logger.debug(f"{add_pattern=} for {metric.name=}")
@@ -173,7 +174,8 @@ class UMProfilingParser(ProfilingParser):
             logger.debug(f"Matched line: {line.group(0)}")
             stats["region"].append(line.group("region"))
             for metric in metrics:
-                stats[metric].append(_convert_from_string(line.group(metric.name)))
+                group_name = "".join(metric.name.split())
+                stats[metric].append(_convert_from_string(line.group(group_name)))
 
         # Parsing is done - let's run some checks
         num_lines = len(profiling_section.strip().split("\n"))
