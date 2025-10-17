@@ -75,6 +75,31 @@ def _convert_from_string(value: str) -> Any:
     return value
 
 
+def _test_file(file_path: str | Path | os.PathLike) -> Path:
+    """Checks whether file_path is a valid path.
+
+    Args:
+        file_path (str | Path | os.PathLike): the path to check.
+
+    Returns
+        Path: file_path as a Path object.
+
+    Raises:
+        TypeError: if file_path cannot be turned into a Path object.
+        FileNotFoundError: if file_path can be converted into a Path, but the file dosen't exist.
+    """
+
+    try:
+        path = Path(file_path)
+    except TypeError as e:
+        raise TypeError(f"{file_path} is not a valid path.") from e
+
+    if not path.is_file():
+        raise FileNotFoundError(f"{file_path} is not a file or doesn't exist.")
+
+    return path
+
+
 def _read_text_file(file_path: str | Path | os.PathLike) -> str:
     """Checks whether file_path is a valid path to a text file and tries to read it.
 
@@ -90,13 +115,7 @@ def _read_text_file(file_path: str | Path | os.PathLike) -> str:
         ValueError: if file_path is a file, but cannot be read as a text file.
     """
 
-    try:
-        path = Path(file_path)
-    except TypeError as e:
-        raise TypeError(f"{file_path} is not a valid path.") from e
-
-    if not path.is_file():
-        raise FileNotFoundError(f"{file_path} is not a file or doesn't exist.")
+    path = _test_file(file_path)
 
     try:
         return path.read_text()
