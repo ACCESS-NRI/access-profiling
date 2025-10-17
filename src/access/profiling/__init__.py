@@ -9,6 +9,7 @@ __version__ = "unknown"
 with suppress(PackageNotFoundError):
     __version__ = version("access-profiling")
 
+from access.profiling.access_models import ESM16Profiling
 from access.profiling.cice5_parser import CICE5ProfilingParser
 from access.profiling.esmf_parser import ESMFSummaryProfilingParser
 from access.profiling.fms_parser import FMSProfilingParser
@@ -23,4 +24,5 @@ __all__ = [
     "CICE5ProfilingParser",
     "PayuJSONProfilingParser",
     "ESMFSummaryProfilingParser",
+    "ESM16Profiling",
 ]
