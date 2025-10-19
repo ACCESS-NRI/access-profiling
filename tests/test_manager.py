@@ -1,0 +1,140 @@
+# Copyright 2025 ACCESS-NRI and contributors. See the top-level COPYRIGHT file for details.
+# SPDX-License-Identifier: Apache-2.0
+
+from pathlib import Path
+from unittest import mock
+
+import pytest
+import xarray as xr
+
+from access.profiling.manager import ProfilingLog, ProfilingManager
+from access.profiling.metrics import count, tavg, tmax
+
+
+def test_profiling_log():
+    """Test the ProfilingLog class."""
+
+    # Mock parser and path
+    mock_parser = mock.MagicMock(autospec=True)
+    mock_parser.metrics = [tavg, tmax]
+    mock_parser.read.return_value = {
+        "region": ["Region 1", "Region 2"],
+        tavg: [1.0, 2.0],
+        tmax: [3.0, 4.0],
+    }
+
+    log_content = "mock log content"
+    mock_path = mock.MagicMock()
+    mock_path.read_text.return_value = log_content
+
+    # Instantiate ProfilingLog and parse
+    profiling_log = ProfilingLog(filepath=mock_path, parser=mock_parser)
+    dataset = profiling_log.parse()
+
+    # Check dataset contents
+    assert set(dataset.dims) == {"region"}
+    assert set(dataset.data_vars) == {tavg, tmax}
+    assert list(dataset["region"].values) == ["Region 1", "Region 2"]
+    assert list(dataset[tavg].values) == [1.0, 2.0]
+    assert list(dataset[tmax].values) == [3.0, 4.0]
+
+    # Check parser and path calls
+    mock_parser.read.assert_called_once_with(log_content)
+    mock_path.read_text.assert_called_once()
+
+
+class MockProfilingManager(ProfilingManager):
+    """Test class inheriting from ProfilingManager to test its methods.
+
+    This class will simulate parsing of some profiling data.
+
+    Args:
+        paths (list[Path]): List of paths to simulate different configurations.
+        ncpus (list[int]): List of number of CPUs corresponding to each path.
+        datasets (list[xr.Dataset]): List of datasets to return for each path.
+    """
+
+    def __init__(self, paths, ncpus, datasets) -> None:
+        super().__init__()
+
+        self._mock_ncpus = dict(zip([path.name for path in paths], ncpus, strict=True))
+        self._mock_datasets = dict(zip([path.name for path in paths], datasets, strict=True))
+
+    def parse_ncpus(self, path):
+        """Simulate parsing number of CPUs for a given path."""
+        return self._mock_ncpus[path.name]
+
+    def parse_profiling_data(self, path):
+        """Simulate parsing profiling data for a given path."""
+        return {"component": self._mock_datasets[path.name]}
+
+
+@pytest.fixture()
+def scaling_data():
+    """Fixture instantiating fake parsed profiling data for different CPU configurations, as one would get from
+    a scaling study.
+
+    The mock data contains two regions, "Region 1" and "Region 2", and two metrics, count and tavg.
+    Counts are always [1, 2] while tavg depends on the number of CPUs:
+    - For 1 CPU: [600365 s, 2.345388 s]
+    - For 2 CPUs: [300182.5 s, 1.172694 s]
+    - For 4 CPUs: [300182.5 s, 1.172694 s]
+    """
+    paths = [Path("1cpu"), Path("2cpu"), Path("4cpu")]
+    ncpus = [1, 2, 4]
+    datasets = []
+    for n in [1, 2, 4]:
+        regions = ["Region 1", "Region 2"]
+        count_array = xr.DataArray([1, 2], dims=["region"]).pint.quantify(count.units)
+        tavg_array = xr.DataArray([value / min(n, 2) for value in [600365, 2.345388]], dims=["region"]).pint.quantify(
+            tavg.units
+        )
+        datasets.append(xr.Dataset(data_vars={count: count_array, tavg: tavg_array}, coords={"region": regions}))
+
+    return paths, ncpus, datasets
+
+
+@mock.patch("access.profiling.manager.plot_scaling_metrics")
+def test_scaling_data(mock_plot, scaling_data):
+    """Test the parse_scaling_data and plot_scaling_data methods of ProfilingManager.
+
+    This test will check that datasets are correctly concatenated across different numbers of CPUs
+    and that the plotting function is called correctly.
+    """
+    paths, ncpus, datasets = scaling_data
+    config_prof = MockProfilingManager(paths, ncpus, datasets)
+
+    config_prof.parse_scaling_data(paths)
+
+    assert set(config_prof.data.keys()) == {"component"}
+    assert set(config_prof.data["component"].dims) == {"ncpus", "region"}, (
+        "Dataset should have dimensions 'ncpus' and 'region'!"
+    )
+    assert config_prof.data["component"].sizes["ncpus"] == 3, "Dataset should have 2 values for 'ncpus'!"
+    assert config_prof.data["component"].sizes["region"] == 2, "Dataset should have 3 values for 'region'!"
+
+    assert set(config_prof.data["component"].data_vars) == {count, tavg}, (
+        "Dataset should have data_vars for each metric!"
+    )
+    assert all(config_prof.data["component"][metric].shape == (3, 2) for metric in (count, tavg)), (
+        "Dataset data vars should have shape (3, 2)!"
+    )
+    assert all(config_prof.data["component"][metric].data.units == metric.units for metric in (count, tavg)), (
+        "Dataset data_vars should have correct units!"
+    )
+    assert all(config_prof.data["component"][count].sel(ncpus=1) == datasets[0][count]), (
+        "Dataset data_vars should have correct values for ncpus=1!"
+    )
+    for i, n in enumerate(ncpus):
+        for metric in (count, tavg):
+            assert all(config_prof.data["component"][metric].sel(ncpus=n) == datasets[i][metric]), (
+                f"Dataset data_vars for {metric} should have correct values for ncpus={n}!"
+            )
+
+    config_prof.plot_scaling_data(components=["component"], regions=[["Region 1", "Region 2"]], metric=tavg)
+    mock_plot.assert_called_once_with(
+        [config_prof.data["component"]],
+        [["Region 1", "Region 2"]],
+        tavg,
+        region_relabel_map=None,
+    )
