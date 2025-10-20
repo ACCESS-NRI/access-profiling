@@ -27,4 +27,5 @@ __all__ = [
     "ESMFSummaryProfilingParser",
     "ESM16Profiling",
     "CylcProfilingParser",
+    "CylcDBReader",
 ]
