@@ -11,7 +11,7 @@ with suppress(PackageNotFoundError):
 
 from access.profiling.access_models import ESM16Profiling
 from access.profiling.cice5_parser import CICE5ProfilingParser
-from access.profiling.cylc_parser import CylcProfilingParser
+from access.profiling.cylc_parser import CylcDBReader, CylcProfilingParser
 from access.profiling.esmf_parser import ESMFSummaryProfilingParser
 from access.profiling.fms_parser import FMSProfilingParser
 from access.profiling.parser import ProfilingParser
