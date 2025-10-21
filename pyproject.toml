@@ -22,7 +22,7 @@ dependencies = [
     "matplotlib",
     "access-config-utils",
     "experiment-runner",
-    "payu", # Extra dependency of experiment-runner, not handle correctly in conda
+    "payu", # Extra dependency of experiment-runner, not handled correctly in conda
 ]
 
 [build-system]

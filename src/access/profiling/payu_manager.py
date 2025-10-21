@@ -16,23 +16,11 @@ logger = logging.getLogger(__name__)
 
 
 class PayuManager(ProfilingManager, ABC):
-    """Abstract base class to handle profiling of Payu configurations.
+    """Abstract base class to handle profiling of Payu configurations."""
 
-    Args:
-        work_dir (Path): Path to directory used to generate and run profiling experiments.
-        config_name (str): User supplied name. It is used to build some internal paths, but has no other effect.
-    """
-
-    config_name: str  # User supplied name. It is used to build some internal paths, but has no other effect.
+    _repository_directory: str = "config"  # Repository directory name needed by the experiment generator and runner.
     _nruns: int = 1  # Number of repetitions for the Payu experiments.
     _startfrom_restart: str = "cold"  # Restart option for the Payu experiments.
-
-    def __init__(self, work_dir: Path, config_name: str | None = None) -> None:
-        super().__init__(work_dir=work_dir)
-        if config_name is None:
-            self.config_name = "config"
-        else:
-            self.config_name = config_name
 
     @abstractmethod
     def get_component_logs(self, path: Path) -> dict[str, ProfilingLog]:
@@ -93,14 +81,14 @@ class PayuManager(ProfilingManager, ABC):
             if branch in self.experiments:
                 logger.info(f"Experiment for branch {branch} already exists. Skipping addition.")
             else:
-                self.experiments[branch] = ProfilingExperiment(self.work_dir / branch / self.config_name)
+                self.experiments[branch] = ProfilingExperiment(self.work_dir / branch / self._repository_directory)
 
     def run_experiments(self) -> None:
         """Runs Payu experiments for profiling data generation."""
 
         runner_config = {
             "test_path": self.work_dir,
-            "repository_directory": self.config_name,
+            "repository_directory": self._repository_directory,
             "running_branches": [],
             "keep_uuid": True,
             "nruns": [],
@@ -108,7 +96,6 @@ class PayuManager(ProfilingManager, ABC):
         }
 
         for path, exp in self.experiments.items():
-            print(path, exp.status)
             if exp.status == ProfilingExperimentStatus.NEW:
                 runner_config["running_branches"].append(path)
                 runner_config["nruns"].append(self.nruns)

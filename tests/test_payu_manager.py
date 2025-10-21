@@ -93,12 +93,12 @@ def test_generate_experiments():
 )
 def test_run_experiments(mock_experiment_runner):
     """Test the run_experiments method of PayuManager."""
-    config_profiling = MockPayuManager(Path("/fake/test_path"), "config_name")
+    config_profiling = MockPayuManager(Path("/fake/test_path"))
 
     config_profiling.run_experiments()
     expected_call = {
         "test_path": Path("/fake/test_path"),
-        "repository_directory": "config_name",
+        "repository_directory": "config",
         "running_branches": ["branch1", "branch2"],
         "keep_uuid": True,
         "nruns": [1, 1],

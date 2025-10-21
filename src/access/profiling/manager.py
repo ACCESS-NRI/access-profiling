@@ -53,9 +53,9 @@ class ProfilingLog:
 class ProfilingExperimentStatus(Enum):
     """Enumeration representing the status of a profiling experiment."""
 
-    NEW = 1
-    RUNNING = 2
-    DONE = 3
+    NEW = 1  # Experiment has been created but not started
+    RUNNING = 2  # Experiment is running or is queued
+    DONE = 3  # Experiment has finished
 
 
 class ProfilingExperiment:
@@ -79,10 +79,10 @@ class ProfilingManager(ABC):
     it supports parsing and plotting scaling data.
 
     Args:
-        work_dir (Path): Path to directory used to generate and run profiling experiments.
+        work_dir (Path): Working directory where profiling experiments will be generated and run.
     """
 
-    work_dir: Path  # Path to directory used to generate and run profiling experiments.
+    work_dir: Path  # Working directory where profiling experiments will be generated and run.
     experiments: dict[str, ProfilingExperiment] = {}  # Dictionary storing ProfilingExperiment instances.
     data: dict[str, xr.Dataset] = {}  # Dictionary mapping component names to their profiling datasets.
 
