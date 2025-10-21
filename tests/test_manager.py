@@ -7,7 +7,7 @@ from unittest import mock
 import pytest
 import xarray as xr
 
-from access.profiling.manager import ProfilingLog, ProfilingManager
+from access.profiling.manager import ProfilingExperiment, ProfilingExperimentStatus, ProfilingLog, ProfilingManager
 from access.profiling.metrics import count, tavg, tmax
 
 
@@ -43,6 +43,18 @@ def test_profiling_log():
     mock_path.read_text.assert_called_once()
 
 
+def test_profiling_experiment():
+    """Test the ProfilingExperiment class."""
+
+    experiment = ProfilingExperiment(path=Path("/fake/path"))
+
+    assert experiment.path == Path("/fake/path")
+    assert experiment.status == ProfilingExperimentStatus.NEW
+
+    experiment.status = ProfilingExperimentStatus.RUNNING
+    assert experiment.status == ProfilingExperimentStatus.RUNNING
+
+
 class MockProfilingManager(ProfilingManager):
     """Test class inheriting from ProfilingManager to test its methods.
 
@@ -55,10 +67,15 @@ class MockProfilingManager(ProfilingManager):
     """
 
     def __init__(self, paths, ncpus, datasets) -> None:
-        super().__init__()
+        super().__init__(Path("/fake/work_dir"))
 
         self._mock_ncpus = dict(zip([path.name for path in paths], ncpus, strict=True))
         self._mock_datasets = dict(zip([path.name for path in paths], datasets, strict=True))
+
+        # Pre-generate experiments
+        for path in paths:
+            self.experiments[path] = ProfilingExperiment(path)
+            self.experiments[path].status = ProfilingExperimentStatus.DONE
 
     def parse_ncpus(self, path):
         """Simulate parsing number of CPUs for a given path."""
@@ -104,7 +121,7 @@ def test_scaling_data(mock_plot, scaling_data):
     paths, ncpus, datasets = scaling_data
     config_prof = MockProfilingManager(paths, ncpus, datasets)
 
-    config_prof.parse_scaling_data(paths)
+    config_prof.parse_scaling_data()
 
     assert set(config_prof.data.keys()) == {"component"}
     assert set(config_prof.data["component"].dims) == {"ncpus", "region"}, (

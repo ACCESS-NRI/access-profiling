@@ -16,7 +16,15 @@ logger = logging.getLogger(__name__)
 
 
 class ESM16Profiling(PayuManager):
-    """Handles profiling of ACCESS-ESM1.6 configurations."""
+    """Handles profiling of ACCESS-ESM1.6 configurations.
+
+    Args:
+        work_dir (Path): Path to directory used to generate and run profiling experiments.
+        config_name (str): User supplied name. It is used to build some internal paths, but has no other effect.
+    """
+
+    def __init__(self, work_dir: Path, config_name: str | None = None) -> None:
+        super().__init__(work_dir=work_dir, config_name=config_name)
 
     def get_component_logs(self, path: Path) -> dict[str, ProfilingLog]:
         """Returns available profiling logs for the components in ACCESS-ESM1.6.

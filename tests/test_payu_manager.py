@@ -8,7 +8,7 @@ import pytest
 import xarray as xr
 
 from access.profiling.manager import ProfilingLog
-from access.profiling.payu_manager import PayuManager
+from access.profiling.payu_manager import PayuManager, ProfilingExperiment, ProfilingExperimentStatus
 
 
 class MockPayuManager(PayuManager):
@@ -18,11 +18,39 @@ class MockPayuManager(PayuManager):
         return {"component": ProfilingLog(path, mock.MagicMock())}
 
 
+def test_nruns():
+    """Test the nruns property of PayuManager."""
+    config_profiling = MockPayuManager(Path("/fake/test_path"))
+
+    # Default value
+    assert config_profiling.nruns == 1
+
+    # Set valid value
+    config_profiling.nruns = 5
+    assert config_profiling.nruns == 5
+
+    # Set invalid value
+    with pytest.raises(ValueError):
+        config_profiling.nruns = 0
+
+
+def test_startfrom_restart():
+    """Test the startfrom_restart property of PayuManager."""
+    config_profiling = MockPayuManager(Path("/fake/test_path"))
+
+    # Default value
+    assert config_profiling.startfrom_restart == "cold"
+
+    # Set value
+    config_profiling.startfrom_restart = "restart000"
+    assert config_profiling.startfrom_restart == "restart000"
+
+
 @mock.patch("access.profiling.payu_manager.YAMLParser")
 @mock.patch("access.profiling.payu_manager.Path.read_text", return_value="mock config content")
 def test_ncpus(mock_read_text, mock_yaml_parser):
     """Test the parse_ncpus method of PayuManager."""
-    config_profiling = MockPayuManager()
+    config_profiling = MockPayuManager(Path("/fake/test_path"))
 
     # Mock the YAMLParser to return the number of cpus
     mock_yaml_parser().parse.return_value = {"ncpus": 4}
@@ -37,12 +65,54 @@ def test_ncpus(mock_read_text, mock_yaml_parser):
     assert ncpus == 5
 
 
+def test_generate_experiments():
+    """Test the generate_experiments method of PayuManager."""
+    config_profiling = MockPayuManager(Path("/fake/test_path"))
+
+    branches = ["branch1", "branch2"]
+
+    config_profiling.generate_experiments(branches)
+    for branch in branches:
+        assert branch in config_profiling.experiments
+        assert isinstance(config_profiling.experiments[branch], ProfilingExperiment)
+
+    config_profiling.generate_experiments([branches[0]])
+    for branch in branches:
+        assert branch in config_profiling.experiments
+        assert isinstance(config_profiling.experiments[branch], ProfilingExperiment)
+
+
+@mock.patch("access.profiling.payu_manager.ExperimentRunner")
+@mock.patch.dict(
+    "access.profiling.payu_manager.PayuManager.experiments",
+    {
+        "branch1": mock.MagicMock(status=ProfilingExperimentStatus.NEW),
+        "branch2": mock.MagicMock(status=ProfilingExperimentStatus.NEW),
+        "branch3": mock.MagicMock(status=ProfilingExperimentStatus.DONE),
+    },
+)
+def test_run_experiments(mock_experiment_runner):
+    """Test the run_experiments method of PayuManager."""
+    config_profiling = MockPayuManager(Path("/fake/test_path"), "config_name")
+
+    config_profiling.run_experiments()
+    expected_call = {
+        "test_path": Path("/fake/test_path"),
+        "repository_directory": "config_name",
+        "running_branches": ["branch1", "branch2"],
+        "keep_uuid": True,
+        "nruns": [1, 1],
+        "startfrom_restart": ["cold", "cold"],
+    }
+    mock_experiment_runner.assert_called_once_with(expected_call)
+
+
 @mock.patch("access.profiling.payu_manager.Path.is_dir")
 @mock.patch("access.profiling.payu_manager.Path.glob")
 def test_parse_profiling_data_missing_directories(mock_glob, mock_is_dir):
     """Test the parse_profiling_data method of PayuManager with missing directories."""
 
-    config_profiling = MockPayuManager()
+    config_profiling = MockPayuManager(Path("/fake/test_path"))
 
     # Missing archive directory
     mock_is_dir.return_value = False
@@ -75,7 +145,7 @@ def path_glob_side_effect(pattern):
 def test_parse_profiling_data(mock_parse, mock_glob, mock_is_dir):
     """Test the parse_profiling_data method of PayuManager."""
 
-    config_profiling = MockPayuManager()
+    config_profiling = MockPayuManager(Path("/fake/test_path"))
     datasets = config_profiling.parse_profiling_data(Path("/fake/path"))
 
     # Check correct path access

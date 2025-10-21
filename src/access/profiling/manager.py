@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from abc import ABC, abstractmethod
+from enum import Enum
 from pathlib import Path
 
 import xarray as xr
@@ -49,14 +50,45 @@ class ProfilingLog:
         )
 
 
+class ProfilingExperimentStatus(Enum):
+    """Enumeration representing the status of a profiling experiment."""
+
+    NEW = 1
+    RUNNING = 2
+    DONE = 3
+
+
+class ProfilingExperiment:
+    """Represents a profiling experiment.
+
+    Args:
+        path (Path): Path to the experiment directory.
+    """
+
+    path: Path  # Path to the experiment directory
+    status: ProfilingExperimentStatus = ProfilingExperimentStatus.NEW  # Status of the experiment
+
+    def __init__(self, path: Path) -> None:
+        self.path = path
+
+
 class ProfilingManager(ABC):
     """Abstract base class to handle profiling data and workflows.
 
     This high-level class defines methods to parse different types of profiling data. Currently,
     it supports parsing and plotting scaling data.
+
+    Args:
+        work_dir (Path): Path to directory used to generate and run profiling experiments.
     """
 
+    work_dir: Path  # Path to directory used to generate and run profiling experiments.
+    experiments: dict[str, ProfilingExperiment] = {}  # Dictionary storing ProfilingExperiment instances.
     data: dict[str, xr.Dataset] = {}  # Dictionary mapping component names to their profiling datasets.
+
+    def __init__(self, work_dir: Path) -> None:
+        super().__init__()
+        self.work_dir = work_dir
 
     @abstractmethod
     def parse_profiling_data(self, path: Path) -> dict[str, xr.Dataset]:
@@ -80,27 +112,23 @@ class ProfilingManager(ABC):
             int: Number of CPUs used in the experiment.
         """
 
-    def parse_scaling_data(self, paths: list[Path]):
-        """Parses profiling data from a list of experiment directories.
-
-        Args:
-            paths (list[Path]): List of paths to experiment directories.
-        """
+    def parse_scaling_data(self):
+        """Parses profiling data from the experiments."""
         self.data = {}
-        for path in paths:
-            # Parse data
-            datasets = self.parse_profiling_data(path)
+        for exp in self.experiments.values():
+            if exp.status == ProfilingExperimentStatus.DONE:
+                datasets = self.parse_profiling_data(exp.path)
 
-            # Find number of cpus used
-            ncpus = self.parse_ncpus(path)
+                # Find number of cpus used
+                ncpus = self.parse_ncpus(exp.path)
 
-            # Add ncpus dimension and concatenate with existing data
-            for name, ds in datasets.items():
-                ds = ds.expand_dims({"ncpus": 1}).assign_coords({"ncpus": [ncpus]})
-                if name in self.data:
-                    self.data[name] = xr.concat([self.data[name], ds], dim="ncpus", join="outer")
-                else:
-                    self.data[name] = ds
+                # Add ncpus dimension and concatenate with existing data
+                for name, ds in datasets.items():
+                    ds = ds.expand_dims({"ncpus": 1}).assign_coords({"ncpus": [ncpus]})
+                    if name in self.data:
+                        self.data[name] = xr.concat([self.data[name], ds], dim="ncpus", join="outer")
+                    else:
+                        self.data[name] = ds
 
     def plot_scaling_data(
         self,
