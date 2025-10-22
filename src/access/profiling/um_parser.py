@@ -205,6 +205,8 @@ class UMProfilingParser(ProfilingParser):
 class UMTotalRuntimeParser(ProfilingParser):
     """Parser for UM total runtime from the UM log file."""
 
+    _metrics = [tmax]
+
     def read(self, stream: str) -> float:
         """Parse UM total runtime from a string.
 
@@ -230,4 +232,4 @@ class UMTotalRuntimeParser(ProfilingParser):
         total_time = float(total_runtime_match.group("total_time"))
         logger.debug(f"Found total UM runtime: {total_time} seconds")
 
-        return total_time
+        return {"region": ["um_total_walltime"], tmax: [total_time]}
