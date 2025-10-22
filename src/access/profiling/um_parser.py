@@ -185,3 +185,49 @@ class UMProfilingParser(ProfilingParser):
 
         logger.info(f"Found {len(stats['region'])} regions with profiling info")
         return stats
+
+
+"""Example UM7 runtime log snippet to be parsed for total wallclock runtime:
+
+```
+ END OF RUN - TIMER OUTPUT
+ Timer information is for whole run
+ PE                      0  Elapsed CPU Time:    3943.63426200007     
+ PE                      0   Elapsed Wallclock Time:    3943.80157899974     
+ 
+ Total Elapsed CPU Time:    820297.910506003     
+ Maximum Elapsed Wallclock Time:    3944.07699399998     
+ Speedup:    207.982225436750     
+```
+"""
+
+
+class UMTotalRuntimeParser(ProfilingParser):
+    """Parser for UM total runtime from the UM log file."""
+
+    def read(self, stream: str) -> float:
+        """Parse UM total runtime from a string.
+
+        Args:
+            stream (str): input string to parse.
+
+        Returns:
+            walltime: float
+
+        Raises:
+            ValueError: If no matching total runtime line is found.
+        """
+        total_runtime_pattern = re.compile(
+            r"Maximum\s+Elapsed\s+Wallclock\s+Time\s*:\s*(?P<total_time>[0-9.]+)\s*",
+            re.MULTILINE,
+        )
+        total_runtime_match = total_runtime_pattern.search(stream)
+        if not total_runtime_match:
+            logger.debug("Total runtime pattern: %s", total_runtime_pattern)
+            logger.debug("Input string: %s", stream)
+            raise ValueError("No matching total runtime line found.")
+
+        total_time = float(total_runtime_match.group("total_time"))
+        logger.debug(f"Found total UM runtime: {total_time} seconds")
+
+        return total_time

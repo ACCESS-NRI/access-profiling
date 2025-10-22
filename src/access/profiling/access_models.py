@@ -10,7 +10,7 @@ from access.profiling.cice5_parser import CICE5ProfilingParser
 from access.profiling.fms_parser import FMSProfilingParser
 from access.profiling.manager import ProfilingLog
 from access.profiling.payu_manager import PayuManager
-from access.profiling.um_parser import UMProfilingParser
+from access.profiling.um_parser import UMProfilingParser, UMTotalRuntimeParser
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +35,7 @@ class ESM16Profiling(PayuManager):
         if um_logfile.is_file():
             logger.debug(f"Found UM log file: {um_logfile}")
             logs["UM"] = ProfilingLog(um_logfile, UMProfilingParser())
+            logs["UM_Total_Walltime"] = ProfilingLog(um_logfile, UMTotalRuntimeParser())
 
         config_path = path / "config.yaml"
         payu_config = parser.parse(config_path.read_text())

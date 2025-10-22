@@ -4,7 +4,7 @@
 import pytest
 
 from access.profiling.metrics import pemax, pemin, tavg, tmax, tmed, tmin, tstd
-from access.profiling.um_parser import UMProfilingParser
+from access.profiling.um_parser import UMProfilingParser, UMTotalRuntimeParser
 
 
 @pytest.fixture(scope="module")
@@ -388,3 +388,37 @@ def test_um13_parsing(um_parser, um13_raw_profiling_data, um13_parsed_profile_da
             assert stats[metric][idx] == um13_parsed_profile_data[metric][idx], (
                 f"Incorrect {metric} for region {region} (index: {idx})."
             )
+
+
+@pytest.fixture(scope="module")
+def um_total_runtime_raw_profiling_data():
+    """Fixture with UM total runtime raw profiling data"""
+    return r"""
+ END OF RUN - TIMER OUTPUT
+ Timer information is for whole run
+ PE                      0  Elapsed CPU Time:    3943.63426200007     
+ PE                      0   Elapsed Wallclock Time:    3943.80157899974     
+ 
+ Total Elapsed CPU Time:    820297.910506003     
+ Maximum Elapsed Wallclock Time:    3944.07699399998     
+ Speedup:    207.982225436750     
+"""
+
+
+@pytest.fixture(scope="module")
+def um_total_runtime_parser():
+    """Fixture for the UM total runtime parser"""
+    return UMTotalRuntimeParser()
+
+
+def test_um_total_runtime_parsing(um_total_runtime_parser, um_total_runtime_raw_profiling_data):
+    """Test that parsed UM total runtime data *exactly* matches the known-correct profiling data"""
+    walltime = um_total_runtime_parser.read(um_total_runtime_raw_profiling_data)
+
+    assert walltime == 3944.07699399998, f"Incorrect total wallclock time. Expected 3944.07699399998, got {walltime}"
+
+
+def test_um_total_runtime_parsing_missing_section(um7_raw_profiling_data, um_total_runtime_parser):
+    """Test that UM total runtime parsing fails when the max. elapsed wallclock phrase is missing"""
+    with pytest.raises(ValueError):
+        um_total_runtime_parser.read(um7_raw_profiling_data)
