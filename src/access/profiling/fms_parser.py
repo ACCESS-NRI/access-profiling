@@ -13,12 +13,14 @@ Ocean thermodynamics and tracers    72     27.377185     33.281659     29.950144
  MPP_STACK high water mark=          0
 """
 
+import os
 import re
+from pathlib import Path
 
 from pint import Unit
 
 from access.profiling.metrics import ProfilingMetric, count, pemax, pemin, tavg, tfrac, tmax, tmin, tstd
-from access.profiling.parser import ProfilingParser, _convert_from_string
+from access.profiling.parser import ProfilingParser, _convert_from_string, _read_text_file
 
 grain = ProfilingMetric("grain", Unit("dimensionless"), "Grain")
 
@@ -41,7 +43,9 @@ class FMSProfilingParser(ProfilingParser):
         self._metrics = [count] if self.has_hits else []
         self._metrics += [tmin, tmax, tavg, tstd, tfrac, grain, pemin, pemax]
 
-    def read(self, stream: str) -> dict:
+    def parse(self, file_path: str | Path | os.PathLike) -> dict:
+        stream = _read_text_file(file_path)
+
         labels = ["hits"] if self.has_hits else []
         labels += ["tmin", "tmax", "tavg", "tstd", "tfrac", "grain", "pemin", "pemax"]
 

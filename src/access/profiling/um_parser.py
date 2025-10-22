@@ -35,10 +35,12 @@ not present in the output from UM v7.x .
 """
 
 import logging
+import os
 import re
+from pathlib import Path
 
 from access.profiling.metrics import pemax, pemin, tavg, tmax, tmed, tmin, tstd
-from access.profiling.parser import ProfilingParser, _convert_from_string
+from access.profiling.parser import ProfilingParser, _convert_from_string, _read_text_file
 
 logger = logging.getLogger(__name__)
 
@@ -51,11 +53,11 @@ class UMProfilingParser(ProfilingParser):
     # in the ``read``` method), after discarding the ignored columns.
     _metrics = [tavg, tmed, tstd, tmax, pemax, tmin, pemin]
 
-    def read(self, stream: str) -> dict:
-        """Parse UM profiling data from a string.
+    def parse(self, file_path: str | Path | os.PathLike) -> dict:
+        """Parse UM profiling data from a file path.
 
         Args:
-            stream (str): input string to parse.
+            file_path (str | Path | os.PathLike): file to parse.
 
         Returns:
             stats (dict): dictionary of parsed profiling data.
@@ -103,7 +105,11 @@ class UMProfilingParser(ProfilingParser):
                         is not found.
             AssertionError: If the expected format is not found in *all* of the lines within the
                             profiling section.
+            TypeError: If file_path cannot be converted to a valid Path object.
+            FileNotFoundError: If file_path doesn't exist or isn't a file.
         """
+
+        stream = _read_text_file(file_path)
 
         # First create the local variable with the metrics list
         metrics = self.metrics
@@ -205,20 +211,21 @@ class UMProfilingParser(ProfilingParser):
 class UMTotalRuntimeParser(ProfilingParser):
     """Parser for UM total runtime from the UM log file."""
 
-    _metrics = [tmax]
+    metrics = [tmax]
 
-    def read(self, stream: str) -> float:
-        """Parse UM total runtime from a string.
+    def parse(self, file_path: str | Path | os.PathLike) -> float:
+        """Parse UM total runtime from a file.
 
         Args:
-            stream (str): input string to parse.
+            file_path (str | Path | os.PathLike): input string to parse.
 
         Returns:
-            walltime: float
+            dict: dictionary of parsed profiling data.
 
         Raises:
             ValueError: If no matching total runtime line is found.
         """
+        stream = _read_text_file(file_path)
         total_runtime_pattern = re.compile(
             r"Maximum\s+Elapsed\s+Wallclock\s+Time\s*:\s*(?P<total_time>[0-9.]+)\s*",
             re.MULTILINE,

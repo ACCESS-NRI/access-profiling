@@ -23,10 +23,12 @@ These timers are printed at the end of the CICE5 run and can be an arbitrary num
 For example, ESM1.6 has 17 timers printed at the end of ice_diag.d output log.
 """
 
+import os
 import re
+from pathlib import Path
 
 from access.profiling.metrics import tavg, tmax, tmin
-from access.profiling.parser import ProfilingParser
+from access.profiling.parser import ProfilingParser, _read_text_file
 
 
 class CICE5ProfilingParser(ProfilingParser):
@@ -34,18 +36,23 @@ class CICE5ProfilingParser(ProfilingParser):
 
     _metrics = [tmin, tmax, tavg]
 
-    def read(self, stream: str) -> dict:
-        """Implements "read" abstract method to parse profiling data in CICE5 log output.
+    def parse(self, file_path: str | Path | os.PathLike) -> dict:
+        """Implements "parse" abstract method to parse profiling data in CICE5 log output.
 
         Args:
-            stream (str): String containing the CICE5 log to be parsed.
+            file_path (str | Path | os.PathLike): file to parse.
 
         Returns:
             dict: Parsed timing information.
 
         Raises:
             ValueError: If matching timings aren't found.
+            TypeError: If file_path cannot be converted to a valid Path object.
+            FileNotFoundError: If file_path doesn't exist or isn't a file.
         """
+
+        stream = _read_text_file(file_path)
+
         # Initialize result dictionary
         result = {"region": [], tmin: [], tmax: [], tavg: []}
 

@@ -3,7 +3,9 @@
 
 """Classes and utilities to build profiling parsers for reading profiling data."""
 
+import os
 from abc import ABC, abstractmethod
+from pathlib import Path
 from typing import Any
 
 # Next import is required to register pint with xarray
@@ -39,14 +41,19 @@ class ProfilingParser(ABC):
         return self._metrics
 
     @abstractmethod
-    def read(self, stream: str) -> dict:
-        """Parse the given text.
+    def parse(self, file_path: str | Path | os.PathLike) -> dict:
+        """Parse the given file.
 
         Args:
-            stream (str): text to parse.
+            file_path (str | Path | os.PathLike): file to parse.
 
         Returns:
             dict: profiling data.
+
+        Raises:
+            ValueError: If no parsable text is found in file_path.
+            TypeError: If file_path cannot be converted to a valid Path object.
+            FileNotFoundError: If file_path doesn't exist or isn't a file.
         """
 
 
@@ -66,3 +73,32 @@ def _convert_from_string(value: str) -> Any:
         except Exception:
             continue
     return value
+
+
+def _read_text_file(file_path: str | Path | os.PathLike) -> str:
+    """Checks whether file_path is a valid path to a text file and tries to read it.
+
+    Args:
+        file_path (str | Path | os.PathLike): the path to check/read
+
+    Returns:
+        str: The text within the file.
+
+    Raises:
+        TypeError: if file_path is not a valid path
+        FileNotFoundError: if file_path is a path, but is not a file or doesn't exist.
+        ValueError: if file_path is a file, but cannot be read as a text file.
+    """
+
+    try:
+        path = Path(file_path)
+    except TypeError as e:
+        raise TypeError(f"{file_path} is not a valid path.") from e
+
+    if not path.is_file():
+        raise FileNotFoundError(f"{file_path} is not a file or doesn't exist.")
+
+    try:
+        return path.read_text()
+    except UnicodeDecodeError as e:
+        raise ValueError(f"{file_path} is not a text file.") from e

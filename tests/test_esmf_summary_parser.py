@@ -117,7 +117,7 @@ def hierarchical_esmf_summary_profiling():
 
 
 @pytest.fixture(scope="module")
-def esmf_log_file():
+def esmf_log_text():
     """Fixture returning the ESMF summary timing content."""
     return """********
 IMPORTANT: Large deviations between Connector times on different PETs
@@ -137,7 +137,7 @@ Region                         PETs   PEs    Count    Mean (s)    Min (s)     Mi
 
 
 @pytest.fixture(scope="module")
-def incorrect_esmf_log_file():
+def incorrect_esmf_log_text():
     """Fixture returning an ESMF summary timing output with missing values."""
     return """
   [ESMF]                      1664   1        2558.5684   2555.1450   279     2559.5801   817    
@@ -147,7 +147,7 @@ def incorrect_esmf_log_file():
 
 
 @pytest.fixture(scope="module")
-def duplicate_region_log_file():
+def duplicate_region_log_text():
     return """
 Region                         PETs   PEs    Count    Mean (s)    Min (s)     Min PET Max (s)     Max PET
   [ESMF]                       1664   1664   1        10.0000     9.0000      0       11.0000     1663    
@@ -170,7 +170,7 @@ def duplicate_region_profiling():
 
 
 @pytest.fixture(scope="module")
-def duplicate_region_with_nonmatching_pes_log_file():
+def duplicate_region_with_nonmatching_pes_log_text():
     return """
 Region                         PETs   PEs    Count    Mean (s)    Min (s)     Min PET Max (s)     Max PET
   [ESMF]                       1664   1664   1        10.0000     9.0000      0       11.0000     1663    
@@ -216,9 +216,11 @@ def check_nested_dict(
         check_nested_dict(input_dict[k], correct_dict[k], metric_keys, k, depth + 1)
 
 
-def test_flat_esmf_profiling(flat_esmf_summary_parser, esmf_log_file, flat_esmf_summary_profiling):
+def test_flat_esmf_profiling(tmp_path, flat_esmf_summary_parser, esmf_log_text, flat_esmf_summary_profiling):
     """Test the correct parsing of ESMF timing summary information with flat structure."""
-    parsed_log = flat_esmf_summary_parser.read(esmf_log_file)
+    esmf_log_file = tmp_path / "esmf.log"
+    esmf_log_file.write_text(esmf_log_text)
+    parsed_log = flat_esmf_summary_parser.parse(esmf_log_file)
     for idx, region in enumerate(flat_esmf_summary_profiling["region"]):
         assert region in parsed_log["region"], f"{region} not found in ESMF parsed summary timings."
         for metric in (tavg, tmin, pemin, tmax, pemax):
@@ -229,26 +231,34 @@ Expected {flat_esmf_summary_profiling[metric][idx]}, got {parsed_log[metric][idx
 
 
 def test_hierarchical_esmf_profiling(
-    hierarchical_esmf_summary_parser, esmf_log_file, hierarchical_esmf_summary_profiling
+    tmp_path, hierarchical_esmf_summary_parser, esmf_log_text, hierarchical_esmf_summary_profiling
 ):
     """Test the correct parsing of ESMF timing summary information with hierarchical structure."""
-    parsed_log = hierarchical_esmf_summary_parser.read(esmf_log_file)
+    esmf_log_file = tmp_path / "esmf.log"
+    esmf_log_file.write_text(esmf_log_text)
+    parsed_log = hierarchical_esmf_summary_parser.parse(esmf_log_file)
     check_nested_dict(parsed_log["[ESMF]"], hierarchical_esmf_summary_profiling["[ESMF]"])
 
 
-def test_esmf_missing_values(flat_esmf_summary_parser, hierarchical_esmf_summary_parser, incorrect_esmf_log_file):
+def test_esmf_missing_values(
+    tmp_path, flat_esmf_summary_parser, hierarchical_esmf_summary_parser, incorrect_esmf_log_text
+):
     """Tests that row isn't picked up when values are missing."""
+    esmf_log_file = tmp_path / "esmf.log"
+    esmf_log_file.write_text(incorrect_esmf_log_text)
     # check flat parser
     with pytest.raises(ValueError):
-        flat_esmf_summary_parser.read(incorrect_esmf_log_file)
+        flat_esmf_summary_parser.parse(esmf_log_file)
     # check hierarchical parser
     with pytest.raises(ValueError):
-        hierarchical_esmf_summary_parser.read(incorrect_esmf_log_file)
+        hierarchical_esmf_summary_parser.parse(esmf_log_file)
 
 
-def test_esmf_repeat_region(flat_esmf_summary_parser, duplicate_region_log_file, duplicate_region_profiling):
+def test_esmf_repeat_region(tmp_path, flat_esmf_summary_parser, duplicate_region_log_text, duplicate_region_profiling):
     """Tests that duplicate regions are aggregated correctly."""
-    parsed_log = flat_esmf_summary_parser.read(duplicate_region_log_file)
+    esmf_log_file = tmp_path / "esmf.log"
+    esmf_log_file.write_text(duplicate_region_log_text)
+    parsed_log = flat_esmf_summary_parser.parse(esmf_log_file)
     for idx, region in enumerate(duplicate_region_profiling["region"]):
         assert region in parsed_log["region"], f"{region} not found in ESMF parsed summary timings."
         for metric in (tavg, tmin, pemin, tmax, pemax):
@@ -258,6 +268,10 @@ def test_esmf_repeat_region(flat_esmf_summary_parser, duplicate_region_log_file,
             )
 
 
-def test_esmf_repeat_region_nonmatching_pes(flat_esmf_summary_parser, duplicate_region_with_nonmatching_pes_log_file):
+def test_esmf_repeat_region_nonmatching_pes(
+    tmp_path, flat_esmf_summary_parser, duplicate_region_with_nonmatching_pes_log_text
+):
+    esmf_log_file = tmp_path / "esmf.log"
+    esmf_log_file.write_text(duplicate_region_with_nonmatching_pes_log_text)
     with pytest.raises(NotImplementedError):
-        flat_esmf_summary_parser.read(duplicate_region_with_nonmatching_pes_log_file)
+        flat_esmf_summary_parser.parse(esmf_log_file)

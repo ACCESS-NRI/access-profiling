@@ -17,15 +17,13 @@ def test_profiling_log():
     # Mock parser and path
     mock_parser = mock.MagicMock(autospec=True)
     mock_parser.metrics = [tavg, tmax]
-    mock_parser.read.return_value = {
+    mock_parser.parse.return_value = {
         "region": ["Region 1", "Region 2"],
         tavg: [1.0, 2.0],
         tmax: [3.0, 4.0],
     }
 
-    log_content = "mock log content"
     mock_path = mock.MagicMock()
-    mock_path.read_text.return_value = log_content
 
     # Instantiate ProfilingLog and parse
     profiling_log = ProfilingLog(filepath=mock_path, parser=mock_parser)
@@ -39,8 +37,7 @@ def test_profiling_log():
     assert list(dataset[tmax].values) == [3.0, 4.0]
 
     # Check parser and path calls
-    mock_parser.read.assert_called_once_with(log_content)
-    mock_path.read_text.assert_called_once()
+    mock_parser.parse.assert_called_once_with(mock_path)
 
 
 def test_profiling_experiment():

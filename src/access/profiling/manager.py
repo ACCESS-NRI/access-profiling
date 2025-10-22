@@ -33,8 +33,7 @@ class ProfilingLog:
         Returns:
            xr.Dataset: Parsed profiling data."""
         path = self.filepath
-        log = path.read_text()
-        data = self.parser.read(log)
+        data = self.parser.parse(path)
         return xr.Dataset(
             data_vars=dict(
                 zip(
