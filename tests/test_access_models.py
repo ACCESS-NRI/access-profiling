@@ -19,7 +19,7 @@ def test_esm16_config_profiling(mock_is_file, mock_yaml_parse, mock_path_read_te
     """Test the ESM16ConfigProfiling class."""
 
     # Instantiate ESM16ConfigProfiling
-    config_profiling = ESM16Profiling()
+    config_profiling = ESM16Profiling(Path("/fake/test_path"))
 
     # Mock the presence of all log files
     mock_is_file.side_effect = [True, True, True]

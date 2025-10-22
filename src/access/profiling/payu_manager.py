@@ -7,8 +7,9 @@ from pathlib import Path
 
 import xarray as xr
 from access.config import YAMLParser
+from experiment_runner.experiment_runner import ExperimentRunner
 
-from access.profiling.manager import ProfilingLog, ProfilingManager
+from access.profiling.manager import ProfilingExperiment, ProfilingExperimentStatus, ProfilingLog, ProfilingManager
 from access.profiling.payujson_parser import PayuJSONProfilingParser
 
 logger = logging.getLogger(__name__)
@@ -16,6 +17,10 @@ logger = logging.getLogger(__name__)
 
 class PayuManager(ProfilingManager, ABC):
     """Abstract base class to handle profiling of Payu configurations."""
+
+    _repository_directory: str = "config"  # Repository directory name needed by the experiment generator and runner.
+    _nruns: int = 1  # Number of repetitions for the Payu experiments.
+    _startfrom_restart: str = "cold"  # Restart option for the Payu experiments.
 
     @abstractmethod
     def get_component_logs(self, path: Path) -> dict[str, ProfilingLog]:
@@ -26,6 +31,85 @@ class PayuManager(ProfilingManager, ABC):
         Returns:
             dict[str, ProfilingLog]: Dictionary mapping component names to their ProfilingLog instances.
         """
+
+    @property
+    def nruns(self) -> int:
+        """Returns the number of repetitions for the Payu experiments.
+
+        Returns:
+            int: Number of repetitions.
+        """
+        return self._nruns
+
+    @nruns.setter
+    def nruns(self, value: int) -> None:
+        """Sets the number of repetitions for the Payu experiments.
+
+        Args:
+            value (int): Number of repetitions.
+        """
+        if value < 1:
+            raise ValueError("Number of runs must be at least 1.")
+        self._nruns = value
+
+    @property
+    def startfrom_restart(self) -> str:
+        """Returns the restart option for the Payu experiments.
+
+        Returns:
+            str: Restart option.
+        """
+        return self._startfrom_restart
+
+    @startfrom_restart.setter
+    def startfrom_restart(self, value: str) -> None:
+        """Sets the restart option for the Payu experiments.
+
+        Args:
+            value (str): Restart option.
+        """
+        self._startfrom_restart = value
+
+    def generate_experiments(self, branches: list[str]) -> None:
+        """Generates Payu experiments for profiling data generation.
+
+        Args:
+            branches (list[str]): List of branches to generate experiments for.
+        """
+
+        for branch in branches:
+            if branch in self.experiments:
+                logger.info(f"Experiment for branch {branch} already exists. Skipping addition.")
+            else:
+                self.experiments[branch] = ProfilingExperiment(self.work_dir / branch / self._repository_directory)
+
+    def run_experiments(self) -> None:
+        """Runs Payu experiments for profiling data generation."""
+
+        runner_config = {
+            "test_path": self.work_dir,
+            "repository_directory": self._repository_directory,
+            "running_branches": [],
+            "keep_uuid": True,
+            "nruns": [],
+            "startfrom_restart": [],
+        }
+
+        for path, exp in self.experiments.items():
+            if exp.status == ProfilingExperimentStatus.NEW:
+                runner_config["running_branches"].append(path)
+                runner_config["nruns"].append(self.nruns)
+                runner_config["startfrom_restart"].append(self.startfrom_restart)
+                exp.status = ProfilingExperimentStatus.RUNNING
+
+        # Run the experiment runner
+        ExperimentRunner(runner_config).run()
+
+        # We are marking all running experiments as done here, but later this should be implemented properly
+        # so that an actual check is performed, probably somewhere else.
+        for exp in self.experiments.values():
+            if exp.status == ProfilingExperimentStatus.RUNNING:
+                exp.status = ProfilingExperimentStatus.DONE
 
     def parse_ncpus(self, path: Path) -> int:
         """Parses the number of CPUs used in a given Payu experiment.
