@@ -31,6 +31,9 @@ Note that the profiling summary stats may contain identical region names
 e.g. [ATM-TO-MED] RunPhase1 is found twice in OM3.
 """
 
+import os
+from pathlib import Path
+
 from pint import Unit
 
 from access.profiling.metrics import (
@@ -42,7 +45,7 @@ from access.profiling.metrics import (
     tmax,
     tmin,
 )
-from access.profiling.parser import ProfilingParser
+from access.profiling.parser import ProfilingParser, _read_text_file
 
 pets = ProfilingMetric("PETs", Unit("dimensionless"), "ESMF Virtual Machine Persistent Execution Threads")
 pes = ProfilingMetric("PEs", Unit("dimensionless"), "Processing Elements")
@@ -66,7 +69,9 @@ class ESMFSummaryProfilingParser(ProfilingParser):
         # ESMF provides the following metrics
         self._metrics = [pets, pes, count, tavg, tmin, pemin, tmax, pemax]
 
-    def read(self, stream: str) -> dict:
+    def parse(self, file_path: str | Path | os.PathLike) -> dict:
+        stream = _read_text_file(file_path)
+
         lines = stream.strip().split("\n")
 
         if self.hierarchical:

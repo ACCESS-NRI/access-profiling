@@ -29,7 +29,7 @@ def payujson_profiling():
 
 
 @pytest.fixture(scope="module")
-def payujson_log_file():
+def payujson_log_text():
     """Fixture returning the Payu JSON timing content."""
     return """{
     "scheduler_job_id": "149764665.gadi-pbs",
@@ -52,25 +52,29 @@ def payujson_log_file():
 """
 
 
-def test_payujson_profiling(payujson_parser, payujson_log_file, payujson_profiling):
+def test_payujson_profiling(tmp_path, payujson_parser, payujson_log_text, payujson_profiling):
     """Test the correct parsing of Payu JSON timing information."""
+    payujson_log_file = tmp_path / "payu.json"
+    payujson_log_file.write_text(payujson_log_text)
     assert payujson_parser.metrics == [tmax], "tmax metric not found in parsed log."
-    parsed_log = payujson_parser.read(payujson_log_file)
-    for idx, region in enumerate(payujson_profiling.keys()):
-        assert region in parsed_log, f"{region} not found in Payu JSON parsed log."
+    parsed_log = payujson_parser.parse(payujson_log_file)
+    for idx, region in enumerate(payujson_profiling["region"]):
+        assert region in parsed_log["region"], f"{region} not found in Payu JSON parsed log."
         assert payujson_profiling[tmax][idx] == parsed_log[tmax][idx], (
             f"Incorrect walltime for region {region} (idx: {idx})."
         )
 
 
-def test_payujson_incorrect_profiling(payujson_parser):
+def test_payujson_incorrect_profiling(tmp_path, payujson_parser):
     """Test that exceptions get raised appropriately."""
-    # missing "timings" key
-    with pytest.raises(ValueError):
-        payujson_parser.read('{"a": 123}')
-    # empty "timings" value
-    with pytest.raises(ValueError):
-        payujson_parser.read('{"timings": {"payu_start_time": "2025-09-16T08:52:50.748807"}}')
-    # invalid JSON altogether
-    with pytest.raises(ValueError):
-        payujson_parser.read("abc def")
+    wrong_content = {
+        '{"a": 123}',  # missing "timings" key
+        '{"timings": {"payu_start_time": "2025-09-16T08:52:50.748807"}}',  # invalid "timings" value
+        "abc def",  # invalid JSON altogether
+    }
+    for content in wrong_content:
+        payu_log_file = tmp_path / "payu.json"
+        payu_log_file.write_text(content)
+        with pytest.raises(ValueError):
+            payujson_parser.parse(payu_log_file)
+        payu_log_file.unlink()

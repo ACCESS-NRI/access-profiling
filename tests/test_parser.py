@@ -1,10 +1,13 @@
 # Copyright 2025 ACCESS-NRI and contributors. See the top-level COPYRIGHT file for details.
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+from pathlib import Path
+
 import pytest
 
 from access.profiling.metrics import count, tmax, tmin
-from access.profiling.parser import ProfilingParser, _convert_from_string
+from access.profiling.parser import ProfilingParser, _convert_from_string, _read_text_file
 
 
 class MockProfilingParser(ProfilingParser):
@@ -17,8 +20,8 @@ class MockProfilingParser(ProfilingParser):
     def metrics(self) -> list:
         return [count, tmin, tmax]
 
-    def read(self, stream: str) -> dict:
-        return self._data[stream]
+    def parse(self, file_path: str | Path | os.PathLike) -> dict:
+        return self._data[_read_text_file(file_path)]
 
 
 @pytest.fixture(scope="module")
@@ -46,11 +49,14 @@ def parser(profiling_data):
     return MockProfilingParser(profiling_data)
 
 
-def test_base_parser(profiling_data, parser):
+def test_base_parser(tmp_path, profiling_data, parser):
     """Tests methods and properties of abstract base class, ProfilingParser."""
     assert parser.metrics == [count, tmin, tmax], "Incorrect metrics returned in MockProfilingParser!"
     for stream in ("1cpu_stream", "2cpu_stream"):
-        assert parser.read(stream) == profiling_data[stream], f'Incorrect profiling stats returned for "{stream}"'
+        log_file = tmp_path / "1cpu.log"
+        log_file.write_text(stream)
+        assert parser.parse(log_file) == profiling_data[stream], f'Incorrect profiling stats returned for "{stream}"'
+        log_file.unlink()
 
 
 def test_str2num():
@@ -66,3 +72,15 @@ def test_str2num():
     str2str = _convert_from_string("somestr")
     assert type(str2str) is str
     assert str2str == "somestr"
+
+
+def test_read_text_file(tmp_path):
+    """Tests _read_text_file exceptions."""
+    with pytest.raises(TypeError):
+        _read_text_file(1)
+    bytes_file = tmp_path / "bytes"
+    bytes_file.write_bytes(bytes(range(256)))
+    with pytest.raises(ValueError):
+        _read_text_file(bytes_file)
+    with pytest.raises(FileNotFoundError):
+        _read_text_file(tmp_path / "nonexistent.log")

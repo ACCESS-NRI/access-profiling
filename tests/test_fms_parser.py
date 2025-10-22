@@ -41,7 +41,7 @@ def fms_nohits_profiling():
 
 
 @pytest.fixture(scope="module")
-def fms_nohits_log_file():
+def fms_nohits_log_text():
     """Fixture returning the FMS timing content without hits column."""
     return """ MPP_DOMAINS_STACK high water mark=      747000
 
@@ -123,7 +123,7 @@ def fms_hits_profiling():
 
 
 @pytest.fixture(scope="module")
-def fms_hits_log_file():
+def fms_hits_log_text():
     """Fixture returning the FMS timing content with hits."""
     return """ MPP_DOMAINS_STACK high water mark=      380512
 
@@ -146,7 +146,7 @@ Ocean Other                         192      1.710326      1.710326      1.71032
 
 
 @pytest.fixture(scope="module")
-def fms_incorrect_log_file():
+def fms_incorrect_log_text():
     """Fixture returning an incorrect FMS timing content."""
     return """ MPP_DOMAINS_STACK high water mark=      380512
 
@@ -158,29 +158,35 @@ high water mark=           0
 """
 
 
-def test_fms_nohits_profiling(fms_nohits_parser, fms_nohits_log_file, fms_nohits_profiling):
+def test_fms_nohits_profiling(tmp_path, fms_nohits_parser, fms_nohits_log_text, fms_nohits_profiling):
     """Test the correct parsing of FMS timing information without hits column."""
-    parsed_log = fms_nohits_parser.read(fms_nohits_log_file)
-    for idx, region in enumerate(fms_nohits_profiling.keys()):
-        assert region in parsed_log, f"{region} not found in mom5 parsed log"
+    fms_log_file = tmp_path / "fms.log"
+    fms_log_file.write_text(fms_nohits_log_text)
+    parsed_log = fms_nohits_parser.parse(fms_log_file)
+    for idx, region in enumerate(fms_nohits_profiling["region"]):
+        assert region in parsed_log["region"], f"{region} not found in mom5 (FMS without hits) parsed log"
         for metric in (tmin, tmax, tavg, tstd):
             assert fms_nohits_profiling[metric][idx] == parsed_log[metric][idx], (
                 f"Incorrect {metric} for region {region} (idx: {idx})."
             )
 
 
-def test_fms_hits_profiling(fms_hits_parser, fms_hits_log_file, fms_hits_profiling):
+def test_fms_hits_profiling(tmp_path, fms_hits_parser, fms_hits_log_text, fms_hits_profiling):
     """Test the correct parsing of FMS timing information with hits column."""
-    parsed_log = fms_hits_parser.read(fms_hits_log_file)
-    for idx, region in enumerate(fms_hits_profiling.keys()):
-        assert region in parsed_log, f"{region} not found in mom6 parsed log"
+    fms_log_file = tmp_path / "fms.log"
+    fms_log_file.write_text(fms_hits_log_text)
+    parsed_log = fms_hits_parser.parse(fms_log_file)
+    for idx, region in enumerate(fms_hits_profiling["region"]):
+        assert region in parsed_log["region"], f"{region} not found in mom6 (FMS with hits) parsed log"
         for metric in (count, tmin, tmax, tavg, tstd):
             assert fms_hits_profiling[metric][idx] == parsed_log[metric][idx], (
                 f"Incorrect {metric} for region {region} (idx: {idx})."
             )
 
 
-def test_fms_incorrect_profiling(fms_hits_parser, fms_incorrect_log_file):
+def test_fms_incorrect_profiling(tmp_path, fms_hits_parser, fms_incorrect_log_text):
     """Test the parsing of incorrect FMS timing information."""
+    fms_log_file = tmp_path / "fms.log"
+    fms_log_file.write_text(fms_incorrect_log_text)
     with pytest.raises(ValueError):
-        fms_hits_parser.read(fms_incorrect_log_file)
+        fms_hits_parser.parse(fms_log_file)

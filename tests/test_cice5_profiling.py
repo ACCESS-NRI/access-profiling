@@ -30,7 +30,7 @@ def cice5_profiling():
 
 
 @pytest.fixture(scope="module")
-def cice5_log_file():
+def cice5_log_text():
     """Fixture returning the CICE5 timing content."""
     return """ --------------------------------
    CICE model diagnostic output  
@@ -63,7 +63,7 @@ Timer   2:  TimeLoop   16197.19 seconds
 
 
 @pytest.fixture(scope="module")
-def cice5_incorrect_log_file():
+def cice5_incorrect_log_text():
     """Fixture returning an incorrect CICE5 timing content."""
     return """Timer stats (node): min =    16197.42 seconds
                       max =    16197.47 seconds
@@ -73,9 +73,11 @@ def cice5_incorrect_log_file():
                       mean=        0.00 seconds"""
 
 
-def test_cice5_profiling(cice5_required_metrics, cice5_parser, cice5_log_file, cice5_profiling):
+def test_cice5_profiling(tmp_path, cice5_required_metrics, cice5_parser, cice5_log_text, cice5_profiling):
     """Test the correct parsing of CICE5 timing information."""
-    parsed_log = cice5_parser.read(cice5_log_file)
+    cice5_log_file = tmp_path / "cice5.log"
+    cice5_log_file.write_text(cice5_log_text)
+    parsed_log = cice5_parser.parse(cice5_log_file)
 
     # check metrics are present in parser and parsed output
     for metric in cice5_required_metrics:
@@ -91,7 +93,9 @@ def test_cice5_profiling(cice5_required_metrics, cice5_parser, cice5_log_file, c
             )
 
 
-def test_cice5_incorrect_profiling(cice5_parser, cice5_incorrect_log_file):
+def test_cice5_incorrect_profiling(tmp_path, cice5_parser, cice5_incorrect_log_text):
     """Test the parsing of incirrect CICE5 timing information."""
+    cice5_log_file = tmp_path / "cice5.log"
+    cice5_log_file.write_text(cice5_incorrect_log_text)
     with pytest.raises(ValueError):
-        cice5_parser.read(cice5_incorrect_log_file)
+        cice5_parser.parse(cice5_log_file)

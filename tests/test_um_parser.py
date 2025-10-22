@@ -291,9 +291,11 @@ def test_um_metrics(um_parser, um_required_metrics):
     )
 
 
-def test_um7_parsing(um_parser, um7_raw_profiling_data, um7_parsed_profile_data):
+def test_um7_parsing(tmp_path, um_parser, um7_raw_profiling_data, um7_parsed_profile_data):
     """Test that parsed UM7 profiling data *exactly* matches the known-correct profiling data"""
-    stats = um_parser.read(um7_raw_profiling_data)
+    um7_log_file = tmp_path / "um7.log"
+    um7_log_file.write_text(um7_raw_profiling_data)
+    stats = um_parser.parse(um7_log_file)
 
     # Might also be worthwhile to check that the 'region' key exists first
     assert len(stats["region"]) == len(um7_parsed_profile_data["region"]), (
@@ -307,47 +309,63 @@ def test_um7_parsing(um_parser, um7_raw_profiling_data, um7_parsed_profile_data)
             )
 
 
-def test_um7_parser_missing_header(um_parser, um7_malformed_profiling_data_missing_header):
+def test_um7_parser_missing_header(tmp_path, um_parser, um7_malformed_profiling_data_missing_header):
     """Test that UM7 parsing fails when the header is missing"""
+    um7_log_file = tmp_path / "um7.log"
+    um7_log_file.write_text(um7_malformed_profiling_data_missing_header)
     with pytest.raises(ValueError):
-        um_parser.read(um7_malformed_profiling_data_missing_header)
+        um_parser.parse(um7_log_file)
 
 
-def test_um7_parser_missing_footer(um_parser, um7_malformed_profiling_data_missing_footer):
+def test_um7_parser_missing_footer(tmp_path, um_parser, um7_malformed_profiling_data_missing_footer):
     """Test that UM7 parsing fails when the footer is missing"""
+    um7_log_file = tmp_path / "um7.log"
+    um7_log_file.write_text(um7_malformed_profiling_data_missing_footer)
     with pytest.raises(ValueError):
-        um_parser.read(um7_malformed_profiling_data_missing_footer)
+        um_parser.parse(um7_log_file)
 
 
-def test_um7_parser_missing_section(um_parser, um7_malformed_profiling_data_missing_profiling_section):
+def test_um7_parser_missing_section(tmp_path, um_parser, um7_malformed_profiling_data_missing_profiling_section):
     """Test that UM7 parsing fails when the profiling section is empty (but both header and footer are present)"""
+    um7_log_file = tmp_path / "um7.log"
+    um7_log_file.write_text(um7_malformed_profiling_data_missing_profiling_section)
     with pytest.raises(AssertionError):
-        um_parser.read(um7_malformed_profiling_data_missing_profiling_section)
+        um_parser.parse(um7_log_file)
 
 
-def test_um7_parser_extra_final_column(um_parser, um7_malformed_data_extra_final_column):
+def test_um7_parser_extra_final_column(tmp_path, um_parser, um7_malformed_data_extra_final_column):
     """Test that UM7 parsing fails when there is an extra column at the end"""
+    um7_log_file = tmp_path / "um7.log"
+    um7_log_file.write_text(um7_malformed_data_extra_final_column)
     with pytest.raises(AssertionError):
-        um_parser.read(um7_malformed_data_extra_final_column)
+        um_parser.parse(um7_log_file)
 
 
-def test_um7_parser_extra_middle_column(um_parser, um7_malformed_data_extra_middle_column):
+def test_um7_parser_extra_middle_column(tmp_path, um_parser, um7_malformed_data_extra_middle_column):
     """Test that UM7 parsing fails when there is an extra column in the middle"""
+    um7_log_file = tmp_path / "um7.log"
+    um7_log_file.write_text(um7_malformed_data_extra_middle_column)
     with pytest.raises(ValueError):
-        um_parser.read(um7_malformed_data_extra_middle_column)
+        um_parser.parse(um7_log_file)
 
 
-def test_um7_parser_extra_front_column_float(um_parser, um7_malformed_data_extra_front_column_with_float_data):
+def test_um7_parser_extra_front_column_float(
+    tmp_path, um_parser, um7_malformed_data_extra_front_column_with_float_data
+):
     """Test that UM7 parsing fails when there is an extra column, with float values, at the beginning of a line"""
+    um7_log_file = tmp_path / "um7.log"
+    um7_log_file.write_text(um7_malformed_data_extra_front_column_with_float_data)
     with pytest.raises(AssertionError):
-        um_parser.read(um7_malformed_data_extra_front_column_with_float_data)
+        um_parser.parse(um7_log_file)
 
 
 def test_um7_parser_extra_front_column_integer(
-    um_parser, um7_malformed_data_extra_front_column_with_integer_data, um7_parsed_profile_data
+    tmp_path, um_parser, um7_malformed_data_extra_front_column_with_integer_data, um7_parsed_profile_data
 ):
     """Test that UM7 parsing *works* when there is an extra column, with integer values, at the beginning of a line"""
-    stats = um_parser.read(um7_malformed_data_extra_front_column_with_integer_data)
+    um7_log_file = tmp_path / "um7.log"
+    um7_log_file.write_text(um7_malformed_data_extra_front_column_with_integer_data)
+    stats = um_parser.parse(um7_log_file)
 
     # Might also be worthwhile to check that the 'region' key exists first
     assert len(stats["region"]) == len(um7_parsed_profile_data["region"]), (
@@ -361,22 +379,30 @@ def test_um7_parser_extra_front_column_integer(
             )
 
 
-def test_um7_parser_extra_front_column_string(um_parser, um7_malformed_data_extra_front_column_with_string_data):
+def test_um7_parser_extra_front_column_string(
+    tmp_path, um_parser, um7_malformed_data_extra_front_column_with_string_data
+):
     """Test that UM7 parsing fails when there is an extra column, with string values, at the beginning of a line"""
+    um7_log_file = tmp_path / "um7.log"
+    um7_log_file.write_text(um7_malformed_data_extra_front_column_with_string_data)
     with pytest.raises(AssertionError):
-        um_parser.read(um7_malformed_data_extra_front_column_with_string_data)
+        um_parser.parse(um7_log_file)
 
 
-def test_um7_parser_malformed_columns(um_parser, um7_malformed_profiling_data_bad_columndata):
+def test_um7_parser_malformed_columns(tmp_path, um_parser, um7_malformed_profiling_data_bad_columndata):
     """Test that UM7 parsing fails when the column data is not representable as a number"""
+    um7_log_file = tmp_path / "um7.log"
+    um7_log_file.write_text(um7_malformed_profiling_data_bad_columndata)
     with pytest.raises(AssertionError):
-        um_parser.read(um7_malformed_profiling_data_bad_columndata)
+        um_parser.parse(um7_log_file)
 
 
 # UM13 parsing tests below
-def test_um13_parsing(um_parser, um13_raw_profiling_data, um13_parsed_profile_data):
+def test_um13_parsing(tmp_path, um_parser, um13_raw_profiling_data, um13_parsed_profile_data):
     """Test that parsed UM13 profiling data *exactly* matches the known-correct profiling data"""
-    stats = um_parser.read(um13_raw_profiling_data)
+    um13_log_file = tmp_path / "um7.log"
+    um13_log_file.write_text(um13_raw_profiling_data)
+    stats = um_parser.parse(um13_log_file)
 
     # Might also be worthwhile to check that the 'region' key exists first
     assert len(stats["region"]) == len(um13_parsed_profile_data["region"]), (
@@ -411,9 +437,11 @@ def um_total_runtime_parser():
     return UMTotalRuntimeParser()
 
 
-def test_um_total_runtime_parsing(um_total_runtime_parser, um_total_runtime_raw_profiling_data):
+def test_um_total_runtime_parsing(tmp_path, um_total_runtime_parser, um_total_runtime_raw_profiling_data):
     """Test that parsed UM total runtime data *exactly* matches the known-correct profiling data"""
-    parsed_log = um_total_runtime_parser.read(um_total_runtime_raw_profiling_data)
+    um_log_file = tmp_path / "um.log"
+    um_log_file.write_text(um_total_runtime_raw_profiling_data)
+    parsed_log = um_total_runtime_parser.parse(um_log_file)
 
     assert "um_total_walltime" in parsed_log["region"]
     assert len(parsed_log["region"]) == 1, (
@@ -424,7 +452,9 @@ def test_um_total_runtime_parsing(um_total_runtime_parser, um_total_runtime_raw_
     )
 
 
-def test_um_total_runtime_parsing_missing_section(um7_raw_profiling_data, um_total_runtime_parser):
+def test_um_total_runtime_parsing_missing_section(tmp_path, um7_raw_profiling_data, um_total_runtime_parser):
     """Test that UM total runtime parsing fails when the max. elapsed wallclock phrase is missing"""
+    um7_log_file = tmp_path / "um7.log"
+    um7_log_file.write_text(um7_raw_profiling_data)
     with pytest.raises(ValueError):
-        um_total_runtime_parser.read(um7_raw_profiling_data)
+        um_total_runtime_parser.parse(um7_log_file)
