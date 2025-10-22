@@ -413,9 +413,15 @@ def um_total_runtime_parser():
 
 def test_um_total_runtime_parsing(um_total_runtime_parser, um_total_runtime_raw_profiling_data):
     """Test that parsed UM total runtime data *exactly* matches the known-correct profiling data"""
-    walltime = um_total_runtime_parser.read(um_total_runtime_raw_profiling_data)
+    parsed_log = um_total_runtime_parser.read(um_total_runtime_raw_profiling_data)
 
-    assert walltime == 3944.07699399998, f"Incorrect total wallclock time. Expected 3944.07699399998, got {walltime}"
+    assert "um_total_walltime" in parsed_log["region"]
+    assert len(parsed_log["region"]) == 1, (
+        f"Incorrect number of regions. Found {len(parsed_log['region'])} instead of 1."
+    )
+    assert parsed_log[tmax][0] == 3944.07699399998, (
+        f"Incorrect total wallclock time. Expected 3944.07699399998, got {parsed_log[tmax][0]}"
+    )
 
 
 def test_um_total_runtime_parsing_missing_section(um7_raw_profiling_data, um_total_runtime_parser):
