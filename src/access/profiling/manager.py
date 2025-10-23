@@ -6,6 +6,7 @@ from enum import Enum
 from pathlib import Path
 
 import xarray as xr
+from matplotlib.figure import Figure
 
 from access.profiling.metrics import ProfilingMetric
 from access.profiling.parser import ProfilingParser
@@ -135,7 +136,7 @@ class ProfilingManager(ABC):
         regions: list[list[str]],
         metric: ProfilingMetric,
         region_relabel_map: dict | None = None,
-    ):
+    ) -> Figure:
         """Plots scaling data for the specified components, regions and metric.
 
         Args:
@@ -144,4 +145,6 @@ class ProfilingManager(ABC):
             metric (ProfilingMetric): Metric to use for the scaling plots.
             region_relabel_map (dict | None): Optional mapping to relabel regions in the plots.
         """
-        plot_scaling_metrics([self.data[c] for c in components], regions, metric, region_relabel_map=region_relabel_map)
+        return plot_scaling_metrics(
+            [self.data[c] for c in components], regions, metric, region_relabel_map=region_relabel_map
+        )
