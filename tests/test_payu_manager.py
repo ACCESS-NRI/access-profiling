@@ -151,15 +151,21 @@ def test_parse_profiling_data(mock_parse, mock_glob, mock_is_dir):
     """Test the parse_profiling_data method of PayuManager."""
 
     config_profiling = MockPayuManager(Path("/fake/test_path"))
-    datasets = config_profiling.parse_profiling_data(Path("/fake/path"))
 
-    # Check correct path access
-    assert mock_is_dir.call_count == 1  # Called to check archive directory
-    assert mock_glob.call_count == 2  # Called for payu_jobs and output directories
-    assert mock_parse.call_count == 2  # Called for each log file
+    with mock.patch.object(
+        config_profiling, "get_component_logs", wraps=config_profiling.get_component_logs
+    ) as mock_get_logs:
+        datasets = config_profiling.parse_profiling_data(Path("/fake/path"))
 
-    # Check returned datasets
-    assert "payu" in datasets
-    assert isinstance(datasets["payu"], xr.Dataset)
-    assert "component" in datasets
-    assert isinstance(datasets["component"], xr.Dataset)
+        # Check correct path access
+        assert mock_is_dir.call_count == 1  # Called to check archive directory
+        assert mock_glob.call_count == 2  # Called for payu_jobs and output directories
+        assert mock_parse.call_count == 2  # Called for each log file
+        assert mock_get_logs.call_count == 1
+        mock_get_logs.assert_called_with(Path("output1"))
+
+        # Check returned datasets
+        assert "payu" in datasets
+        assert isinstance(datasets["payu"], xr.Dataset)
+        assert "component" in datasets
+        assert isinstance(datasets["component"], xr.Dataset)

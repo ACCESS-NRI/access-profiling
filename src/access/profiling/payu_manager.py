@@ -161,8 +161,7 @@ class PayuManager(ProfilingManager, ABC):
             raise FileNotFoundError(f"No output files found in {path}!")
         elif len(matches) > 1:
             logger.warning(f"Multiple output directories found in {path}! Using the first one found.")
-        for output in matches:
-            logs.update(self.get_component_logs(output))
+        logs.update(self.get_component_logs(matches[0]))
 
         # Parse all logs
         for name, log in logs.items():
