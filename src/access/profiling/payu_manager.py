@@ -103,7 +103,10 @@ class PayuManager(ProfilingManager, ABC):
                 exp.status = ProfilingExperimentStatus.RUNNING
 
         # Run the experiment runner
-        ExperimentRunner(runner_config).run()
+        if runner_config["running_branches"]:
+            ExperimentRunner(runner_config).run()
+        else:
+            logger.info("No new experiments to run. Will skip execution.")
 
         # We are marking all running experiments as done here, but later this should be implemented properly
         # so that an actual check is performed, probably somewhere else.

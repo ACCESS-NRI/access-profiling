@@ -106,6 +106,11 @@ def test_run_experiments(mock_experiment_runner):
     }
     mock_experiment_runner.assert_called_once_with(expected_call)
 
+    # Rerun again with no NEW experiments
+    mock_experiment_runner.reset_mock()
+    config_profiling.run_experiments()
+    mock_experiment_runner.assert_not_called()
+
 
 @mock.patch("access.profiling.payu_manager.Path.is_dir")
 @mock.patch("access.profiling.payu_manager.Path.glob")
