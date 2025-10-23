@@ -103,7 +103,10 @@ class PayuManager(ProfilingManager, ABC):
                 exp.status = ProfilingExperimentStatus.RUNNING
 
         # Run the experiment runner
-        ExperimentRunner(runner_config).run()
+        if runner_config["running_branches"]:
+            ExperimentRunner(runner_config).run()
+        else:
+            logger.info("No new experiments to run. Will skip execution.")
 
         # We are marking all running experiments as done here, but later this should be implemented properly
         # so that an actual check is performed, probably somewhere else.
@@ -158,8 +161,7 @@ class PayuManager(ProfilingManager, ABC):
             raise FileNotFoundError(f"No output files found in {path}!")
         elif len(matches) > 1:
             logger.warning(f"Multiple output directories found in {path}! Using the first one found.")
-        for output in matches:
-            logs.update(self.get_component_logs(output))
+        logs.update(self.get_component_logs(matches[0]))
 
         # Parse all logs
         for name, log in logs.items():

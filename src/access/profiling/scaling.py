@@ -53,7 +53,7 @@ def plot_scaling_metrics(
     regions: list[list[str]],
     metric: ProfilingMetric,
     xcoordinate: str = "ncpus",
-    region_relabel_map: dict = None,
+    region_relabel_map: dict | None = None,
     first_col_fraction: float = 0.4,
     show: bool = True,
 ) -> Figure:
