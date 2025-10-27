@@ -116,38 +116,36 @@ def test_scaling_data(mock_plot, scaling_data):
     and that the plotting function is called correctly.
     """
     paths, ncpus, datasets = scaling_data
-    config_prof = MockProfilingManager(paths, ncpus, datasets)
+    manager = MockProfilingManager(paths, ncpus, datasets)
 
-    config_prof.parse_scaling_data()
+    manager.parse_scaling_data()
 
-    assert set(config_prof.data.keys()) == {"component"}
-    assert set(config_prof.data["component"].dims) == {"ncpus", "region"}, (
+    assert set(manager.data.keys()) == {"component"}
+    assert set(manager.data["component"].dims) == {"ncpus", "region"}, (
         "Dataset should have dimensions 'ncpus' and 'region'!"
     )
-    assert config_prof.data["component"].sizes["ncpus"] == 3, "Dataset should have 2 values for 'ncpus'!"
-    assert config_prof.data["component"].sizes["region"] == 2, "Dataset should have 3 values for 'region'!"
+    assert manager.data["component"].sizes["ncpus"] == 3, "Dataset should have 2 values for 'ncpus'!"
+    assert manager.data["component"].sizes["region"] == 2, "Dataset should have 3 values for 'region'!"
 
-    assert set(config_prof.data["component"].data_vars) == {count, tavg}, (
-        "Dataset should have data_vars for each metric!"
-    )
-    assert all(config_prof.data["component"][metric].shape == (3, 2) for metric in (count, tavg)), (
+    assert set(manager.data["component"].data_vars) == {count, tavg}, "Dataset should have data_vars for each metric!"
+    assert all(manager.data["component"][metric].shape == (3, 2) for metric in (count, tavg)), (
         "Dataset data vars should have shape (3, 2)!"
     )
-    assert all(config_prof.data["component"][metric].data.units == metric.units for metric in (count, tavg)), (
+    assert all(manager.data["component"][metric].data.units == metric.units for metric in (count, tavg)), (
         "Dataset data_vars should have correct units!"
     )
-    assert all(config_prof.data["component"][count].sel(ncpus=1) == datasets[0][count]), (
+    assert all(manager.data["component"][count].sel(ncpus=1) == datasets[0][count]), (
         "Dataset data_vars should have correct values for ncpus=1!"
     )
     for i, n in enumerate(ncpus):
         for metric in (count, tavg):
-            assert all(config_prof.data["component"][metric].sel(ncpus=n) == datasets[i][metric]), (
+            assert all(manager.data["component"][metric].sel(ncpus=n) == datasets[i][metric]), (
                 f"Dataset data_vars for {metric} should have correct values for ncpus={n}!"
             )
 
-    config_prof.plot_scaling_data(components=["component"], regions=[["Region 1", "Region 2"]], metric=tavg)
+    manager.plot_scaling_data(components=["component"], regions=[["Region 1", "Region 2"]], metric=tavg)
     mock_plot.assert_called_once_with(
-        [config_prof.data["component"]],
+        [manager.data["component"]],
         [["Region 1", "Region 2"]],
         tavg,
         region_relabel_map=None,
