@@ -9,8 +9,8 @@ import xarray as xr
 from access.config import YAMLParser
 from experiment_runner.experiment_runner import ExperimentRunner
 
-from access.profiling.experiment import ProfilingExperiment, ProfilingExperimentStatus, ProfilingLog
-from access.profiling.manager import ProfilingManager
+from access.profiling.experiment import ProfilingLog
+from access.profiling.manager import ProfilingExperiment, ProfilingExperimentStatus, ProfilingManager
 from access.profiling.payujson_parser import PayuJSONProfilingParser
 
 logger = logging.getLogger(__name__)
@@ -114,6 +114,23 @@ class PayuManager(ProfilingManager, ABC):
         for exp in self.experiments.values():
             if exp.status == ProfilingExperimentStatus.RUNNING:
                 exp.status = ProfilingExperimentStatus.DONE
+
+    def archive_experiments(
+        self, exclude_dirs: list[str] | None = None, exclude_files: list[str] | None = None
+    ) -> None:
+        """Archives completed experiments to the specified archive path.
+
+        Args:
+            exclude_dirs (list[str] | None): Directory patterns to exclude when archiving experiments. Defaults to
+                [".git", "restart*"] if not provided.
+            exclude_files (list[str] | None): File patterns to exclude when archiving experiments. Defaults to
+                ["*.nc"] if not provided.
+        """
+        if exclude_dirs is None:
+            exclude_dirs = [".git", "restart*"]
+        if exclude_files is None:
+            exclude_files = ["*.nc"]
+        super().archive_experiments(exclude_dirs=exclude_dirs, exclude_files=exclude_files)
 
     def parse_ncpus(self, path: Path) -> int:
         """Parses the number of CPUs used in a given Payu experiment.

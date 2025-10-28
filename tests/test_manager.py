@@ -7,8 +7,7 @@ from unittest import mock
 import pytest
 import xarray as xr
 
-from access.profiling.experiment import ProfilingExperiment, ProfilingExperimentStatus
-from access.profiling.manager import ProfilingManager
+from access.profiling.manager import ProfilingExperiment, ProfilingExperimentStatus, ProfilingManager
 from access.profiling.metrics import count, tavg
 
 
@@ -23,16 +22,27 @@ class MockProfilingManager(ProfilingManager):
         datasets (list[xr.Dataset]): List of datasets to return for each path.
     """
 
-    def __init__(self, paths, ncpus, datasets) -> None:
-        super().__init__(Path("/fake/work_dir"))
+    def __init__(
+        self,
+        paths: list[Path],
+        ncpus: list[int] | None = None,
+        datasets: list[xr.Dataset] | None = None,
+    ):
+        super().__init__(Path("/fake/work_dir"), Path("/fake/archive_dir"))
 
-        self._mock_ncpus = dict(zip([path.name for path in paths], ncpus, strict=True))
-        self._mock_datasets = dict(zip([path.name for path in paths], datasets, strict=True))
+        if ncpus is not None:
+            self._mock_ncpus = dict(zip([path.name for path in paths], ncpus, strict=True))
+        else:
+            self._mock_ncpus = {}
+        if datasets is not None:
+            self._mock_datasets = dict(zip([path.name for path in paths], datasets, strict=True))
+        else:
+            self._mock_datasets = {}
 
         # Pre-generate experiments
         for path in paths:
-            self.experiments[path] = ProfilingExperiment(path)
-            self.experiments[path].status = ProfilingExperimentStatus.DONE
+            self.experiments[path.name] = ProfilingExperiment(path)
+            self.experiments[path.name].status = ProfilingExperimentStatus.DONE
 
     def parse_ncpus(self, path):
         """Simulate parsing number of CPUs for a given path."""
@@ -41,6 +51,59 @@ class MockProfilingManager(ProfilingManager):
     def parse_profiling_data(self, path):
         """Simulate parsing profiling data for a given path."""
         return {"component": self._mock_datasets[path.name]}
+
+
+@mock.patch("access.profiling.manager.Path.is_dir")
+@mock.patch("access.profiling.manager.Path.glob")
+@mock.patch("access.profiling.manager.Path.is_file")
+@mock.patch("access.profiling.manager.ProfilingExperiment")
+def test_archive_discovery(mock_experiment, mock_is_file, mock_glob, mock_is_dir):
+    """Test that ProfilingManager discovers archived experiments correctly."""
+
+    mock_glob.return_value = [Path("/fake/archive_dir/exp1.tar.gz"), Path("/fake/archive_dir/exp2.tar.gz")]
+
+    # Test when archive directory does not exist
+    mock_is_dir.return_value = False
+    manager = MockProfilingManager(paths=[])
+    assert manager.experiments == {}, "No experiments should be discovered if archive dir does not exist."
+
+    # Test when archive directory exists, but there are no files (treat all paths as non-files)
+    mock_is_dir.return_value = True
+    mock_is_file.return_value = False
+    manager = MockProfilingManager(paths=[])
+    assert manager.experiments == {}, "No experiments should be discovered if no archive files are present."
+
+    # Test when archive directory exists and files are present
+    mock_is_dir.return_value = True
+    mock_is_file.return_value = True
+    manager = MockProfilingManager(paths=[])
+    assert set(manager.experiments.keys()) == {"exp1", "exp2"}
+    assert mock_experiment.call_count == 2
+    mock_experiment.assert_any_call(Path("/fake/archive_dir/exp1.tar.gz"))
+    mock_experiment.assert_any_call(Path("/fake/archive_dir/exp2.tar.gz"))
+
+
+@mock.patch("access.profiling.manager.Path.mkdir")
+@mock.patch("access.profiling.manager.ProfilingExperiment.archive")
+def test_archive_experiments(mock_archive, mock_mkdir):
+    """Test the archive_experiments method of ProfilingManager."""
+
+    # Setup mock experiments
+    exp_paths = [Path("/fake/work_dir/exp1"), Path("/fake/work_dir/exp2"), Path("/fake/work_dir/exp3")]
+    manager = MockProfilingManager(exp_paths)
+    manager.experiments["exp2"].status = ProfilingExperimentStatus.RUNNING
+    manager.experiments["exp3"].status = ProfilingExperimentStatus.NEW
+
+    # Archive experiments
+    manager.archive_experiments()
+
+    # Check calls
+    mock_mkdir.assert_called_with(parents=True, exist_ok=True)  # Check archive directory creation
+    assert mock_archive.call_count == 3, "Should attempt to archive all experiments."
+    mock_archive.assert_any_call(Path("/fake/archive_dir/exp1"), exclude_files=None, exclude_dirs=None)
+    mock_archive.assert_any_call(Path("/fake/archive_dir/exp2"), exclude_files=None, exclude_dirs=None)
+    mock_archive.assert_any_call(Path("/fake/archive_dir/exp3"), exclude_files=None, exclude_dirs=None)
+    assert mock_archive.call_count == 3
 
 
 @pytest.fixture()

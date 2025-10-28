@@ -8,6 +8,7 @@ import pytest
 import xarray as xr
 
 from access.profiling.experiment import ProfilingLog
+from access.profiling.manager import ProfilingManager
 from access.profiling.payu_manager import PayuManager, ProfilingExperiment, ProfilingExperimentStatus
 
 
@@ -18,9 +19,9 @@ class MockPayuManager(PayuManager):
         return {"component": ProfilingLog(path, mock.MagicMock())}
 
 
-@pytest.fixture()
+@pytest.fixture(scope="function")
 def manager():
-    return MockPayuManager(Path("/fake/test_path"))
+    return MockPayuManager(Path("/fake/test_path"), Path("/fake/archive_path"))
 
 
 def test_nruns(manager):
@@ -115,6 +116,25 @@ def test_run_experiments(mock_experiment_runner, manager):
         mock_experiment_runner.reset_mock()
         manager.run_experiments()
         mock_experiment_runner.assert_not_called()
+
+
+@mock.patch.object(ProfilingManager, "archive_experiments")
+def test_archive_experiments(mock_archive, manager):
+    """Test the archive_experiments method of PayuManager.
+
+    The only thing to test here is that the correct exclude files and dirs are passed to the parent method.
+    """
+
+    # No arguments passed
+    manager.archive_experiments()
+    assert mock_archive.call_count == 1
+    mock_archive.assert_called_with(exclude_dirs=[".git", "restart*"], exclude_files=["*.nc"])
+    mock_archive.reset_mock()
+
+    # Custom arguments passed
+    manager.archive_experiments(exclude_dirs=["dir1"], exclude_files=["file1"])
+    assert mock_archive.call_count == 1
+    mock_archive.assert_called_with(exclude_dirs=["dir1"], exclude_files=["file1"])
 
 
 @mock.patch("access.profiling.payu_manager.Path.is_dir")
