@@ -56,8 +56,8 @@ class ESM16Profiling(PayuManager):
 class RAM3Profiling(CylcRoseManager):
     """Handles profiling of ACCESS-rAM3 configurations."""
 
-    def __init__(self, work_dir: Path, layout_variable: str):
-        super().__init__(work_dir)
+    def __init__(self, work_dir: Path, archive_dir: Path, layout_variable: str):
+        super().__init__(work_dir, archive_dir)
         self.layout_variable = layout_variable
 
     def parse_ncpus(self, path: Path) -> int:

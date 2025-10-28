@@ -25,7 +25,7 @@ class MockCylcManager(CylcRoseManager):
 
 @pytest.fixture()
 def manager():
-    return MockCylcManager(Path("/fake/test_path"))
+    return MockCylcManager(Path("/fake/test_path"), Path("/fake/archive_path"))
 
 
 @mock.patch("access.profiling.cylc_manager.ProfilingLog.parse")
