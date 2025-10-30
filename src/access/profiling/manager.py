@@ -126,7 +126,7 @@ class ProfilingManager(ABC):
                 for name, ds in datasets.items():
                     ds = ds.expand_dims({"ncpus": 1}).assign_coords({"ncpus": [ncpus]})
                     if name in self.data:
-                        self.data[name] = xr.concat([self.data[name], ds], dim="ncpus", join="outer")
+                        self.data[name] = xr.concat([self.data[name], ds], dim="ncpus", join="outer").sortby("ncpus")
                     else:
                         self.data[name] = ds
 

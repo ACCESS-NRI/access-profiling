@@ -95,9 +95,9 @@ def scaling_data():
     - For 4 CPUs: [300182.5 s, 1.172694 s]
     """
     paths = [Path("1cpu"), Path("2cpu"), Path("4cpu")]
-    ncpus = [1, 2, 4]
+    ncpus = [1, 4, 2]  # Intentionally unordered to test sorting in the manager
     datasets = []
-    for n in [1, 2, 4]:
+    for n in ncpus:
         regions = ["Region 1", "Region 2"]
         count_array = xr.DataArray([1, 2], dims=["region"]).pint.quantify(count.units)
         tavg_array = xr.DataArray([value / min(n, 2) for value in [600365, 2.345388]], dims=["region"]).pint.quantify(
@@ -126,6 +126,13 @@ def test_scaling_data(mock_plot, scaling_data):
     )
     assert manager.data["component"].sizes["ncpus"] == 3, "Dataset should have 2 values for 'ncpus'!"
     assert manager.data["component"].sizes["region"] == 2, "Dataset should have 3 values for 'region'!"
+
+    assert manager.data["component"]["ncpus"].values.tolist() == sorted(ncpus), (
+        "Dataset should have correct 'ncpus' coordinate values (in sorted order)!"
+    )
+    assert manager.data["component"]["region"].values.tolist() == ["Region 1", "Region 2"], (
+        "Dataset should have correct 'region' coordinate values!"
+    )
 
     assert set(manager.data["component"].data_vars) == {count, tavg}, "Dataset should have data_vars for each metric!"
     assert all(manager.data["component"][metric].shape == (3, 2) for metric in (count, tavg)), (
