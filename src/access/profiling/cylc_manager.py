@@ -8,7 +8,8 @@ from pathlib import Path
 import xarray as xr
 
 from access.profiling.cylc_parser import CylcDBReader, CylcProfilingParser
-from access.profiling.manager import ProfilingLog, ProfilingManager
+from access.profiling.experiment import ProfilingLog
+from access.profiling.manager import ProfilingManager
 from access.profiling.parser import ProfilingParser
 
 logger = logging.getLogger(__name__)

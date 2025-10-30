@@ -7,7 +7,7 @@ from unittest import mock
 import pytest
 import xarray as xr
 
-from access.profiling.manager import ProfilingLog
+from access.profiling.experiment import ProfilingLog
 from access.profiling.payu_manager import PayuManager, ProfilingExperiment, ProfilingExperimentStatus
 
 

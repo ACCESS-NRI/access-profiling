@@ -9,7 +9,8 @@ import xarray as xr
 from access.config import YAMLParser
 from experiment_runner.experiment_runner import ExperimentRunner
 
-from access.profiling.manager import ProfilingExperiment, ProfilingExperimentStatus, ProfilingLog, ProfilingManager
+from access.profiling.experiment import ProfilingExperiment, ProfilingExperimentStatus, ProfilingLog
+from access.profiling.manager import ProfilingManager
 from access.profiling.payujson_parser import PayuJSONProfilingParser
 
 logger = logging.getLogger(__name__)
