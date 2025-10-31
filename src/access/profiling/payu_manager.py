@@ -116,7 +116,7 @@ class PayuManager(ProfilingManager, ABC):
                 exp.status = ProfilingExperimentStatus.DONE
 
     def archive_experiments(
-        self, exclude_dirs: list[str] | None = None, exclude_files: list[str] | None = None
+        self, exclude_dirs: list[str] | None = None, exclude_files: list[str] | None = None, force: bool = False
     ) -> None:
         """Archives completed experiments to the specified archive path.
 
@@ -125,12 +125,13 @@ class PayuManager(ProfilingManager, ABC):
                 [".git", "restart*"] if not provided.
             exclude_files (list[str] | None): File patterns to exclude when archiving experiments. Defaults to
                 ["*.nc"] if not provided.
+            overwrite (bool): Whether to overwrite existing archives. Defaults to False.
         """
         if exclude_dirs is None:
             exclude_dirs = [".git", "restart*"]
         if exclude_files is None:
             exclude_files = ["*.nc"]
-        super().archive_experiments(exclude_dirs=exclude_dirs, exclude_files=exclude_files)
+        super().archive_experiments(exclude_dirs=exclude_dirs, exclude_files=exclude_files, force=force)
 
     def parse_ncpus(self, path: Path) -> int:
         """Parses the number of CPUs used in a given Payu experiment.

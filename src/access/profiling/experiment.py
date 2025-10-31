@@ -121,7 +121,11 @@ class ProfilingExperiment:
             yield self.path
 
     def archive(
-        self, archive_path: Path, exclude_dirs: list[str] | None = None, exclude_files: list[str] | None = None
+        self,
+        archive_path: Path,
+        exclude_dirs: list[str] | None = None,
+        exclude_files: list[str] | None = None,
+        force: bool = False,
     ):
         """Archives the experiment to the specified archive path.
 
@@ -132,21 +136,27 @@ class ProfilingExperiment:
             the .tar.gz suffix.
             exclude_dirs (list[str] | None): Directory patterns to exclude when archiving.
             exclude_files (list[str] | None): File patterns to exclude when archiving.
+            force (bool): Whether to overwrite existing archives. Defaults to False.
 
         Raises:
             FileExistsError: If the archive destination already exists.
         """
-        if self.status != ProfilingExperimentStatus.DONE:
-            return  # Only archive completed experiments
+        if force:
+            if self.status not in (ProfilingExperimentStatus.ARCHIVED, ProfilingExperimentStatus.DONE):
+                return  # Only archive completed or previously archived experiments
+        else:
+            if self.status != ProfilingExperimentStatus.DONE:
+                return  # Only archive completed experiments
 
         archive_file = archive_path.with_suffix(".tar.gz")
-        if archive_file.exists():
+        if archive_file.exists() and not force:
             raise FileExistsError(f"Archive destination {archive_file} already exists.")
 
         exclude_dirs = exclude_dirs or []
         exclude_files = exclude_files or []
 
-        with tarfile.open(archive_file, "w:gz") as tar:
+        mode = "w:gz" if force else "x:gz"
+        with tarfile.open(archive_file, mode) as tar:
             for file, arcname in experiment_directory_walker(self.path, arcname=self.path.relative_to(self.path)):
                 # Skip if file is inside an excluded directory pattern
                 if any(any(parent.match(pat) for pat in exclude_dirs) for parent in file.parents):
