@@ -8,8 +8,8 @@ from access.config import YAMLParser
 
 from access.profiling.cice5_parser import CICE5ProfilingParser
 from access.profiling.cylc_manager import CylcRoseManager
+from access.profiling.experiment import ProfilingLog
 from access.profiling.fms_parser import FMSProfilingParser
-from access.profiling.manager import ProfilingLog
 from access.profiling.payu_manager import PayuManager
 from access.profiling.um_parser import UMProfilingParser, UMTotalRuntimeParser
 

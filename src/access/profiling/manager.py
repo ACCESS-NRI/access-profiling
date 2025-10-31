@@ -2,74 +2,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from abc import ABC, abstractmethod
-from enum import Enum
 from pathlib import Path
 
 import xarray as xr
 from matplotlib.figure import Figure
 
+from access.profiling.experiment import ProfilingExperiment, ProfilingExperimentStatus
 from access.profiling.metrics import ProfilingMetric
-from access.profiling.parser import ProfilingParser
 from access.profiling.scaling import plot_scaling_metrics
-
-
-class ProfilingLog:
-    """Represents a profiling log file.
-
-    Args:
-        filepath (Path): Path to the log file.
-        parser (ProfilingParser): Parser to use for this log file.
-    """
-
-    filepath: Path  # Path to the log file
-    parser: ProfilingParser  # Parser to use for this log file
-
-    def __init__(self, filepath: Path, parser: ProfilingParser):
-        self.filepath = filepath
-        self.parser = parser
-
-    def parse(self) -> xr.Dataset:
-        """Parses the log file and returns the profiling data as an xarray Dataset.
-
-        Returns:
-           xr.Dataset: Parsed profiling data."""
-        path = self.filepath
-        data = self.parser.parse(path)
-        return xr.Dataset(
-            data_vars=dict(
-                zip(
-                    self.parser.metrics,
-                    [
-                        xr.DataArray(data[metric], dims=["region"]).pint.quantify(metric.units)
-                        for metric in self.parser.metrics
-                    ],
-                    strict=True,
-                )
-            ),
-            coords={"region": data["region"]},
-        )
-
-
-class ProfilingExperimentStatus(Enum):
-    """Enumeration representing the status of a profiling experiment."""
-
-    NEW = 1  # Experiment has been created but not started
-    RUNNING = 2  # Experiment is running or is queued
-    DONE = 3  # Experiment has finished
-
-
-class ProfilingExperiment:
-    """Represents a profiling experiment.
-
-    Args:
-        path (Path): Path to the experiment directory.
-    """
-
-    path: Path  # Path to the experiment directory
-    status: ProfilingExperimentStatus = ProfilingExperimentStatus.NEW  # Status of the experiment
-
-    def __init__(self, path: Path) -> None:
-        self.path = path
 
 
 class ProfilingManager(ABC):
@@ -126,7 +66,7 @@ class ProfilingManager(ABC):
                 for name, ds in datasets.items():
                     ds = ds.expand_dims({"ncpus": 1}).assign_coords({"ncpus": [ncpus]})
                     if name in self.data:
-                        self.data[name] = xr.concat([self.data[name], ds], dim="ncpus", join="outer")
+                        self.data[name] = xr.concat([self.data[name], ds], dim="ncpus", join="outer").sortby("ncpus")
                     else:
                         self.data[name] = ds
 

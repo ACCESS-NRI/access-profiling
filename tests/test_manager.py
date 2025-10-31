@@ -7,49 +7,9 @@ from unittest import mock
 import pytest
 import xarray as xr
 
-from access.profiling.manager import ProfilingExperiment, ProfilingExperimentStatus, ProfilingLog, ProfilingManager
-from access.profiling.metrics import count, tavg, tmax
-
-
-def test_profiling_log():
-    """Test the ProfilingLog class."""
-
-    # Mock parser and path
-    mock_parser = mock.MagicMock(autospec=True)
-    mock_parser.metrics = [tavg, tmax]
-    mock_parser.parse.return_value = {
-        "region": ["Region 1", "Region 2"],
-        tavg: [1.0, 2.0],
-        tmax: [3.0, 4.0],
-    }
-
-    mock_path = mock.MagicMock()
-
-    # Instantiate ProfilingLog and parse
-    profiling_log = ProfilingLog(filepath=mock_path, parser=mock_parser)
-    dataset = profiling_log.parse()
-
-    # Check dataset contents
-    assert set(dataset.dims) == {"region"}
-    assert set(dataset.data_vars) == {tavg, tmax}
-    assert list(dataset["region"].values) == ["Region 1", "Region 2"]
-    assert list(dataset[tavg].values) == [1.0, 2.0]
-    assert list(dataset[tmax].values) == [3.0, 4.0]
-
-    # Check parser and path calls
-    mock_parser.parse.assert_called_once_with(mock_path)
-
-
-def test_profiling_experiment():
-    """Test the ProfilingExperiment class."""
-
-    experiment = ProfilingExperiment(path=Path("/fake/path"))
-
-    assert experiment.path == Path("/fake/path")
-    assert experiment.status == ProfilingExperimentStatus.NEW
-
-    experiment.status = ProfilingExperimentStatus.RUNNING
-    assert experiment.status == ProfilingExperimentStatus.RUNNING
+from access.profiling.experiment import ProfilingExperiment, ProfilingExperimentStatus
+from access.profiling.manager import ProfilingManager
+from access.profiling.metrics import count, tavg
 
 
 class MockProfilingManager(ProfilingManager):
@@ -95,9 +55,9 @@ def scaling_data():
     - For 4 CPUs: [300182.5 s, 1.172694 s]
     """
     paths = [Path("1cpu"), Path("2cpu"), Path("4cpu")]
-    ncpus = [1, 2, 4]
+    ncpus = [1, 4, 2]  # Intentionally unordered to test sorting in the manager
     datasets = []
-    for n in [1, 2, 4]:
+    for n in ncpus:
         regions = ["Region 1", "Region 2"]
         count_array = xr.DataArray([1, 2], dims=["region"]).pint.quantify(count.units)
         tavg_array = xr.DataArray([value / min(n, 2) for value in [600365, 2.345388]], dims=["region"]).pint.quantify(
@@ -116,38 +76,43 @@ def test_scaling_data(mock_plot, scaling_data):
     and that the plotting function is called correctly.
     """
     paths, ncpus, datasets = scaling_data
-    config_prof = MockProfilingManager(paths, ncpus, datasets)
+    manager = MockProfilingManager(paths, ncpus, datasets)
 
-    config_prof.parse_scaling_data()
+    manager.parse_scaling_data()
 
-    assert set(config_prof.data.keys()) == {"component"}
-    assert set(config_prof.data["component"].dims) == {"ncpus", "region"}, (
+    assert set(manager.data.keys()) == {"component"}
+    assert set(manager.data["component"].dims) == {"ncpus", "region"}, (
         "Dataset should have dimensions 'ncpus' and 'region'!"
     )
-    assert config_prof.data["component"].sizes["ncpus"] == 3, "Dataset should have 2 values for 'ncpus'!"
-    assert config_prof.data["component"].sizes["region"] == 2, "Dataset should have 3 values for 'region'!"
+    assert manager.data["component"].sizes["ncpus"] == 3, "Dataset should have 2 values for 'ncpus'!"
+    assert manager.data["component"].sizes["region"] == 2, "Dataset should have 3 values for 'region'!"
 
-    assert set(config_prof.data["component"].data_vars) == {count, tavg}, (
-        "Dataset should have data_vars for each metric!"
+    assert manager.data["component"]["ncpus"].values.tolist() == sorted(ncpus), (
+        "Dataset should have correct 'ncpus' coordinate values (in sorted order)!"
     )
-    assert all(config_prof.data["component"][metric].shape == (3, 2) for metric in (count, tavg)), (
+    assert manager.data["component"]["region"].values.tolist() == ["Region 1", "Region 2"], (
+        "Dataset should have correct 'region' coordinate values!"
+    )
+
+    assert set(manager.data["component"].data_vars) == {count, tavg}, "Dataset should have data_vars for each metric!"
+    assert all(manager.data["component"][metric].shape == (3, 2) for metric in (count, tavg)), (
         "Dataset data vars should have shape (3, 2)!"
     )
-    assert all(config_prof.data["component"][metric].data.units == metric.units for metric in (count, tavg)), (
+    assert all(manager.data["component"][metric].data.units == metric.units for metric in (count, tavg)), (
         "Dataset data_vars should have correct units!"
     )
-    assert all(config_prof.data["component"][count].sel(ncpus=1) == datasets[0][count]), (
+    assert all(manager.data["component"][count].sel(ncpus=1) == datasets[0][count]), (
         "Dataset data_vars should have correct values for ncpus=1!"
     )
     for i, n in enumerate(ncpus):
         for metric in (count, tavg):
-            assert all(config_prof.data["component"][metric].sel(ncpus=n) == datasets[i][metric]), (
+            assert all(manager.data["component"][metric].sel(ncpus=n) == datasets[i][metric]), (
                 f"Dataset data_vars for {metric} should have correct values for ncpus={n}!"
             )
 
-    config_prof.plot_scaling_data(components=["component"], regions=[["Region 1", "Region 2"]], metric=tavg)
+    manager.plot_scaling_data(components=["component"], regions=[["Region 1", "Region 2"]], metric=tavg)
     mock_plot.assert_called_once_with(
-        [config_prof.data["component"]],
+        [manager.data["component"]],
         [["Region 1", "Region 2"]],
         tavg,
         region_relabel_map=None,
