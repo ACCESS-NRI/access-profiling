@@ -20,7 +20,7 @@ def test_esm16_config_profiling(mock_is_file, mock_yaml_parse, mock_path_read_te
     """Test the ESM16ConfigProfiling class."""
 
     # Instantiate ESM16ConfigProfiling
-    config_profiling = ESM16Profiling(Path("/fake/test_path"))
+    config_profiling = ESM16Profiling(Path("/fake/test_path"), Path("/fake/archive_path"))
 
     # Mock the presence of all log files
     mock_is_file.side_effect = [True, True, True]
@@ -60,7 +60,7 @@ def test_ram3_config_profiling(mock_read_text, mock_is_file):
     """Test the rAM3Profiling class."""
 
     # Instantiate rAM3Profiling
-    config_profiling = RAM3Profiling(Path("/fake/path"), layout_variable="um_layout")
+    config_profiling = RAM3Profiling(Path("/fake/path"), Path("/fake/archive_path"), layout_variable="um_layout")
     assert "UM_regions" in config_profiling.known_parsers, '"UM_regions" key not in known_parsers.'
     assert isinstance(config_profiling.known_parsers["UM_regions"], UMProfilingParser), (
         "UM_regions known_parser not UMProfilingParser type."
