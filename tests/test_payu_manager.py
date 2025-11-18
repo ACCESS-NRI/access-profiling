@@ -128,13 +128,17 @@ def test_archive_experiments(mock_archive, manager):
     # No arguments passed
     manager.archive_experiments()
     assert mock_archive.call_count == 1
-    mock_archive.assert_called_with(exclude_dirs=[".git", "restart*"], exclude_files=["*.nc"], follow_symlinks=True)
+    mock_archive.assert_called_with(
+        exclude_dirs=[".git", "restart*"], exclude_files=["*.nc"], follow_symlinks=True, overwrite=False
+    )
     mock_archive.reset_mock()
 
     # Custom arguments passed
     manager.archive_experiments(exclude_dirs=["dir1"], exclude_files=["file1"])
     assert mock_archive.call_count == 1
-    mock_archive.assert_called_with(exclude_dirs=["dir1"], exclude_files=["file1"], follow_symlinks=True)
+    mock_archive.assert_called_with(
+        exclude_dirs=["dir1"], exclude_files=["file1"], follow_symlinks=True, overwrite=False
+    )
 
 
 @mock.patch("access.profiling.payu_manager.Path.is_dir")

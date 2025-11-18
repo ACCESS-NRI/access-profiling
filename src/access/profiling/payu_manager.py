@@ -120,6 +120,7 @@ class PayuManager(ProfilingManager, ABC):
         exclude_dirs: list[str] | None = None,
         exclude_files: list[str] | None = None,
         follow_symlinks: bool = True,
+        overwrite: bool = False,
     ) -> None:
         """Archives completed experiments to the specified archive path.
 
@@ -129,13 +130,14 @@ class PayuManager(ProfilingManager, ABC):
             exclude_files (list[str] | None): File patterns to exclude when archiving experiments. Defaults to
                 ["*.nc"] if not provided.
             follow_symlinks (bool): Whether to follow symlinks when archiving experiments. Defaults to True.
+            overwrite (bool): Whether to overwrite existing archives. Defaults to False.
         """
         if exclude_dirs is None:
             exclude_dirs = [".git", "restart*"]
         if exclude_files is None:
             exclude_files = ["*.nc"]
         super().archive_experiments(
-            exclude_dirs=exclude_dirs, exclude_files=exclude_files, follow_symlinks=follow_symlinks
+            exclude_dirs=exclude_dirs, exclude_files=exclude_files, follow_symlinks=follow_symlinks, overwrite=overwrite
         )
 
     def parse_ncpus(self, path: Path) -> int:
