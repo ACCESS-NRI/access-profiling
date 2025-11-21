@@ -101,13 +101,13 @@ def test_archive_experiments(mock_archive, mock_mkdir):
     mock_mkdir.assert_called_with(parents=True, exist_ok=True)  # Check archive directory creation
     assert mock_archive.call_count == 3, "Should attempt to archive all experiments."
     mock_archive.assert_any_call(
-        Path("/fake/archive_dir/exp1"), exclude_files=None, exclude_dirs=None, follow_symlinks=False
+        Path("/fake/archive_dir/exp1"), exclude_files=None, exclude_dirs=None, follow_symlinks=False, overwrite=False
     )
     mock_archive.assert_any_call(
-        Path("/fake/archive_dir/exp2"), exclude_files=None, exclude_dirs=None, follow_symlinks=False
+        Path("/fake/archive_dir/exp2"), exclude_files=None, exclude_dirs=None, follow_symlinks=False, overwrite=False
     )
     mock_archive.assert_any_call(
-        Path("/fake/archive_dir/exp3"), exclude_files=None, exclude_dirs=None, follow_symlinks=False
+        Path("/fake/archive_dir/exp3"), exclude_files=None, exclude_dirs=None, follow_symlinks=False, overwrite=False
     )
     assert mock_archive.call_count == 3
 

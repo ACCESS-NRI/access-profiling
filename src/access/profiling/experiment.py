@@ -148,6 +148,7 @@ class ProfilingExperiment:
         exclude_dirs: list[str] | None = None,
         exclude_files: list[str] | None = None,
         follow_symlinks: bool = False,
+        overwrite: bool = False,
     ):
         """Archives the experiment to the specified archive path.
 
@@ -163,9 +164,10 @@ class ProfilingExperiment:
             exclude_dirs (list[str] | None): Directory patterns to exclude when archiving.
             exclude_files (list[str] | None): File patterns to exclude when archiving.
             follow_symlinks (bool): Whether to follow symlinks when archiving. Defaults to False.
+            overwrite (bool): Whether to overwrite existing archives. Defaults to False.
 
         Raises:
-            FileExistsError: If the archive destination already exists.
+            FileExistsError: If the archive destination already exists and overwrite is False.
             ValueError: If the experiment status is unknown.
         """
         if self.status == ProfilingExperimentStatus.NEW:
@@ -181,13 +183,16 @@ class ProfilingExperiment:
             return
 
         archive_file = archive_path.with_suffix(".tar.gz")
-        if archive_file.exists():
-            raise FileExistsError(f"Archive destination {archive_file} already exists.")
+        if overwrite:
+            mode = "w:gz"
+        else:
+            mode = "x:gz"
+            if archive_file.exists():
+                raise FileExistsError(f"Archive destination {archive_file} already exists.")
 
         exclude_dirs = exclude_dirs or []
         exclude_files = exclude_files or []
-
-        with tarfile.open(archive_file, "w:gz") as tar:
+        with tarfile.open(archive_file, mode) as tar:
             for file, arcname in experiment_directory_walker(
                 self.path, self.path.relative_to(self.path), self.path, follow_symlinks=follow_symlinks
             ):

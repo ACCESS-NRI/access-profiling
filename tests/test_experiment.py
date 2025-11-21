@@ -113,6 +113,18 @@ def test_profiling_experiment_archive_file_exists():
         mock_exists.assert_called_once()
 
 
+@mock.patch("access.profiling.experiment.tarfile.open")
+@mock.patch("access.profiling.experiment.experiment_directory_walker", return_value=[])
+def test_profiling_experiment_archive_file_overwrite(mock_walker, mock_open):
+    """Test the archive method of ProfilingExperiment when the archive file already exists and overwrite is True."""
+
+    exp = ProfilingExperiment(Path("/fake/work_dir/exp1"))
+    exp.status = ProfilingExperimentStatus.DONE
+
+    exp.archive(Path("/fake/archive"), overwrite=True)
+    mock_open.assert_called_with(Path("/fake/archive").with_suffix(".tar.gz"), "w:gz")
+
+
 @pytest.fixture()
 def setup_experiment_directory():
     """Fixture to setup a mock experiment directory structure."""
@@ -199,7 +211,7 @@ def test_profiling_experiment_archive(mock_open, tmp_path, setup_experiment_dire
 
     # Check calls
     assert exp.status == ProfilingExperimentStatus.ARCHIVED  # Status should be updated to ARCHIVED
-    mock_open.assert_called_with(Path("/fake/archive").with_suffix(".tar.gz"), "w:gz")  # Check tarfile opening
+    mock_open.assert_called_with(Path("/fake/archive").with_suffix(".tar.gz"), "x:gz")  # Check tarfile opening
     assert mock_tarfile.add.call_count == len(files), "All files should be added to the archive."
     for file in files:
         if "scratch" in file.parts:
@@ -230,7 +242,7 @@ def test_profiling_experiment_archive_follow_symlinks(mock_open, tmp_path, setup
 
     # Check calls
     assert exp.status == ProfilingExperimentStatus.ARCHIVED  # Status should be updated to ARCHIVED
-    mock_open.assert_called_with(Path("/fake/archive").with_suffix(".tar.gz"), "w:gz")  # Check tarfile opening
+    mock_open.assert_called_with(Path("/fake/archive").with_suffix(".tar.gz"), "x:gz")  # Check tarfile opening
     assert mock_tarfile.add.call_count == len(files), "All files should be added to the archive."
     for file in files:
         if "scratch" in file.parts:
@@ -271,7 +283,7 @@ def test_profiling_experiment_archive_with_filters(mock_open, tmp_path, setup_ex
     exp.archive(Path("/fake/archive"), exclude_files=["*.nc"], exclude_dirs=["restart*", ".git"], follow_symlinks=True)
 
     # Check calls
-    mock_open.assert_called_with(Path("/fake/archive").with_suffix(".tar.gz"), "w:gz")  # Check tarfile opening
+    mock_open.assert_called_with(Path("/fake/archive").with_suffix(".tar.gz"), "x:gz")  # Check tarfile opening
     assert mock_tarfile.add.call_count == len(files_to_archive), (
         "Only non-excluded files should be added to the archive."
     )

@@ -74,6 +74,7 @@ class ProfilingManager(ABC):
         exclude_dirs: list[str] | None = None,
         exclude_files: list[str] | None = None,
         follow_symlinks: bool = False,
+        overwrite: bool = False,
     ) -> None:
         """Archives completed experiments to the specified archive path.
 
@@ -85,6 +86,7 @@ class ProfilingManager(ABC):
             exclude_dirs (list[str] | None): Directory patterns to exclude when archiving experiments.
             exclude_files (list[str] | None): File patterns to exclude when archiving experiments.
             follow_symlinks (bool): Whether to follow symlinks when archiving experiments. Defaults to False.
+            overwrite (bool): Whether to overwrite existing archives. Defaults to False.
         """
         self.archive_dir.mkdir(parents=True, exist_ok=True)
         for branch, exp in self.experiments.items():
@@ -93,6 +95,7 @@ class ProfilingManager(ABC):
                 exclude_dirs=exclude_dirs,
                 exclude_files=exclude_files,
                 follow_symlinks=follow_symlinks,
+                overwrite=overwrite,
             )
 
     def parse_scaling_data(self):
