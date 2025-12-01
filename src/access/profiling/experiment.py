@@ -4,7 +4,6 @@
 import logging
 import tarfile
 import tempfile
-import warnings
 from contextlib import contextmanager
 from enum import Enum
 from pathlib import Path
@@ -171,15 +170,15 @@ class ProfilingExperiment:
             ValueError: If the experiment status is unknown.
         """
         if self.status == ProfilingExperimentStatus.NEW:
-            warnings.warn(f"Experiment at {self.path} is not yet started. Skipping archiving.", stacklevel=2)
+            logger.warning(f"Experiment at {self.path} is not yet started. Skipping archiving.", stacklevel=2)
             return
         elif self.status == ProfilingExperimentStatus.RUNNING:
-            warnings.warn(f"Experiment at {self.path} is still running. Skipping archiving.", stacklevel=2)
+            logger.warning(f"Experiment at {self.path} is still running. Skipping archiving.", stacklevel=2)
             return
         elif self.status == ProfilingExperimentStatus.DONE:
-            print(f"Archiving experiment at {self.path} to {archive_path.with_suffix('.tar.gz')}")
+            logger.info(f"Archiving experiment at {self.path} to {archive_path.with_suffix('.tar.gz')}")
         elif self.status == ProfilingExperimentStatus.ARCHIVED:
-            warnings.warn(f"Experiment at {self.path} is already archived. Skipping archiving.", stacklevel=2)
+            logger.warning(f"Experiment at {self.path} is already archived. Skipping archiving.", stacklevel=2)
             return
 
         archive_file = archive_path.with_suffix(".tar.gz")
@@ -202,8 +201,7 @@ class ProfilingExperiment:
                 # Skip if the file itself matches an excluded filename pattern
                 if any(file.match(pat) for pat in exclude_files):
                     continue
-                print(f"Archiving file: {file} as {arcname}")
-                logging.debug(f"Archiving file: {file} as {arcname}")
+                logger.debug(f"Archiving file: {file} as {arcname}")
                 tar.add(file, arcname=arcname)
 
         self.status = ProfilingExperimentStatus.ARCHIVED

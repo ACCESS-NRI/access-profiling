@@ -1,8 +1,8 @@
 # Copyright 2025 ACCESS-NRI and contributors. See the top-level COPYRIGHT file for details.
 # SPDX-License-Identifier: Apache-2.0
 
+import logging
 import tempfile
-import warnings
 from pathlib import Path
 from unittest import mock
 
@@ -87,7 +87,7 @@ def test_profiling_experiment_archived(mock_tarfile_open):
 
 
 @mock.patch("access.profiling.experiment.tarfile.open")
-def test_profiling_experiment_archive_not_done(mock_open):
+def test_profiling_experiment_archive_not_done(mock_open, caplog):
     """Test the archive method of ProfilingExperiment for non-DONE statuses."""
 
     exp = ProfilingExperiment(Path("/fake/work_dir/exp1"))
@@ -95,11 +95,13 @@ def test_profiling_experiment_archive_not_done(mock_open):
         if status == ProfilingExperimentStatus.DONE:
             continue
         exp.status = status
-        with warnings.catch_warnings(record=True) as w:
+        with caplog.at_level(logging.WARNING):
             exp.archive(Path("/fake/archive"))
-            assert mock_open.call_count == 0, "Tarfile should only be created for DONE experiments."
-            assert len(w) == 1
-            assert issubclass(w[-1].category, UserWarning)
+        assert mock_open.call_count == 0, "Tarfile should only be created for DONE experiments."
+        assert len(caplog.records) == 1
+        record = caplog.records[0]
+        assert record.levelname == "WARNING"
+        caplog.clear()
 
 
 def test_profiling_experiment_archive_file_exists():
