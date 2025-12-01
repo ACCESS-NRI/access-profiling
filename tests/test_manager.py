@@ -16,6 +16,9 @@ class MockProfilingManager(ProfilingManager):
 
     This class will simulate parsing of some profiling data.
 
+    Note that this mock class assumes that experiments are named after the last part of their path and all experiments
+    will be marked as DONE.
+
     Args:
         paths (list[Path]): List of paths to simulate different configurations.
         ncpus (list[int]): List of number of CPUs corresponding to each path.
@@ -51,6 +54,21 @@ class MockProfilingManager(ProfilingManager):
     def parse_profiling_data(self, path):
         """Simulate parsing profiling data for a given path."""
         return {"component": self._mock_datasets[path.name]}
+
+
+def test_repr():
+    """Test the __repr__ method of ProfilingManager."""
+
+    manager = MockProfilingManager(paths=[Path("/fake/work_dir")])
+    expected = """<MockProfilingManager>
+    Working directory: PosixPath('/fake/work_dir')
+    Archive directory: PosixPath('/fake/archive_dir')
+    Experiments:
+        'work_dir': ProfilingExperiment(path=PosixPath('/fake/work_dir'), status=DONE)
+    Data:
+        No parsed data.
+"""
+    assert repr(manager) == expected
 
 
 @mock.patch("access.profiling.manager.Path.is_dir")
@@ -186,3 +204,11 @@ def test_scaling_data(mock_plot, scaling_data):
         tavg,
         region_relabel_map=None,
     )
+
+    # Also test that __repr__ returns info about the dataset
+    result = repr(manager)
+    assert "Data:\n        'component':" in result
+    assert "<xarray.Dataset>" in result
+    assert "Dimensions:" in result
+    assert "Coordinates:" in result
+    assert "Data variables:" in result
