@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import logging
+import textwrap
 from abc import ABC, abstractmethod
 from pathlib import Path
 
@@ -46,6 +47,25 @@ class ProfilingManager(ABC):
                     branch_name = branch_path.name[: -len(".tar.gz")]
                     logger.info(f"Found archived experiment: {branch_name}")
                     self.experiments[branch_name] = ProfilingExperiment(branch_path)
+
+    def __repr__(self) -> str:
+        """Returns a string representation of the ProfilingManager."""
+
+        indent = "    "
+        summary = f"<{type(self).__name__}>\n"
+        summary += indent + f"Working directory: {self.work_dir!r}\n"
+        summary += indent + f"Archive directory: {self.archive_dir!r}\n"
+        summary += indent + "Experiments:\n"
+        for name, exp in self.experiments.items():
+            summary += indent * 2 + f"'{name}': {exp!r}\n"
+        summary += indent + "Data:\n"
+        if self.data == {}:
+            summary += indent * 2 + "No parsed data.\n"
+        else:
+            for name, ds in self.data.items():
+                summary += indent * 2 + f"'{name}':\n"
+                summary += textwrap.indent(f"{ds}\n", indent * 3)
+        return summary
 
     @abstractmethod
     def parse_profiling_data(self, path: Path) -> dict[str, xr.Dataset]:

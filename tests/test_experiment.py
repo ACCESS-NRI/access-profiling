@@ -48,6 +48,9 @@ def test_profiling_experiment():
     path = Path("/fake/work_dir")
     experiment = ProfilingExperiment(path=path)
 
+    # Check representation
+    assert repr(experiment) == "ProfilingExperiment(path=PosixPath('/fake/work_dir'), status=NEW)"
+
     # Assert path and status
     assert experiment.path == path
     assert experiment.status == ProfilingExperimentStatus.NEW

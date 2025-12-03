@@ -123,6 +123,10 @@ class ProfilingExperiment:
         if self.path.suffixes == [".tar", ".gz"]:
             self.status = ProfilingExperimentStatus.ARCHIVED
 
+    def __repr__(self) -> str:
+        """Returns a string representation of the ProfilingExperiment."""
+        return f"{type(self).__name__}(path={self.path!r}, status={self.status.name})"
+
     @contextmanager
     def directory(self):
         """Context manager returning the experiment directory, handling archived experiments appropriately.
