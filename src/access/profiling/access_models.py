@@ -5,6 +5,8 @@ import logging
 from pathlib import Path
 
 from access.config import YAMLParser
+from access.config.esm1p6_layout_input import generate_esm1p6_core_layouts_from_node_count, generate_esm1p6_perturb_block, LayoutSearchConfig
+from experiment_generator.experiment_generator import ExperimentGenerator
 
 from access.profiling.cice5_parser import CICE5ProfilingParser
 from access.profiling.cylc_manager import CylcRoseManager
@@ -55,6 +57,61 @@ class ESM16Profiling(PayuManager):
             logs["CICE5"] = ProfilingLog(cice5_logfile, CICE5ProfilingParser())
 
         return logs
+
+    def generate_scaling_experiments(self, num_nodes_list: list[float], control_options: dict) -> None:
+        """Generates scaling experiments for ACCESS-ESM1.6.
+
+        Args:
+            num_nodes_list (list[int]): List of number of nodes to generate experiments for.
+        """
+
+        generator_config = {
+            "model_type": self.model_type,
+            "repository_url": self._repository,
+            "start_point": self._control_commit,
+            "test_path": str(self.work_dir),
+            "repository_directory": self._repository_directory,
+            "control_branch_name": "ctrl",
+            "Control_Experiment": control_options,
+        }
+
+        queue = "normalsr"
+        branch_name_prefix = "esm1p6-layout"
+
+        tol_around_ctrl_ratio = 0.05
+
+        seen_layouts = set()
+        walltime_hrs = 0.0
+        seqnum = 1
+        generator_config["Perturbation_Experiment"] = {}
+        for num_nodes in num_nodes_list:
+            max_wasted_ncores_frac = 0.1 if num_nodes <= 1 else 0.05 if num_nodes <=3 else 0.02
+            layout_config = LayoutSearchConfig(tol_around_ctrl_ratio=tol_around_ctrl_ratio, max_wasted_ncores_frac=max_wasted_ncores_frac)
+            layout = generate_esm1p6_core_layouts_from_node_count(
+                num_nodes,
+                queue=queue,
+                layout_search_config=layout_config,
+            )[0]
+            if not layout:
+                logger.warning(f"No layouts found for {num_nodes} nodes")
+                continue
+
+            layout = [x for x in layout if x not in seen_layouts]
+            seen_layouts.update(layout)
+            logger.info(f"Generated {len(layout)} layouts for {num_nodes} nodes. Layouts: {layout}")
+
+            branch_name = f"{branch_name_prefix}-unused-cores-to-cice-{layout_config.allocate_unused_cores_to_ice}"
+            block, seqnum = generate_esm1p6_perturb_block(
+                num_nodes, layout, branch_name, queue=queue, start_seqnum=seqnum,
+            )
+            nblocks_added = len(block.keys())
+            walltime_hrs += nblocks_added * (1.5 * 4.0/num_nodes) # use a 1.5 hrs time for 4-node runs, and then scale linearly
+            generator_config["Perturbation_Experiment"].update(block)
+
+        generator_config["Control_Experiment"]["config.yaml"]["walltime"] = f"{int(walltime_hrs)}:00:00"
+
+        expgen = ExperimentGenerator(generator_config)
+        expgen.run()
 
 
 class RAM3Profiling(CylcRoseManager):

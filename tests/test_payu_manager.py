@@ -15,6 +15,9 @@ from access.profiling.payu_manager import PayuManager, ProfilingExperiment, Prof
 class MockPayuManager(PayuManager):
     """Test class inheriting from PayuConfigProfiling to test its methods."""
 
+    def model_type(self) -> str:
+        return "mock-payu-model"
+
     def get_component_logs(self, path):
         return {"component": ProfilingLog(path, mock.MagicMock())}
 
