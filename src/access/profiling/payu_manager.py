@@ -71,6 +71,16 @@ class PayuManager(ProfilingManager, ABC):
         """
         self._startfrom_restart = value
 
+    def set_control(self, repository, commit) -> None:
+        """Sets the control experiment from an existing Payu configuration.
+
+        Args:
+            repository: Git repository URL or path.
+            commit: Git commit hash or identifier.
+        """
+        self._repository = repository
+        self._control_commit = commit
+
     def generate_experiments(self, branches: list[str]) -> None:
         """Generates Payu experiments for profiling data generation.
 
