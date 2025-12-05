@@ -33,6 +33,11 @@ class PayuManager(ProfilingManager, ABC):
         """
 
     @property
+    @abstractmethod
+    def model_type(self) -> str:
+        """Returns the model type identifier, as defined in Payu."""
+
+    @property
     def nruns(self) -> int:
         """Returns the number of repetitions for the Payu experiments.
 
@@ -69,6 +74,16 @@ class PayuManager(ProfilingManager, ABC):
             value (str): Restart option.
         """
         self._startfrom_restart = value
+
+    def set_control(self, repository, commit) -> None:
+        """Sets the control experiment from an existing Payu configuration.
+
+        Args:
+            repository: Git repository URL or path.
+            commit: Git commit hash or identifier.
+        """
+        self._repository = repository
+        self._control_commit = commit
 
     def generate_experiments(self, branches: list[str]) -> None:
         """Generates Payu experiments for profiling data generation.

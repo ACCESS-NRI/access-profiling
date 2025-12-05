@@ -51,6 +51,17 @@ def test_startfrom_restart(manager):
     assert manager.startfrom_restart == "restart000"
 
 
+def test_set_control(manager):
+    """Test the set_control method of PayuManager."""
+    repository = "https://github.com/example/repo.git"
+    commit = "abc123def456"
+
+    manager.set_control(repository, commit)
+
+    assert manager._repository == repository
+    assert manager._control_commit == commit
+
+
 @mock.patch("access.profiling.payu_manager.YAMLParser")
 @mock.patch("access.profiling.payu_manager.Path.read_text", return_value="mock config content")
 def test_ncpus(mock_read_text, mock_yaml_parser, manager):
