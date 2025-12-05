@@ -19,6 +19,10 @@ logger = logging.getLogger(__name__)
 class ESM16Profiling(PayuManager):
     """Handles profiling of ACCESS-ESM1.6 configurations."""
 
+    @property
+    def model_type(self) -> str:
+        return "access-esm1.6"
+
     def get_component_logs(self, path: Path) -> dict[str, ProfilingLog]:
         """Returns available profiling logs for the components in ACCESS-ESM1.6.
 
