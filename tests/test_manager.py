@@ -1,6 +1,7 @@
 # Copyright 2025 ACCESS-NRI and contributors. See the top-level COPYRIGHT file for details.
 # SPDX-License-Identifier: Apache-2.0
 
+import logging
 from pathlib import Path
 from unittest import mock
 
@@ -128,6 +129,27 @@ def test_archive_experiments(mock_archive, mock_mkdir):
         Path("/fake/archive_dir/exp3"), exclude_files=None, exclude_dirs=None, follow_symlinks=False, overwrite=False
     )
     assert mock_archive.call_count == 3
+
+
+def test_delete_experiment(caplog):
+    """Test the delete_experiment method of ProfilingManager."""
+
+    # Setup mock experiments
+    exp_paths = [Path("/fake/work_dir/exp1"), Path("/fake/work_dir/exp2")]
+    manager = MockProfilingManager(exp_paths)
+
+    # Delete an existing experiment
+    manager.delete_experiment("exp1")
+    assert "exp1" not in manager.experiments, "Experiment 'exp1' should be deleted."
+
+    # Attempt to delete a non-existing experiment
+    with caplog.at_level(logging.WARNING):
+        manager.delete_experiment("non_existing_exp")
+    assert len(caplog.records) == 1
+    assert caplog.records[0].levelname == "WARNING"
+    assert len(manager.experiments) == 1 and "exp2" in manager.experiments, (
+        "Only 'exp2' should remain after attempting to delete a non-existing experiment."
+    )
 
 
 @pytest.fixture()
