@@ -5,6 +5,12 @@ import logging
 from pathlib import Path
 
 from access.config import YAMLParser
+from access.config.esm1p6_layout_input import (
+    LayoutSearchConfig,
+    LayoutTuple,
+    generate_esm1p6_core_layouts_from_node_count,
+    generate_esm1p6_perturb_block,
+)
 
 from access.profiling.cice5_parser import CICE5ProfilingParser
 from access.profiling.cylc_manager import CylcRoseManager
@@ -55,6 +61,16 @@ class ESM16Profiling(PayuManager):
             logs["CICE5"] = ProfilingLog(cice5_logfile, CICE5ProfilingParser())
 
         return logs
+
+    def generate_core_layouts_from_node_count(
+        self, num_nodes: float, cores_per_node: int, layout_search_config: LayoutSearchConfig | None = None
+    ) -> list:
+        return generate_esm1p6_core_layouts_from_node_count(
+            num_nodes, cores_per_node, layout_search_config=layout_search_config
+        )
+
+    def generate_perturbation_block(self, layout: LayoutTuple, branch_name_prefix: str) -> dict:
+        return generate_esm1p6_perturb_block(layout, branch_name_prefix)
 
 
 class RAM3Profiling(CylcRoseManager):
