@@ -22,6 +22,7 @@ dependencies = [
     "matplotlib",
     "access-config-utils",
     "experiment-runner",
+    "experiment-generator",    
     "payu", # Extra dependency of experiment-runner, not handled correctly in conda
 ]
 
