@@ -34,6 +34,12 @@ class PayuManager(ProfilingManager, ABC):
         """
 
     @property
+    @abstractmethod
+    def model_type(self) -> str:
+        """Returns the model type identifier, as defined in Payu."""
+        pass
+
+    @property
     def nruns(self) -> int:
         """Returns the number of repetitions for the Payu experiments.
 
