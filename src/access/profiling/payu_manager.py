@@ -3,10 +3,18 @@
 
 import logging
 from abc import ABC, abstractmethod
+from datetime import timedelta
 from pathlib import Path
+from typing import Callable
 
 import xarray as xr
 from access.config import YAMLParser
+from access.config.esm1p6_layout_input import (
+    LayoutSearchConfig,
+    generate_esm1p6_core_layouts_from_node_count,
+    generate_esm1p6_perturb_block,
+)
+from experiment_generator.experiment_generator import ExperimentGenerator
 from experiment_runner.experiment_runner import ExperimentRunner
 
 from access.profiling.experiment import ProfilingLog
@@ -86,6 +94,72 @@ class PayuManager(ProfilingManager, ABC):
         """
         self._repository = repository
         self._control_commit = commit
+
+    def generate_scaling_experiments(
+        self,
+        num_nodes_list: list[float],
+        control_options: dict,
+        cores_per_node: int,
+        tol_around_ctrl_ratio: float,
+        max_wasted_ncores_frac: float | Callable[[float], float],
+        walltime: float | Callable[[float], float],
+    ) -> None:
+        """Generates scaling experiments for ACCESS-ESM1.6.
+
+        Args:
+            num_nodes_list (list[int]): List of number of nodes to generate experiments for.
+        """
+
+        generator_config = {
+            "model_type": self.model_type,
+            "repository_url": self._repository,
+            "start_point": self._control_commit,
+            "test_path": str(self.work_dir),
+            "repository_directory": self._repository_directory,
+            "control_branch_name": "ctrl",
+            "Control_Experiment": control_options,
+        }
+
+        branch_name_prefix = "esm1p6-layout"
+
+        seen_layouts = set()
+        seqnum = 1
+        generator_config["Perturbation_Experiment"] = {}
+        for num_nodes in num_nodes_list:
+            mwf = max_wasted_ncores_frac(num_nodes) if callable(max_wasted_ncores_frac) else max_wasted_ncores_frac
+            layout_config = LayoutSearchConfig(tol_around_ctrl_ratio=tol_around_ctrl_ratio, max_wasted_ncores_frac=mwf)
+            layouts = generate_esm1p6_core_layouts_from_node_count(
+                num_nodes,
+                cores_per_node=cores_per_node,
+                layout_search_config=layout_config,
+            )[0]
+            if not layouts:
+                logger.warning(f"No layouts found for {num_nodes} nodes")
+                continue
+
+            layouts = [x for x in layouts if x not in seen_layouts]
+            seen_layouts.update(layouts)
+            logger.info(f"Generated {len(layouts)} layouts for {num_nodes} nodes. Layouts: {layouts}")
+
+            branch_name = f"{branch_name_prefix}-unused-cores-to-cice-{layout_config.allocate_unused_cores_to_ice}"
+            walltime_hrs = walltime(num_nodes) if callable(walltime) else walltime
+
+            for layout in layouts:
+                pert_config = generate_esm1p6_perturb_block(layout=layout, branch_name_prefix=branch_name)
+                branch = pert_config["branches"][0]
+                pert_config["config.yaml"]["walltime"] = str(timedelta(hours=walltime_hrs))
+
+                generator_config["Perturbation_Experiment"][f"Experiment_{seqnum}"] = pert_config
+                self.experiments[branch] = ProfilingExperiment(self.work_dir / branch / self._repository_directory)
+
+                seqnum += 1
+
+        from ruamel.yaml import YAML
+
+        ryaml = YAML()
+        ryaml.dump(generator_config, Path("/home/156/mo1833/1.Projects/Scaling/esm16_test/layout_input_config.yaml"))
+
+        ExperimentGenerator(generator_config).run()
 
     def generate_experiments(self, branches: list[str]) -> None:
         """Generates Payu experiments for profiling data generation.
