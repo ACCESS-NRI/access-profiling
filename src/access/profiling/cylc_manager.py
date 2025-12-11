@@ -39,6 +39,9 @@ class CylcRoseManager(ProfilingManager, ABC):
             dict[str, ProfilingParser]: a dictionary of known parsers with names as keys.
         """
 
+    def generate_experiments_directories(self, **kwargs) -> list[str]:
+        return []
+
     def find_component_datasets(self, path: Path) -> dict[str, ProfilingLog]:
         """Returns available profiling logs for the components in the configuration.
 

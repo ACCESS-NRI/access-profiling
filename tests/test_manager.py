@@ -28,7 +28,7 @@ class MockProfilingManager(ProfilingManager):
 
     def __init__(
         self,
-        paths: list[Path],
+        paths: list[Path] | None = None,
         ncpus: list[int] | None = None,
         datasets: list[xr.Dataset] | None = None,
     ):
@@ -44,9 +44,10 @@ class MockProfilingManager(ProfilingManager):
             self._mock_datasets = {}
 
         # Pre-generate experiments
-        for path in paths:
-            self.experiments[path.name] = ProfilingExperiment(path)
-            self.experiments[path.name].status = ProfilingExperimentStatus.DONE
+        if paths:
+            for path in paths:
+                self.experiments[path.name] = ProfilingExperiment(path)
+                self.experiments[path.name].status = ProfilingExperimentStatus.DONE
 
     def parse_ncpus(self, path):
         """Simulate parsing number of CPUs for a given path."""
@@ -55,6 +56,19 @@ class MockProfilingManager(ProfilingManager):
     def parse_profiling_data(self, path):
         """Simulate parsing profiling data for a given path."""
         return {"component": self._mock_datasets[path.name]}
+
+    def generate_experiments_directories(self, **kwargs) -> list[str]:
+        """Simulate generating scaling experiment directories.
+
+        This mock implementation simply returns the names of the pre-defined experiments.
+
+        Args:
+            **kwargs: Keyword arguments to define the scaling experiments.
+
+        Returns:
+            list[str]: List of experiment branch names.
+        """
+        return kwargs["branches"]
 
 
 def test_repr():
@@ -150,6 +164,18 @@ def test_delete_experiment(caplog):
     assert len(manager.experiments) == 1 and "exp2" in manager.experiments, (
         "Only 'exp2' should remain after attempting to delete a non-existing experiment."
     )
+
+
+def test_generate_experiments():
+    """Test the generate_scaling_experiments method of ProfilingManager."""
+
+    branches = ["exp1", "exp2"]
+    manager = MockProfilingManager()
+    manager.generate_experiments(branches=branches)
+    for branch in branches:
+        assert isinstance(manager.experiments[branch], ProfilingExperiment)
+        assert manager.experiments[branch].status == ProfilingExperimentStatus.NEW
+        assert manager.experiments[branch].path == Path(manager.work_dir / branch)
 
 
 @pytest.fixture()

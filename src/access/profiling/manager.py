@@ -89,6 +89,24 @@ class ProfilingManager(ABC):
             int: Number of CPUs used in the experiment.
         """
 
+    @abstractmethod
+    def generate_experiments_directories(self, **kwargs) -> list[str]:
+        """Generates directories for scaling experiments based on the provided parameters.
+
+        Args:
+            **kwargs: Keyword arguments to define the scaling experiments.
+        """
+
+    def generate_experiments(self, **kwargs) -> None:
+        """Generates scaling experiments based on the provided parameters.
+
+        Args:
+            **kwargs: Keyword arguments to define the scaling experiments.
+        """
+        branches = self.generate_experiments_directories(**kwargs)
+        for branch in branches:
+            self.experiments[branch] = ProfilingExperiment(self.work_dir / branch)
+
     def archive_experiments(
         self,
         exclude_dirs: list[str] | None = None,

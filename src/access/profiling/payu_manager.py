@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 class PayuManager(ProfilingManager, ABC):
     """Abstract base class to handle profiling of Payu configurations."""
 
-    _repository_directory: str = "config"  # Repository directory name needed by the experiment generator and runner.
+    _repository_directory: str = "."  # Repository directory name needed by the experiment generator and runner.
     _nruns: int = 1  # Number of repetitions for the Payu experiments.
     _startfrom_restart: str = "cold"  # Restart option for the Payu experiments.
 
@@ -95,7 +95,7 @@ class PayuManager(ProfilingManager, ABC):
         self._repository = repository
         self._control_commit = commit
 
-    def generate_scaling_experiments(
+    def generate_experiments_directories(
         self,
         num_nodes_list: list[float],
         control_options: dict,
@@ -103,7 +103,7 @@ class PayuManager(ProfilingManager, ABC):
         tol_around_ctrl_ratio: float,
         max_wasted_ncores_frac: float | Callable[[float], float],
         walltime: float | Callable[[float], float],
-    ) -> None:
+    ) -> list[str]:
         """Generates scaling experiments for ACCESS-ESM1.6.
 
         Args:
@@ -125,6 +125,7 @@ class PayuManager(ProfilingManager, ABC):
         seen_layouts = set()
         seqnum = 1
         generator_config["Perturbation_Experiment"] = {}
+        branches = []
         for num_nodes in num_nodes_list:
             mwf = max_wasted_ncores_frac(num_nodes) if callable(max_wasted_ncores_frac) else max_wasted_ncores_frac
             layout_config = LayoutSearchConfig(tol_around_ctrl_ratio=tol_around_ctrl_ratio, max_wasted_ncores_frac=mwf)
@@ -146,12 +147,11 @@ class PayuManager(ProfilingManager, ABC):
 
             for layout in layouts:
                 pert_config = generate_esm1p6_perturb_block(layout=layout, branch_name_prefix=branch_name)
-                branch = pert_config["branches"][0]
+
                 pert_config["config.yaml"]["walltime"] = str(timedelta(hours=walltime_hrs))
-
                 generator_config["Perturbation_Experiment"][f"Experiment_{seqnum}"] = pert_config
-                self.experiments[branch] = ProfilingExperiment(self.work_dir / branch / self._repository_directory)
 
+                branches.add(pert_config["branches"][0])
                 seqnum += 1
 
         from ruamel.yaml import YAML
@@ -160,6 +160,8 @@ class PayuManager(ProfilingManager, ABC):
         ryaml.dump(generator_config, Path("/home/156/mo1833/1.Projects/Scaling/esm16_test/layout_input_config.yaml"))
 
         ExperimentGenerator(generator_config).run()
+
+        return branches
 
     def generate_experiments(self, branches: list[str]) -> None:
         """Generates Payu experiments for profiling data generation.
