@@ -118,6 +118,19 @@ class ProfilingManager(ABC):
                 overwrite=overwrite,
             )
 
+    def delete_experiment(self, name: str) -> None:
+        """Deletes the specified experiment.
+
+        Note that this only removes the experiment from the manager's tracking; it does not delete any files on disk.
+
+        Args:
+            name (str): Name of the experiment to delete.
+        """
+        if name in self.experiments:
+            del self.experiments[name]
+        else:
+            logger.warning(f"Experiment '{name}' not found; cannot delete.")
+
     def parse_scaling_data(self):
         """Parses profiling data from the experiments."""
         self.data = {}
