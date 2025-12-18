@@ -118,6 +118,28 @@ class ProfilingManager(ABC):
                 overwrite=overwrite,
             )
 
+    def add_experiment_from_directory(self, name: str, path: Path) -> None:
+        """Adds an existing experiment from the specified directory.
+
+        Note that the directory must already exist on disk and be inside the working directory. Also, the experiment
+        will be marked as DONE, so any runs associated with the experiment must already be completed.
+
+        Args:
+            name (str): Name of the experiment.
+            path (Path): Path to the experiment directory.
+        Raises:
+            ValueError: If the specified path does not exist, is not a directory, or is not inside the working
+            directory.
+        """
+        if not path.is_absolute():
+            path = self.work_dir / path
+        if not path.is_dir():
+            raise ValueError(f"Experiment path '{path}' does not exist or is not a directory.")
+        if not path.resolve().is_relative_to(self.work_dir.resolve()):
+            raise ValueError(f"Experiment path '{path}' is not inside the working directory '{self.work_dir}'.")
+        self.experiments[name] = ProfilingExperiment(path)
+        self.experiments[name].status = ProfilingExperimentStatus.DONE
+
     def delete_experiment(self, name: str) -> None:
         """Deletes the specified experiment.
 

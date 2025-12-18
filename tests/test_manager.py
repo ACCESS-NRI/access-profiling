@@ -131,6 +131,43 @@ def test_archive_experiments(mock_archive, mock_mkdir):
     assert mock_archive.call_count == 3
 
 
+@mock.patch("access.profiling.manager.Path.is_dir")
+def test_add_experiment_from_directory(mock_is_dir):
+    """Test the add_experiment_from_directory method of ProfilingManager."""
+
+    mock_is_dir.return_value = False
+    manager = MockProfilingManager(paths=[])
+
+    # Test adding a valid experiment
+    mock_is_dir.return_value = True
+    manager.add_experiment_from_directory("existing_experiment", Path("/fake/work_dir/existing_experiment"))
+    assert "existing_experiment" in manager.experiments, "Experiment should be added."
+    assert manager.experiments["existing_experiment"].status == ProfilingExperimentStatus.DONE, (
+        "Experiment status should be set to DONE."
+    )
+
+    # Test adding a valid experiment with relative path
+    mock_is_dir.return_value = True
+    manager.add_experiment_from_directory("relative_experiment", Path("relative_experiment"))
+    assert "relative_experiment" in manager.experiments, "Experiment with relative path should be added."
+    assert manager.experiments["relative_experiment"].status == ProfilingExperimentStatus.DONE, (
+        "Experiment status should be set to DONE."
+    )
+    assert manager.experiments["relative_experiment"].path == Path("/fake/work_dir/relative_experiment"), (
+        "Experiment path should be correctly resolved to absolute path."
+    )
+
+    # Test adding an experiment with a non-existing path
+    mock_is_dir.return_value = False
+    with pytest.raises(ValueError, match="does not exist or is not a directory"):
+        manager.add_experiment_from_directory("non_existing_experiment", Path("/fake/work_dir/non_existing_experiment"))
+
+    # Test adding an experiment outside the working directory
+    mock_is_dir.return_value = True
+    with pytest.raises(ValueError, match="is not inside the working directory"):
+        manager.add_experiment_from_directory("outside_experiment", Path("/fake/outside_work_dir/outside_experiment"))
+
+
 def test_delete_experiment(caplog):
     """Test the delete_experiment method of ProfilingManager."""
 
