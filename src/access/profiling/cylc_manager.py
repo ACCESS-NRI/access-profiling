@@ -14,19 +14,19 @@ logger = logging.getLogger(__name__)
 
 
 class CylcRoseManager(ProfilingManager, ABC):
-    """Abstract base class to handle profiling data for Cylc Rose configurations."""
+    """Abstract base class to handle profiling data for Cylc Rose configurations.
 
-    @abstractmethod
-    def parse_ncpus(self, path: Path) -> int:
-        """Parses the number of CPUs used in a given Cylc experiment.
+    Args:
+        work_dir (Path): Working directory where profiling experiments will be generated and run.
+        archive_dir (Path): Directory where completed experiments will be archived.
+        layout_variable (str): Name of the variable in rose-suite-run.conf file that defines the layout.
+    """
 
-        Args:
-            path (Path): Path to the Payu experiment directory. Must contain a rose-suite.conf file.
+    _layout_variable: str  # Name of the variable in rose-suite-run.conf file that defines the layout.
 
-        Returns:
-            int: Number of CPUs used in the experiment. If multiple submodels are defined, returns the sum of their
-                 cpus.
-        """
+    def __init__(self, work_dir: Path, archive_dir: Path, layout_variable: str):
+        super().__init__(work_dir, archive_dir)
+        self._layout_variable = layout_variable
 
     @property
     @abstractmethod
@@ -36,6 +36,22 @@ class CylcRoseManager(ProfilingManager, ABC):
         Returns:
             dict[str, ProfilingParser]: a dictionary of known parsers with names as keys.
         """
+
+    def parse_ncpus(self, path: Path) -> int:
+        # this is a symlink
+        config_path = path / "log/rose-suite-run.conf"
+
+        if not config_path.is_file():
+            raise FileNotFoundError(f"Could not find suitable config file in {config_path}")
+
+        for line in config_path.read_text().split():
+            if not line.startswith("!!"):
+                keypair = line.split("=")
+                if keypair[0].strip() == self._layout_variable:
+                    layout = keypair[1].split(",")
+                    return int(layout[0].strip()) * int(layout[1].strip())
+
+        raise ValueError(f"Cannot find layout key, {self._layout_variable}, in {config_path}.")
 
     def profiling_logs(self, path: Path) -> dict[str, ProfilingLog]:
         """Returns all profiling logs from the specified path.

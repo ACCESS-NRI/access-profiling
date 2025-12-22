@@ -14,9 +14,6 @@ from access.profiling.parser import ProfilingParser
 class MockCylcManager(CylcRoseManager):
     """Test class inheriting from CylcRoseManager to test its methods."""
 
-    def parse_ncpus(self, path):
-        return 4
-
     @property
     def known_parsers(self) -> dict[str, ProfilingParser]:
         return {"fake-parser": mock.MagicMock()}
@@ -24,7 +21,7 @@ class MockCylcManager(CylcRoseManager):
 
 @pytest.fixture()
 def manager():
-    return MockCylcManager(Path("/fake/test_path"), Path("/fake/archive_path"))
+    return MockCylcManager(Path("/fake/test_path"), Path("/fake/archive_path"), layout_variable="um_layout")
 
 
 @mock.patch("access.profiling.cylc_manager.Path.glob")
@@ -49,3 +46,24 @@ def test_parse_profiling_logs(mock_path_glob, manager):
     assert isinstance(logs["cylc_tasks"].parser, CylcDBReader)
     assert "task1_cyclecycle1_fake-parser" in logs
     assert isinstance(logs["task1_cyclecycle1_fake-parser"].parser, mock.MagicMock)
+
+
+@mock.patch("access.profiling.access_models.Path.is_file")
+@mock.patch("access.profiling.access_models.Path.read_text")
+def test_parse_ncpus(mock_read_text, mock_is_file, manager):
+    """Test the parse_ncpus method of CylcRoseManager."""
+
+    # mock absence of rose-conf file
+    mock_is_file.return_value = False
+    with pytest.raises(FileNotFoundError):
+        manager.parse_ncpus(Path("/fake/path"))
+
+    # mock absence of layout variable
+    mock_is_file.return_value = True
+    mock_read_text.return_value = "another_var=another_value"
+    with pytest.raises(ValueError):
+        manager.parse_ncpus(Path("/fake/path"))
+
+    # mock presence of layout variable
+    mock_read_text.return_value += "\num_layout=2,3"
+    manager.parse_ncpus(Path("/fake/path"))
