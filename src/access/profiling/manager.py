@@ -9,7 +9,7 @@ from pathlib import Path
 import xarray as xr
 from matplotlib.figure import Figure
 
-from access.profiling.experiment import ProfilingExperiment, ProfilingExperimentStatus
+from access.profiling.experiment import ProfilingExperiment, ProfilingExperimentStatus, ProfilingLog
 from access.profiling.metrics import ProfilingMetric
 from access.profiling.scaling import plot_scaling_metrics
 
@@ -68,14 +68,14 @@ class ProfilingManager(ABC):
         return summary
 
     @abstractmethod
-    def parse_profiling_data(self, path: Path) -> dict[str, xr.Dataset]:
-        """Parses profiling data from the specified path.
+    def profiling_logs(self, path: Path) -> dict[str, ProfilingLog]:
+        """Returns all profiling logs from the specified path.
 
         Args:
             path (Path): Path to the experiment directory.
 
         Returns:
-            dict[str, xr.Dataset]: Dictionary mapping component names to their profiling datasets.
+            dict[str, ProfilingLog]: Dictionary of profiling logs.
         """
 
     @abstractmethod
@@ -153,24 +153,60 @@ class ProfilingManager(ABC):
         else:
             logger.warning(f"Experiment '{name}' not found; cannot delete.")
 
+    def _parse_profiling_data_directory(self, path: Path) -> dict[str, xr.Dataset]:
+        """Helper function to parse profiling data from the specified experiment directory.
+
+        Note that the directory must be uncompressed and it is the caller's responsibility to ensure this.
+
+        Args:
+            path (Path): Path to the experiment directory.
+        Returns:
+            dict[str, xr.Dataset]: Dictionary mapping component names to their profiling datasets.
+        """
+        datasets = {}
+        logs = self.profiling_logs(path)
+        for log_name, log in logs.items():
+            logger.info(f"Parsing {log_name} profiling log: {log.filepath}. ")
+            if log.optional:
+                try:
+                    datasets[log_name] = log.parse()
+                except FileNotFoundError:
+                    logger.info(f"Optional profiling log '{log.filepath}' not found. Skipping.")
+                    continue
+            else:
+                datasets[log_name] = log.parse()
+                logger.info(" Done.")
+        return datasets
+
     def parse_scaling_data(self):
         """Parses profiling data from the experiments."""
+
         self.data = {}
-        for exp in self.experiments.values():
+        for exp_name, exp in self.experiments.items():
             if exp.status == ProfilingExperimentStatus.DONE or exp.status == ProfilingExperimentStatus.ARCHIVED:
+                datasets = {}
                 with exp.directory() as exp_path:
-                    datasets = self.parse_profiling_data(exp_path)
+                    # Parse all logs
+                    datasets = self._parse_profiling_data_directory(exp_path)
 
                     # Find number of cpus used
                     ncpus = self.parse_ncpus(exp_path)
 
                 # Add ncpus dimension and concatenate with existing data
-                for name, ds in datasets.items():
+                for ds_name, ds in datasets.items():
                     ds = ds.expand_dims({"ncpus": 1}).assign_coords({"ncpus": [ncpus]})
-                    if name in self.data:
-                        self.data[name] = xr.concat([self.data[name], ds], dim="ncpus", join="outer").sortby("ncpus")
+                    if ds_name in self.data:
+                        self.data[ds_name] = xr.concat([self.data[ds_name], ds], dim="ncpus", join="outer").sortby(
+                            "ncpus"
+                        )
                     else:
-                        self.data[name] = ds
+                        self.data[ds_name] = ds
+
+            else:
+                logger.warning(
+                    f"Experiment '{exp_name}' is not completed (status: {exp.status.name}). Skipping parsing profiling "
+                    "data."
+                )
 
     def plot_scaling_data(
         self,

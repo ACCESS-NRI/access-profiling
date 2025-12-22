@@ -30,7 +30,6 @@ class MockProfilingManager(ProfilingManager):
         self,
         paths: list[Path],
         ncpus: list[int] | None = None,
-        datasets: list[xr.Dataset] | None = None,
     ):
         super().__init__(Path("/fake/work_dir"), Path("/fake/archive_dir"))
 
@@ -38,10 +37,6 @@ class MockProfilingManager(ProfilingManager):
             self._mock_ncpus = dict(zip([path.name for path in paths], ncpus, strict=True))
         else:
             self._mock_ncpus = {}
-        if datasets is not None:
-            self._mock_datasets = dict(zip([path.name for path in paths], datasets, strict=True))
-        else:
-            self._mock_datasets = {}
 
         # Pre-generate experiments
         for path in paths:
@@ -52,9 +47,9 @@ class MockProfilingManager(ProfilingManager):
         """Simulate parsing number of CPUs for a given path."""
         return self._mock_ncpus[path.name]
 
-    def parse_profiling_data(self, path):
+    def profiling_logs(self, path):  # pyright: ignore[reportIncompatibleMethodOverride]
         """Simulate parsing profiling data for a given path."""
-        return {"component": self._mock_datasets[path.name]}
+        pass
 
 
 def test_repr():
@@ -189,6 +184,33 @@ def test_delete_experiment(caplog):
     )
 
 
+def test_parse_profiling_data_directory():
+    """Test the _parse_profiling_data_directory method of ProfilingManager."""
+
+    exp_path = Path("/fake/work_dir/exp1")
+    manager = MockProfilingManager(paths=[exp_path])
+
+    with mock.patch.object(manager, "profiling_logs") as mock_profiling_logs:
+        # Setup mock profiling logs
+        mock_log = mock.MagicMock()
+        type(mock_log).optional = mock.PropertyMock(side_effect=[False, False, True])
+        mock_log.parse.side_effect = (xr.Dataset(), xr.Dataset(), FileNotFoundError("Mocked missing file."))
+        mock_profiling_logs.return_value = {
+            "log": mock_log,
+            "optional_log": mock_log,
+            "missing_log": mock_log,
+        }
+
+        # Parse profiling data for each experiment
+        datasets = manager._parse_profiling_data_directory(exp_path)
+        assert "log" in datasets, "Parsed datasets should contain 'log' key."
+        assert "optional_log" in datasets, "Parsed datasets should contain 'optional_log' key."
+        assert "missing_log" not in datasets, (
+            "Parsed datasets should not contain 'missing_log' key as the file is missing."
+        )
+        assert mock_log.parse.call_count == 3, "Parse method should be called three times."
+
+
 @pytest.fixture()
 def scaling_data():
     """Fixture instantiating fake parsed profiling data for different CPU configurations, as one would get from
@@ -222,9 +244,18 @@ def test_scaling_data(mock_plot, scaling_data):
     and that the plotting function is called correctly.
     """
     paths, ncpus, datasets = scaling_data
-    manager = MockProfilingManager(paths, ncpus, datasets)
+    manager = MockProfilingManager(paths, ncpus)
 
-    manager.parse_scaling_data()
+    # Add a running experiment to test that it is skipped
+    running = ProfilingExperiment(Path("running"))
+    running.status = ProfilingExperimentStatus.RUNNING
+    manager.experiments["running"] = running
+
+    with mock.patch.object(
+        manager, "_parse_profiling_data_directory", wraps=manager._parse_profiling_data_directory
+    ) as mock_parse:
+        mock_parse.side_effect = [{"component": ds} for ds in datasets]
+        manager.parse_scaling_data()
 
     assert set(manager.data.keys()) == {"component"}
     assert set(manager.data["component"].dims) == {"ncpus", "region"}, (

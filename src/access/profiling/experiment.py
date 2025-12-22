@@ -21,14 +21,23 @@ class ProfilingLog:
     Args:
         filepath (Path): Path to the log file.
         parser (ProfilingParser): Parser to use for this log file.
+        optional (bool): Whether this log might be missing or does not contain parsable data. If True, no error should
+        be raised if the log is missing or unparsable. Defaults to False.
     """
 
     filepath: Path  # Path to the log file
     parser: ProfilingParser  # Parser to use for this log file
+    _optional: bool = False  # Whether this log might not be present
 
-    def __init__(self, filepath: Path, parser: ProfilingParser):
+    def __init__(self, filepath: Path, parser: ProfilingParser, optional: bool = False) -> None:
         self.filepath = filepath
         self.parser = parser
+        self._optional = optional
+
+    @property
+    def optional(self) -> bool:
+        """bool: Whether this log might not be present."""
+        return self._optional
 
     def parse(self) -> xr.Dataset:
         """Parses the log file and returns the profiling data as an xarray Dataset.
