@@ -30,18 +30,22 @@ class MockProfilingManager(ProfilingManager):
         self,
         paths: list[Path],
         ncpus: list[int] | None = None,
+        datasets: list[dict[str, xr.Dataset]] | None = None,
     ):
         super().__init__(Path("/fake/work_dir"), Path("/fake/archive_dir"))
+
+        # Pre-generate experiments
+        for path in paths:
+            self.experiments[path.name] = ProfilingExperiment(path)
+            self.experiments[path.name].status = ProfilingExperimentStatus.DONE
 
         if ncpus is not None:
             self._mock_ncpus = dict(zip([path.name for path in paths], ncpus, strict=True))
         else:
             self._mock_ncpus = {}
 
-        # Pre-generate experiments
-        for path in paths:
-            self.experiments[path.name] = ProfilingExperiment(path)
-            self.experiments[path.name].status = ProfilingExperimentStatus.DONE
+        if datasets is not None:
+            self.data = dict(zip([path.name for path in paths], datasets, strict=True))
 
     def parse_ncpus(self, path):
         """Simulate parsing number of CPUs for a given path."""
@@ -52,9 +56,37 @@ class MockProfilingManager(ProfilingManager):
         pass
 
 
-def test_repr():
+@pytest.fixture()
+def scaling_data():
+    """Fixture instantiating fake parsed profiling data for different CPU configurations, as one would get from
+    a scaling study.
+
+    The mock data contains two regions, "Region 1" and "Region 2", and two metrics, count and tavg.
+    Counts are always [1, 2] while tavg depends on the number of CPUs:
+    - For 1 CPU: [600365 s, 2.345388 s]
+    - For 2 CPUs: [300182.5 s, 1.172694 s]
+    - For 4 CPUs: [300182.5 s, 1.172694 s]
+    """
+    paths = [Path("1cpu"), Path("4cpu"), Path("2cpu")]
+    ncpus = [1, 4, 2]  # Intentionally unordered to test sorting in the manager
+    datasets = []
+    for n in ncpus:
+        regions = ["Region 1", "Region 2"]
+        count_array = xr.DataArray([1, 2], dims=["region"]).pint.quantify(count.units)
+        tavg_array = xr.DataArray([value / min(n, 2) for value in [600365, 2.345388]], dims=["region"]).pint.quantify(
+            tavg.units
+        )
+        datasets.append(
+            {"component": xr.Dataset(data_vars={count: count_array, tavg: tavg_array}, coords={"region": regions})}
+        )
+
+    return paths, ncpus, datasets
+
+
+def test_repr(scaling_data):
     """Test the __repr__ method of ProfilingManager."""
 
+    # Test with no data
     manager = MockProfilingManager(paths=[Path("/fake/work_dir")])
     expected = """<MockProfilingManager>
     Working directory: PosixPath('/fake/work_dir')
@@ -65,6 +97,17 @@ def test_repr():
         No parsed data.
 """
     assert repr(manager) == expected
+
+    # Test with data
+    paths, ncpus, datasets = scaling_data
+    manager = MockProfilingManager(paths, ncpus, datasets)
+
+    result = repr(manager)
+    assert "Data:\n        '1cpu':" in result
+    assert "<xarray.Dataset>" in result
+    assert "Dimensions:" in result
+    assert "Coordinates:" in result
+    assert "Data variables:" in result
 
 
 @mock.patch("access.profiling.manager.Path.is_dir")
@@ -184,11 +227,11 @@ def test_delete_experiment(caplog):
     )
 
 
-def test_parse_profiling_data_directory():
+def test_parse_profiling_data(caplog):
     """Test the _parse_profiling_data_directory method of ProfilingManager."""
 
-    exp_path = Path("/fake/work_dir/exp1")
-    manager = MockProfilingManager(paths=[exp_path])
+    exp_name = "exp1"
+    manager = MockProfilingManager(paths=[Path("/fake/work_dir/" + exp_name)])
 
     with mock.patch.object(manager, "profiling_logs") as mock_profiling_logs:
         # Setup mock profiling logs
@@ -202,38 +245,20 @@ def test_parse_profiling_data_directory():
         }
 
         # Parse profiling data for each experiment
-        datasets = manager._parse_profiling_data_directory(exp_path)
-        assert "log" in datasets, "Parsed datasets should contain 'log' key."
-        assert "optional_log" in datasets, "Parsed datasets should contain 'optional_log' key."
-        assert "missing_log" not in datasets, (
+        manager.parse_profiling_data()
+        assert "log" in manager.data[exp_name], "Parsed datasets should contain 'log' key."
+        assert "optional_log" in manager.data[exp_name], "Parsed datasets should contain 'optional_log' key."
+        assert "missing_log" not in manager.data[exp_name], (
             "Parsed datasets should not contain 'missing_log' key as the file is missing."
         )
         assert mock_log.parse.call_count == 3, "Parse method should be called three times."
 
-
-@pytest.fixture()
-def scaling_data():
-    """Fixture instantiating fake parsed profiling data for different CPU configurations, as one would get from
-    a scaling study.
-
-    The mock data contains two regions, "Region 1" and "Region 2", and two metrics, count and tavg.
-    Counts are always [1, 2] while tavg depends on the number of CPUs:
-    - For 1 CPU: [600365 s, 2.345388 s]
-    - For 2 CPUs: [300182.5 s, 1.172694 s]
-    - For 4 CPUs: [300182.5 s, 1.172694 s]
-    """
-    paths = [Path("1cpu"), Path("2cpu"), Path("4cpu")]
-    ncpus = [1, 4, 2]  # Intentionally unordered to test sorting in the manager
-    datasets = []
-    for n in ncpus:
-        regions = ["Region 1", "Region 2"]
-        count_array = xr.DataArray([1, 2], dims=["region"]).pint.quantify(count.units)
-        tavg_array = xr.DataArray([value / min(n, 2) for value in [600365, 2.345388]], dims=["region"]).pint.quantify(
-            tavg.units
-        )
-        datasets.append(xr.Dataset(data_vars={count: count_array, tavg: tavg_array}, coords={"region": regions}))
-
-    return paths, ncpus, datasets
+    manager.experiments[exp_name].status = ProfilingExperimentStatus.RUNNING
+    with caplog.at_level(logging.WARNING):
+        manager.parse_profiling_data()
+    assert len(caplog.records) == 1
+    assert caplog.records[0].levelname == "WARNING"
+    assert "is not completed" in caplog.records[0].message
 
 
 @mock.patch("access.profiling.manager.plot_scaling_metrics")
@@ -244,61 +269,41 @@ def test_scaling_data(mock_plot, scaling_data):
     and that the plotting function is called correctly.
     """
     paths, ncpus, datasets = scaling_data
-    manager = MockProfilingManager(paths, ncpus)
+    manager = MockProfilingManager(paths, ncpus, datasets)
 
-    # Add a running experiment to test that it is skipped
-    running = ProfilingExperiment(Path("running"))
-    running.status = ProfilingExperimentStatus.RUNNING
-    manager.experiments["running"] = running
-
-    with mock.patch.object(
-        manager, "_parse_profiling_data_directory", wraps=manager._parse_profiling_data_directory
-    ) as mock_parse:
-        mock_parse.side_effect = [{"component": ds} for ds in datasets]
-        manager.parse_scaling_data()
-
-    assert set(manager.data.keys()) == {"component"}
-    assert set(manager.data["component"].dims) == {"ncpus", "region"}, (
-        "Dataset should have dimensions 'ncpus' and 'region'!"
-    )
-    assert manager.data["component"].sizes["ncpus"] == 3, "Dataset should have 2 values for 'ncpus'!"
-    assert manager.data["component"].sizes["region"] == 2, "Dataset should have 3 values for 'region'!"
-
-    assert manager.data["component"]["ncpus"].values.tolist() == sorted(ncpus), (
-        "Dataset should have correct 'ncpus' coordinate values (in sorted order)!"
-    )
-    assert manager.data["component"]["region"].values.tolist() == ["Region 1", "Region 2"], (
-        "Dataset should have correct 'region' coordinate values!"
-    )
-
-    assert set(manager.data["component"].data_vars) == {count, tavg}, "Dataset should have data_vars for each metric!"
-    assert all(manager.data["component"][metric].shape == (3, 2) for metric in (count, tavg)), (
-        "Dataset data vars should have shape (3, 2)!"
-    )
-    assert all(manager.data["component"][metric].data.units == metric.units for metric in (count, tavg)), (
-        "Dataset data_vars should have correct units!"
-    )
-    assert all(manager.data["component"][count].sel(ncpus=1) == datasets[0][count]), (
-        "Dataset data_vars should have correct values for ncpus=1!"
-    )
-    for i, n in enumerate(ncpus):
-        for metric in (count, tavg):
-            assert all(manager.data["component"][metric].sel(ncpus=n) == datasets[i][metric]), (
-                f"Dataset data_vars for {metric} should have correct values for ncpus={n}!"
-            )
-
-    manager.plot_scaling_data(components=["component"], regions=[["Region 1", "Region 2"]], metric=tavg)
-    mock_plot.assert_called_once_with(
-        [manager.data["component"]],
-        [["Region 1", "Region 2"]],
-        tavg,
-        region_relabel_map=None,
-    )
-
-    # Also test that __repr__ returns info about the dataset
+    # Test that __repr__ returns info about the data
     result = repr(manager)
-    assert "Data:\n        'component':" in result
+    assert "Data:\n        '1cpu':" in result
     assert "<xarray.Dataset>" in result
     assert "Dimensions:" in result
     assert "Coordinates:" in result
     assert "Data variables:" in result
+
+    # Test plotting scaling data for non-existing component
+    with pytest.raises(ValueError):
+        manager.plot_scaling_data(
+            components=["non_existing_component"],
+            regions=[["Region 1"]],
+            metric=tavg,
+        )
+
+    # Test plotting scaling data
+    manager.plot_scaling_data(
+        components=["component"],
+        regions=[["Region 1"]],
+        metric=tavg,
+        region_relabel_map={"Region 1": "Total"},
+        experiments=["1cpu", "4cpu"],
+    )
+    assert mock_plot.call_count == 1
+    scaling_data = mock_plot.call_args.args[0]
+    assert isinstance(scaling_data, list)
+    assert len(scaling_data) == 1  # One component
+    component_data = scaling_data[0]
+    assert isinstance(component_data, xr.Dataset)
+    assert set(component_data.coords["ncpus"].values) == {1, 4}  # Only 1cpu and 4cpu experiments included
+    assert set(component_data.coords["region"].values) == {"Total"}  # Region selection and relabelling
+    assert set(component_data.data_vars.keys()) == {count, tavg}
+    assert component_data[count].sel(region="Total").values.tolist() == [1, 1]
+    assert component_data[tavg].sel(region="Total").values.tolist() == [600365.0, 300182.5]
+    assert mock_plot.call_args.args[1] == tavg

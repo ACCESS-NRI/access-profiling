@@ -50,10 +50,8 @@ def parallel_efficiency(stats: xr.Dataset, metric: ProfilingMetric) -> xr.DataAr
 
 def plot_scaling_metrics(
     stats: list[xr.Dataset],
-    regions: list[list[str]],
     metric: ProfilingMetric,
     xcoordinate: str = "ncpus",
-    region_relabel_map: dict | None = None,
     first_col_fraction: float = 0.4,
     show: bool = True,
 ) -> Figure:
@@ -61,14 +59,8 @@ def plot_scaling_metrics(
 
     Args:
         stats (list[xr.Dataset]): The raw times to plot.
-        regions (list[list[str]]): The list of regions to plot.
-                                   regions[0][:] corresponds to regions to plot in stats[0].
         metric (ProfilinMetric): The metric to plot for each stat.
         xcoordinate (str): The x-axis variable e.g. "ncpus".
-        region_relabel_map (dict): Mapping of labels to use for each region instead of the region name.
-                                   If an element of "regions" is a key in this map, the region
-                                   will be replaced by the corresponding value in the plot.
-                                   Default: None.
         first_col_fraction (float): The fraction of table width to assign to the row labels. Default 0.4.
         show (bool): Whether to show the generated plot. Default: True.
 
@@ -79,10 +71,6 @@ def plot_scaling_metrics(
         ValueError: If region_labels is non-empty
     """
 
-    # set default relabel map
-    if region_relabel_map is None:
-        region_relabel_map = {}
-
     # setup plots
     fig = plt.figure(figsize=(15, 6))
     # using gridspec so table can be added
@@ -92,22 +80,20 @@ def plot_scaling_metrics(
 
     # add table of raw timings
     tbl = [[xcoordinate] + list(stats[0][xcoordinate].values)]  # first row
-    for stat, region in zip(stats, regions, strict=True):
+    for stat in stats:
         # calculate efficiency and speedup
         efficiency = parallel_efficiency(stat, metric)
         speedup = parallel_speedup(stat, metric)
 
         # plots speedup and efficiency on their respective axes.
         max_eff = 100
-        for r in region:
-            label = region_relabel_map.get(r)
-            label = label if label else r
-            speedup.loc[r, :].plot.line(x=xcoordinate, ax=ax1, marker="o", label=label)
-            efficiency.loc[r, :].plot.line(x=xcoordinate, ax=ax2, marker="o", label=label)
+        for region in stat.region.values:
+            speedup.loc[region, :].plot.line(x=xcoordinate, ax=ax1, marker="o", label=region)
+            efficiency.loc[region, :].plot.line(x=xcoordinate, ax=ax2, marker="o", label=region)
             # find max efficiency for setting efficiency axis
-            max_eff = max(max_eff, efficiency.loc[r, :].max())
+            max_eff = max(max_eff, efficiency.loc[region, :].max())
 
-            tbl.append([label] + [f"{val:.2f}" for val in stat[metric].loc[:, r].pint.dequantify().values])
+            tbl.append([region] + [f"{val:.2f}" for val in stat[metric].loc[:, region].pint.dequantify().values])
 
     # ideal speedup/scaling
     minx = stat[xcoordinate].values.min()

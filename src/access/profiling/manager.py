@@ -31,7 +31,9 @@ class ProfilingManager(ABC):
     work_dir: Path  # Working directory where profiling experiments will be generated and run.
     archive_dir: Path  # Directory where completed experiments will be archived.
     experiments: dict[str, ProfilingExperiment]  # Dictionary storing ProfilingExperiment instances.
-    data: dict[str, xr.Dataset]  # Dictionary mapping component names to their profiling datasets.
+    data: dict[
+        str, dict[str, xr.Dataset]
+    ]  # Dictionary mapping experiments to component names and their profiling datasets.
 
     def __init__(self, work_dir: Path, archive_dir: Path):
         super().__init__()
@@ -153,55 +155,27 @@ class ProfilingManager(ABC):
         else:
             logger.warning(f"Experiment '{name}' not found; cannot delete.")
 
-    def _parse_profiling_data_directory(self, path: Path) -> dict[str, xr.Dataset]:
-        """Helper function to parse profiling data from the specified experiment directory.
-
-        Note that the directory must be uncompressed and it is the caller's responsibility to ensure this.
-
-        Args:
-            path (Path): Path to the experiment directory.
-        Returns:
-            dict[str, xr.Dataset]: Dictionary mapping component names to their profiling datasets.
-        """
-        datasets = {}
-        logs = self.profiling_logs(path)
-        for log_name, log in logs.items():
-            logger.info(f"Parsing {log_name} profiling log: {log.filepath}. ")
-            if log.optional:
-                try:
-                    datasets[log_name] = log.parse()
-                except FileNotFoundError:
-                    logger.info(f"Optional profiling log '{log.filepath}' not found. Skipping.")
-                    continue
-            else:
-                datasets[log_name] = log.parse()
-                logger.info(" Done.")
-        return datasets
-
-    def parse_scaling_data(self):
+    def parse_profiling_data(self):
         """Parses profiling data from the experiments."""
-
         self.data = {}
         for exp_name, exp in self.experiments.items():
             if exp.status == ProfilingExperimentStatus.DONE or exp.status == ProfilingExperimentStatus.ARCHIVED:
-                datasets = {}
+                logger.info(f"Parsing profiling data for experiment '{exp_name}'.")
+                self.data[exp_name] = {}
                 with exp.directory() as exp_path:
                     # Parse all logs
-                    datasets = self._parse_profiling_data_directory(exp_path)
-
-                    # Find number of cpus used
-                    ncpus = self.parse_ncpus(exp_path)
-
-                # Add ncpus dimension and concatenate with existing data
-                for ds_name, ds in datasets.items():
-                    ds = ds.expand_dims({"ncpus": 1}).assign_coords({"ncpus": [ncpus]})
-                    if ds_name in self.data:
-                        self.data[ds_name] = xr.concat([self.data[ds_name], ds], dim="ncpus", join="outer").sortby(
-                            "ncpus"
-                        )
-                    else:
-                        self.data[ds_name] = ds
-
+                    logs = self.profiling_logs(exp_path)
+                    for log_name, log in logs.items():
+                        logger.info(f"Parsing {log_name} profiling log: {log.filepath}. ")
+                        if log.optional:
+                            try:
+                                self.data[exp_name][log_name] = log.parse()
+                            except FileNotFoundError:
+                                logger.info(f"Optional profiling log '{log.filepath}' not found. Skipping.")
+                                continue
+                        else:
+                            self.data[exp_name][log_name] = log.parse()
+                            logger.info(" Done.")
             else:
                 logger.warning(
                     f"Experiment '{exp_name}' is not completed (status: {exp.status.name}). Skipping parsing profiling "
@@ -214,6 +188,7 @@ class ProfilingManager(ABC):
         regions: list[list[str]],
         metric: ProfilingMetric,
         region_relabel_map: dict | None = None,
+        experiments: list[str] | None = None,
     ) -> Figure:
         """Plots scaling data for the specified components, regions and metric.
 
@@ -223,6 +198,43 @@ class ProfilingManager(ABC):
             metric (ProfilingMetric): Metric to use for the scaling plots.
             region_relabel_map (dict | None): Optional mapping to relabel regions in the plots.
         """
-        return plot_scaling_metrics(
-            [self.data[c] for c in components], regions, metric, region_relabel_map=region_relabel_map
-        )
+
+        # Find number of cpus used for each experiment
+        ncpus = {}
+        for exp_name in self.data:
+            with self.experiments[exp_name].directory() as exp_path:
+                # Find number of cpus used
+                ncpus[exp_name] = self.parse_ncpus(exp_path)
+
+        # Gather scaling data for each component
+        scaling_data = []
+        for component, component_regions in zip(components, regions, strict=True):
+            component_data = None
+            for exp_name in self.data:
+                # Skip experiments not in the specified list
+                if experiments is not None and exp_name not in experiments:
+                    continue
+
+                ds = self.data[exp_name].get(component)
+                if ds is None:
+                    raise ValueError(f"No profiling data found for component '{component}' in experiment '{exp_name}'.")
+
+                # Select only the desired regions
+                ds = ds.sel(region=component_regions)
+
+                # Relabel regions if a relabel map is provided
+                if region_relabel_map is not None:
+                    ds = ds.assign_coords(region=[region_relabel_map.get(n, n) for n in ds.region.values])
+
+                # Add ncpus dimension
+                ds = ds.expand_dims({"ncpus": 1}).assign_coords({"ncpus": [ncpus[exp_name]]})
+
+                # Concatenate data along ncpus dimension
+                if component_data is None:
+                    component_data = ds
+                else:
+                    component_data = xr.concat([component_data, ds], dim="ncpus", join="outer").sortby("ncpus")
+
+            scaling_data.append(component_data)
+
+        return plot_scaling_metrics(scaling_data, metric)
