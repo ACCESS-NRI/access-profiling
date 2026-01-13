@@ -175,7 +175,7 @@ class ProfilingManager(ABC):
                                 continue
                         else:
                             self.data[exp_name][log_name] = log.parse()
-                            logger.info(" Done.")
+                        logger.info(" Done.")
             else:
                 logger.warning(
                     f"Experiment '{exp_name}' is not completed (status: {exp.status.name}). Skipping parsing profiling "
