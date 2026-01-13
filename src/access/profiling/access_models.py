@@ -56,26 +56,6 @@ class ESM16Profiling(PayuManager):
 class RAM3Profiling(CylcRoseManager):
     """Handles profiling of ACCESS-rAM3 configurations."""
 
-    def __init__(self, work_dir: Path, archive_dir: Path, layout_variable: str):
-        super().__init__(work_dir, archive_dir)
-        self.layout_variable = layout_variable
-
-    def parse_ncpus(self, path: Path) -> int:
-        # this is a symlink
-        config_path = path / "log/rose-suite-run.conf"
-
-        if not config_path.is_file():
-            raise FileNotFoundError(f"Could not find suitable config file in {config_path}")
-
-        for line in config_path.read_text().split():
-            if not line.startswith("!!"):
-                keypair = line.split("=")
-                if keypair[0].strip() == self.layout_variable:
-                    layout = keypair[1].split(",")
-                    return int(layout[0].strip()) * int(layout[1].strip())
-
-        raise ValueError(f"Cannot find layout key, {self.layout_variable}, in {config_path}.")
-
     @property
     def known_parsers(self):
         return {

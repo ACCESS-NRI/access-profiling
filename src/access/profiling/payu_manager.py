@@ -5,7 +5,6 @@ import logging
 from abc import ABC, abstractmethod
 from pathlib import Path
 
-import xarray as xr
 from access.config import YAMLParser
 from experiment_runner.experiment_runner import ExperimentRunner
 
@@ -156,17 +155,13 @@ class PayuManager(ProfilingManager, ABC):
         else:
             return payu_config["ncpus"]
 
-    def parse_profiling_data(self, path: Path) -> dict[str, xr.Dataset]:
-        """Parses profiling data from a Payu experiment directory.
-
+    def profiling_logs(self, path: Path) -> dict[str, ProfilingLog]:
+        """Returns all profiling logs from the specified path.
         Args:
-            path (Path): Path to the Payu experiment directory.
+            path (Path): Path to the experiment directory.
         Returns:
-            dict[str, xr.Dataset]: Dictionary mapping component names to their profiling datasets.
-        Raises:
-            FileNotFoundError: If the archive or output directories are missing.
+            dict[str, ProfilingLog]: Dictionary of profiling logs.
         """
-        datasets = {}
         logs = {}
 
         # Check archive directory exists
@@ -189,10 +184,4 @@ class PayuManager(ProfilingManager, ABC):
             logger.warning(f"Multiple output directories found in {path}! Using the first one found.")
         logs.update(self.get_component_logs(matches[0]))
 
-        # Parse all logs
-        for name, log in logs.items():
-            logger.info(f"Parsing {name} profiling log: {log.filepath}. ")
-            datasets[name] = log.parse()
-            logger.info(" Done.")
-
-        return datasets
+        return logs

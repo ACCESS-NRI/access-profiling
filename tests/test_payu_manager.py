@@ -5,7 +5,6 @@ from pathlib import Path
 from unittest import mock
 
 import pytest
-import xarray as xr
 
 from access.profiling.experiment import ProfilingLog
 from access.profiling.manager import ProfilingManager
@@ -143,20 +142,20 @@ def test_archive_experiments(mock_archive, manager):
 
 @mock.patch("access.profiling.payu_manager.Path.is_dir")
 @mock.patch("access.profiling.payu_manager.Path.glob")
-def test_parse_profiling_data_missing_directories(mock_glob, mock_is_dir, manager):
-    """Test the parse_profiling_data method of PayuManager with missing directories."""
+def test_profiling_logs_missing_directories(mock_glob, mock_is_dir, manager):
+    """Test the profiling_logs method of PayuManager with missing directories."""
 
     # Missing archive directory
     mock_is_dir.return_value = False
     with pytest.raises(FileNotFoundError):
-        manager.parse_profiling_data(Path("/fake/path"))
+        manager.profiling_logs(Path("/fake/path"))
     mock_is_dir.assert_called_once()
 
     # Missing output directories
     mock_is_dir.return_value = True
     mock_glob.return_value = []
     with pytest.raises(FileNotFoundError):
-        manager.parse_profiling_data(Path("/fake/path"))
+        manager.profiling_logs(Path("/fake/path"))
     mock_glob.assert_called_with("output*")
 
 
@@ -173,22 +172,19 @@ def path_glob_side_effect(pattern):
 
 @mock.patch.object(Path, "is_dir", return_value=True)
 @mock.patch.object(Path, "glob", side_effect=path_glob_side_effect)
-@mock.patch("access.profiling.payu_manager.ProfilingLog.parse", return_value=xr.Dataset())
-def test_parse_profiling_data(mock_parse, mock_glob, mock_is_dir, manager):
-    """Test the parse_profiling_data method of PayuManager."""
+def test_profiling_logs(mock_glob, mock_is_dir, manager):
+    """Test the profiling_logs method of PayuManager."""
 
     with mock.patch.object(manager, "get_component_logs", wraps=manager.get_component_logs) as mock_get_logs:
-        datasets = manager.parse_profiling_data(Path("/fake/path"))
-
+        logs = manager.profiling_logs(Path("/fake/path"))
         # Check correct path access
         assert mock_is_dir.call_count == 1  # Called to check archive directory
         assert mock_glob.call_count == 2  # Called for payu_jobs and output directories
-        assert mock_parse.call_count == 2  # Called for each log file
         assert mock_get_logs.call_count == 1
         mock_get_logs.assert_called_with(Path("output1"))
 
         # Check returned datasets
-        assert "payu" in datasets
-        assert isinstance(datasets["payu"], xr.Dataset)
-        assert "component" in datasets
-        assert isinstance(datasets["component"], xr.Dataset)
+        assert "payu" in logs
+        assert isinstance(logs["payu"], ProfilingLog)
+        assert "component" in logs
+        assert isinstance(logs["component"], ProfilingLog)

@@ -5,18 +5,14 @@ from pathlib import Path
 from unittest import mock
 
 import pytest
-import xarray as xr
 
 from access.profiling.cylc_manager import CylcRoseManager
-from access.profiling.metrics import tmax
+from access.profiling.cylc_parser import CylcDBReader, CylcProfilingParser
 from access.profiling.parser import ProfilingParser
 
 
 class MockCylcManager(CylcRoseManager):
     """Test class inheriting from CylcRoseManager to test its methods."""
-
-    def parse_ncpus(self, path):
-        return 4
 
     @property
     def known_parsers(self) -> dict[str, ProfilingParser]:
@@ -25,48 +21,49 @@ class MockCylcManager(CylcRoseManager):
 
 @pytest.fixture()
 def manager():
-    return MockCylcManager(Path("/fake/test_path"), Path("/fake/archive_path"))
+    return MockCylcManager(Path("/fake/test_path"), Path("/fake/archive_path"), layout_variable="um_layout")
 
 
-@mock.patch("access.profiling.cylc_manager.ProfilingLog.parse")
 @mock.patch("access.profiling.cylc_manager.Path.glob")
-@mock.patch("access.profiling.cylc_manager.Path.is_file")
-def test_parse_profiling_data_missing_files(mock_is_file, mock_path_glob, mock_parse, manager):
-    """Test the parse_profiling_data method of PayuManager with missing directories."""
+def test_parse_profiling_logs(mock_path_glob, manager):
+    """Test the parse_profiling_logs method of CylcRoseManager with missing directories."""
 
-    # no log files
+    # no component log files
     mock_path_glob.return_value = []
     with pytest.raises(RuntimeError):
-        manager.parse_profiling_data(Path("/fake/path"))
-    assert mock_parse.call_count == 2
+        manager.profiling_logs(Path("/fake/path"))
     mock_path_glob.assert_called_once()
 
-    # a log is present, but with no data
+    # component log files are present
+    mock_path_glob.reset_mock()
     mock_path_glob.return_value = [Path("/fake/path/cycle1/task1/NN/job.out")]
     # return something "valid" for the cylc loc and db, but fail to read the component log.
-    mock_parse.side_effect = [xr.Dataset(), xr.Dataset(), ValueError()]
-    with pytest.raises(RuntimeError):
-        manager.parse_profiling_data(Path("/fake/path"))
-    assert mock_parse.call_count == 5
-    assert mock_path_glob.call_count == 2
+    logs = manager.profiling_logs(Path("/fake/path"))
+    mock_path_glob.assert_called_once()
+    assert "cylc_suite_log" in logs
+    assert isinstance(logs["cylc_suite_log"].parser, CylcProfilingParser)
+    assert "cylc_tasks" in logs
+    assert isinstance(logs["cylc_tasks"].parser, CylcDBReader)
+    assert "task1_cyclecycle1_fake-parser" in logs
+    assert isinstance(logs["task1_cyclecycle1_fake-parser"].parser, mock.MagicMock)
 
 
-@mock.patch("access.profiling.cylc_manager.Path.glob", return_value=[Path("/fake/path/cycle1/task1/NN/job.out")])
-@mock.patch("access.profiling.cylc_manager.ProfilingLog.parse", return_value=xr.Dataset())
-def test_parse_profiling_data(mock_parse, mock_glob, manager):
-    """Test the parse_profiling_data method of PayuManager."""
+@mock.patch("access.profiling.access_models.Path.is_file")
+@mock.patch("access.profiling.access_models.Path.read_text")
+def test_parse_ncpus(mock_read_text, mock_is_file, manager):
+    """Test the parse_ncpus method of CylcRoseManager."""
 
-    manager.known_parsers["fake-parser"].read.return_value = {"regions": ["aregion"], tmax: 1}
-    datasets = manager.parse_profiling_data(Path("/fake/path"))
+    # mock absence of rose-conf file
+    mock_is_file.return_value = False
+    with pytest.raises(FileNotFoundError):
+        manager.parse_ncpus(Path("/fake/path"))
 
-    # Check correct path access
-    assert mock_parse.call_count == 3  # Called for each log file
-    mock_glob.assert_called_once()
+    # mock absence of layout variable
+    mock_is_file.return_value = True
+    mock_read_text.return_value = "another_var=another_value"
+    with pytest.raises(ValueError):
+        manager.parse_ncpus(Path("/fake/path"))
 
-    # Check returned datasets
-    assert "cylc_suite_log" in datasets
-    assert isinstance(datasets["cylc_suite_log"], xr.Dataset)
-    assert "cylc_tasks" in datasets
-    assert isinstance(datasets["cylc_tasks"], xr.Dataset)
-    assert "task1_cyclecycle1_fake-parser" in datasets
-    assert isinstance(datasets["task1_cyclecycle1_fake-parser"], xr.Dataset)
+    # mock presence of layout variable
+    mock_read_text.return_value += "\num_layout=2,3"
+    manager.parse_ncpus(Path("/fake/path"))

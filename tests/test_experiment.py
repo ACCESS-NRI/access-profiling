@@ -26,8 +26,11 @@ def test_profiling_log():
 
     mock_path = mock.MagicMock()
 
-    # Instantiate ProfilingLog and parse
+    # Instantiate ProfilingLog and check attributes
     profiling_log = ProfilingLog(filepath=mock_path, parser=mock_parser)
+    assert not profiling_log.optional
+
+    # Parse the log
     dataset = profiling_log.parse()
 
     # Check dataset contents

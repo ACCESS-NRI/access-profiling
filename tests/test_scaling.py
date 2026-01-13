@@ -92,7 +92,6 @@ def test_plot_scaling_metrics(mock_plt, simple_scaling_data):
 
     plot_scaling_metrics(
         stats=[simple_scaling_data],
-        regions=[["Region 1", "Region 2"]],
         metric=tavg,
         xcoordinate="ncpus",
     )

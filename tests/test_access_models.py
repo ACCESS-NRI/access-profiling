@@ -4,7 +4,6 @@
 from pathlib import Path
 from unittest import mock
 
-import pytest
 from access.config import YAMLParser
 
 from access.profiling.access_models import ESM16Profiling, RAM3Profiling
@@ -54,9 +53,7 @@ def test_esm16_config_profiling(mock_is_file, mock_yaml_parse, mock_path_read_te
     assert "CICE5" not in logs
 
 
-@mock.patch("access.profiling.access_models.Path.is_file")
-@mock.patch("access.profiling.access_models.Path.read_text")
-def test_ram3_config_profiling(mock_read_text, mock_is_file):
+def test_ram3_config_profiling():
     """Test the rAM3Profiling class."""
 
     # Instantiate rAM3Profiling
@@ -69,18 +66,3 @@ def test_ram3_config_profiling(mock_read_text, mock_is_file):
     assert isinstance(config_profiling.known_parsers["UM_total"], UMTotalRuntimeParser), (
         "UM_total known parser not UMTotalRuntimeParser type."
     )
-
-    # mock absence of rose-conf file
-    mock_is_file.return_value = False
-    with pytest.raises(FileNotFoundError):
-        config_profiling.parse_ncpus(Path("/fake/path"))
-
-    # mock absence of layout variable
-    mock_is_file.return_value = True
-    mock_read_text.return_value = "another_var=another_value"
-    with pytest.raises(ValueError):
-        config_profiling.parse_ncpus(Path("/fake/path"))
-
-    # mock presence of layout variable
-    mock_read_text.return_value += "\num_layout=2,3"
-    config_profiling.parse_ncpus(Path("/fake/path"))
