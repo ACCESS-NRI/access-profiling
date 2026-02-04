@@ -48,8 +48,8 @@ class PayuManager(ProfilingManager, ABC):
         Args:
             value (int): Number of repetitions.
         """
-        if value < 1:
-            raise ValueError("Number of runs must be at least 1.")
+        if value < 0:
+            raise ValueError("Number of runs must be at least 0.")
         self._nruns = value
 
     @property
