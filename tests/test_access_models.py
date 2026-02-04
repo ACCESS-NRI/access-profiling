@@ -5,6 +5,7 @@ from pathlib import Path
 from unittest import mock
 
 from access.config import YAMLParser
+from access.config.esm1p6_layout_input import LayoutSearchConfig, LayoutTuple
 
 from access.profiling.access_models import ESM16Profiling, RAM3Profiling
 from access.profiling.cice5_parser import CICE5ProfilingParser
@@ -51,6 +52,18 @@ def test_esm16_config_profiling(mock_is_file, mock_yaml_parse, mock_path_read_te
     assert "UM" in logs
     assert "MOM5" in logs
     assert "CICE5" not in logs
+
+    assert config_profiling.model_type == "access-esm1.6"
+
+    with mock.patch("access.profiling.access_models.generate_esm1p6_core_layouts_from_node_count") as mock_generate:
+        layout_mock = mock.MagicMock(spec=LayoutSearchConfig)
+        config_profiling.generate_core_layouts_from_node_count(16, 32, layout_search_config=layout_mock)
+        mock_generate.assert_called_once_with(16, 32, layout_search_config=layout_mock)
+
+    with mock.patch("access.profiling.access_models.generate_esm1p6_perturb_block") as mock_generate:
+        layout_mock = mock.MagicMock(spec=LayoutTuple)
+        config_profiling.generate_perturbation_block(layout_mock, "branch_name_prefix")
+        mock_generate.assert_called_once_with(layout_mock, "branch_name_prefix")
 
 
 def test_ram3_config_profiling():
