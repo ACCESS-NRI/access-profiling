@@ -16,6 +16,35 @@ from access.profiling.um_parser import UMProfilingParser, UMTotalRuntimeParser
 logger = logging.getLogger(__name__)
 
 
+class ACCESSOM3Profiling(PayuManager):
+    """Handles profiling of ACCESS-OM3 configurations."""
+
+    def get_component_logs(self, path: Path) -> dict[str, ProfilingLog]:
+        """Returns available profiling logs for the components in ACCESS-OM3.
+
+        Args:
+            path (Path): Path to the output directory.
+        Returns:
+            dict[str, ProfilingLog]: Dictionary mapping component names to their ProfilingLog instances.
+        """
+        logs = {}
+        parser = YAMLParser()
+
+        config_path = path / "config.yaml"
+        payu_config = parser.parse(config_path.read_text())
+        mom6_logfile = path / f"{payu_config['model']}.out"
+        if mom6_logfile.is_file():
+            logger.debug(f"Found MOM log file: {mom6_logfile}")
+            logs["MOM"] = ProfilingLog(mom6_logfile, FMSProfilingParser(has_hits=True))
+
+        cice6_logfile = path / "log" / "ice.log"
+        if cice6_logfile.is_file():
+            logger.debug(f"Found CICE log file: {cice6_logfile}")
+            logs["CICE"] = ProfilingLog(cice6_logfile, CICE5ProfilingParser())
+
+        return logs
+
+
 class ESM16Profiling(PayuManager):
     """Handles profiling of ACCESS-ESM1.6 configurations."""
 
