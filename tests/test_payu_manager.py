@@ -32,9 +32,13 @@ def test_nruns(manager):
     manager.nruns = 5
     assert manager.nruns == 5
 
+    # Zero value is also valid
+    manager.nruns = 0
+    assert manager.nruns == 0
+
     # Set invalid value
     with pytest.raises(ValueError):
-        manager.nruns = 0
+        manager.nruns = -1
 
 
 def test_startfrom_restart(manager):
