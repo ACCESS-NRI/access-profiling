@@ -114,6 +114,37 @@ class PayuManager(ProfilingManager, ABC):
             if exp.status == ProfilingExperimentStatus.RUNNING:
                 exp.status = ProfilingExperimentStatus.DONE
 
+    def purge_experiments(
+        self,
+        branches: list[str] | None = None,
+        hard: bool = False,
+        dry_run: bool = False,
+        remove_repo_dir: bool = False,
+    ) -> None:
+        """Purges Payu experiments from the work directory.
+
+        Args:
+            branches (list[str] | None): List of branches to purge. If None, purges all existing branches.
+            dry_run (bool): If True, performs a dry run without deleting files. Defaults to False.
+            hard (bool): If True, performs a hard purge removing all files. Defaults to False.
+            remove_repo_dir (bool): If True, removes the base repository directory if no branches are using it.
+        """
+        if branches is None:
+            branches = list(self.experiments.keys())
+
+        runner_config = {
+            "test_path": self.work_dir,
+            "repository_directory": self._repository_directory,
+        }
+
+        runner = ExperimentRunner(runner_config)
+        runner.purge_experiments(
+            branches=branches,
+            hard=hard,
+            dry_run=dry_run,
+            remove_repo_dir=remove_repo_dir,
+        )
+
     def archive_experiments(
         self,
         exclude_dirs: list[str] | None = None,
