@@ -20,7 +20,7 @@ def create_db(test_file, table_name, columns):
 
     sample_data = [
         ("20250101T0000Z", "task1", "2025-01-01T00:00:00Z", "2025-01-02T00:00:00Z", 0),
-        ("20250101T0000Z", "test2", "2025-01-01T00:00:00Z", "2025-01-01T00:00:10Z", 0),
+        ("20250101T0000Z", "task2", "2025-01-01T00:00:00Z", "2025-01-01T00:00:10Z", 0),
     ]
     with sqlite3.connect(test_file) as con:
         cur = con.cursor()
@@ -82,11 +82,15 @@ def test_profiling_data(tmp_path, cylcdbreader, correct_cylc_task_data):
     dbpath = tmp_path / "cylc.db"
     create_db(dbpath, table_name=cylcdbreader._table, columns=cylcdbreader._required_cols)
     data = cylcdbreader.parse(dbpath)
-    for idx, region in enumerate(data["region"]):
+
+    assert len(data["region"]) == len(correct_cylc_task_data["region"]), (
+        f"Expected {len(correct_cylc_task_data['region'])} regions, found {len(data['region'])}."
+    )
+    for idx, expected_region in enumerate(correct_cylc_task_data["region"]):
         found_region = data["region"][idx]
-        assert region == found_region, f"Found {found_region} instead of {region} at idx: {idx}."
+        assert expected_region == found_region, f"Found {found_region} instead of {expected_region} at idx: {idx}."
         correct_tmax = correct_cylc_task_data[tmax][idx]
         found_tmax = data[tmax][idx]
         assert correct_tmax == found_tmax, (
-            f"Incorrect {tmax} for {region}: found {found_tmax} instead of {correct_tmax}."
+            f"Incorrect {tmax} for {expected_region}: found {found_tmax} instead of {correct_tmax}."
         )
