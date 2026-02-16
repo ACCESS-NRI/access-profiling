@@ -89,7 +89,7 @@ def test_profiling_experiment_archived(mock_tarfile_open):
         assert temp_dir.name.endswith("_data")
         assert temp_dir.parent == Path(tempfile.gettempdir())
         mock_tarfile_open.assert_called_once_with(path)
-        mock_tarfile.extractall.assert_called_once_with(path=Path(temp_dir))
+        mock_tarfile.extractall.assert_called_once_with(path=Path(temp_dir), filter="data")
 
 
 @mock.patch("access.profiling.experiment.tarfile.open")
