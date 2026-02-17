@@ -1,9 +1,13 @@
 # Copyright 2025 ACCESS-NRI and contributors. See the top-level COPYRIGHT file for details.
 # SPDX-License-Identifier: Apache-2.0
 
-import pytest
+from unittest import mock
 
-from access.profiling.plotting_utils import calculate_column_widths
+import pytest
+from matplotlib.figure import Figure
+
+from access.profiling.metrics import tavg
+from access.profiling.plotting_utils import calculate_column_widths, plot_bar_metrics
 
 
 @pytest.fixture(scope="module")
@@ -75,3 +79,64 @@ def test_invalid_tables(nonrectangular_table_data, singlerow_table_data, singlec
         calculate_column_widths(singlerow_table_data)
     with pytest.raises(ValueError):
         calculate_column_widths(singlecol_table_data)
+
+
+def test_plot_bar_metrics_returns_figure():
+    """Test that plot_bar_metrics returns a Figure with correct structure."""
+    data = {
+        "exp_A": [100.0, 50.0],
+        "exp_B": [80.0, 40.0],
+    }
+    region_labels = ["Region 1", "Region 2"]
+
+    fig = plot_bar_metrics(data, region_labels, tavg, show=False)
+
+    assert isinstance(fig, Figure)
+    ax = fig.axes[0]
+
+    # Check axis labels and title
+    assert ax.get_xlabel() == "Region"
+    assert tavg.name in ax.get_ylabel()
+    assert str(tavg.units) in ax.get_ylabel()
+    assert ax.get_title() == tavg.description
+
+    # Check x-tick labels match the region labels
+    tick_labels = [t.get_text() for t in ax.get_xticklabels()]
+    assert tick_labels == region_labels
+
+    # Check legend shows experiment names
+    legend_labels = [t.get_text() for t in ax.get_legend().get_texts()]
+    assert legend_labels == ["exp_A", "exp_B"]
+
+    # Check correct number of bars: 2 experiments * 2 regions = 4 bars
+    assert len(ax.patches) == 4
+
+    # matplotlib groups bars by series: first all exp_A bars, then all exp_B bars
+    heights = [p.get_height() for p in ax.patches]
+    assert heights == pytest.approx([100.0, 50.0, 80.0, 40.0])
+
+
+def test_plot_bar_metrics_single_experiment():
+    """Test plot_bar_metrics with a single experiment."""
+    data = {"exp_A": [10.0, 20.0, 30.0]}
+    region_labels = ["R1", "R2", "R3"]
+
+    fig = plot_bar_metrics(data, region_labels, tavg, show=False)
+    ax = fig.axes[0]
+
+    assert len(ax.patches) == 3
+    legend_labels = [t.get_text() for t in ax.get_legend().get_texts()]
+    assert legend_labels == ["exp_A"]
+
+
+@mock.patch("access.profiling.plotting_utils.plt.show")
+def test_plot_bar_metrics_show(mock_show):
+    """Test that plt.show() is called when show=True and not called when show=False."""
+    data = {"exp_A": [10.0]}
+    region_labels = ["R1"]
+
+    plot_bar_metrics(data, region_labels, tavg, show=True)
+    assert mock_show.call_count == 1
+
+    plot_bar_metrics(data, region_labels, tavg, show=False)
+    assert mock_show.call_count == 1  # No additional call
