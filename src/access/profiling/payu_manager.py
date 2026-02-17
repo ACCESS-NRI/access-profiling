@@ -3,9 +3,14 @@
 
 import logging
 from abc import ABC, abstractmethod
+from collections.abc import Callable
+from datetime import timedelta
 from pathlib import Path
 
 from access.config import YAMLParser
+from access.config.esm1p6_layout_input import LayoutSearchConfig
+from access.config.layout_config import LayoutTuple
+from experiment_generator.experiment_generator import ExperimentGenerator
 from experiment_runner.experiment_runner import ExperimentRunner
 
 from access.profiling.experiment import ProfilingLog
@@ -30,6 +35,37 @@ class PayuManager(ProfilingManager, ABC):
             path (Path): Path to the output directory.
         Returns:
             dict[str, ProfilingLog]: Dictionary mapping component names to their ProfilingLog instances.
+        """
+
+    @property
+    @abstractmethod
+    def model_type(self) -> str:
+        """Returns the model type identifier, as defined in Payu."""
+
+    @abstractmethod
+    def generate_core_layouts_from_node_count(
+        self,
+        num_nodes: float,
+        cores_per_node: int,
+        layout_search_config: LayoutSearchConfig | None = None,
+    ) -> list:
+        """Generates core layouts from the given number of nodes.
+
+        Args:
+            num_nodes (float): Number of nodes.
+            cores_per_node (int): Number of cores per node.
+            layout_search_config (LayoutSearchConfig | None): Configuration for layout search.
+        """
+
+    @abstractmethod
+    def generate_perturbation_block(self, layout: LayoutTuple, branch_name_prefix: str) -> dict:
+        """Generates a perturbation block for the given layout to be passed to the experiment generator.
+
+        Args:
+            layout (LayoutTuple): Core layout tuple.
+            branch_name_prefix (str): Branch name prefix.
+        Returns:
+            dict: Perturbation block configuration.
         """
 
     @property
@@ -70,18 +106,80 @@ class PayuManager(ProfilingManager, ABC):
         """
         self._startfrom_restart = value
 
-    def generate_experiments(self, branches: list[str]) -> None:
-        """Generates Payu experiments for profiling data generation.
+    def set_control(self, repository, commit) -> None:
+        """Sets the control experiment from an existing Payu configuration.
 
         Args:
-            branches (list[str]): List of branches to generate experiments for.
+            repository: Git repository URL or path.
+            commit: Git commit hash or identifier.
+        """
+        self._repository = repository
+        self._control_commit = commit
+
+    def generate_scaling_experiments(
+        self,
+        num_nodes_list: list[float],
+        control_options: dict,
+        cores_per_node: int,
+        tol_around_ctrl_ratio: float,
+        max_wasted_ncores_frac: float | Callable[[float], float],
+        walltime: float | Callable[[float], float],
+    ) -> None:
+        """Generates scaling experiments using the ExperimentGenerator.
+
+        Args:
+            num_nodes_list (list[int]): List of number of nodes to generate experiments for.
+            control_options (dict): Options for the control experiment.
+            cores_per_node (int): Number of cores per node.
+            tol_around_ctrl_ratio (float): Tolerance around control core ratio for layout generation.
+            max_wasted_ncores_frac (float | Callable[[float], float]): Maximum fraction of wasted cores allowed.
+            walltime (float | Callable[[float], float]): Walltime in hours for each experiment.
         """
 
-        for branch in branches:
-            if branch in self.experiments:
-                logger.info(f"Experiment for branch {branch} already exists. Skipping addition.")
-            else:
+        generator_config = {
+            "model_type": self.model_type,
+            "repository_url": self._repository,
+            "start_point": self._control_commit,
+            "test_path": str(self.work_dir),
+            "repository_directory": self._repository_directory,
+            "control_branch_name": "ctrl",
+            "Control_Experiment": control_options,
+        }
+
+        seen_layouts = set()
+        seqnum = 1
+        generator_config["Perturbation_Experiment"] = {}
+        for num_nodes in num_nodes_list:
+            mwf = max_wasted_ncores_frac(num_nodes) if callable(max_wasted_ncores_frac) else max_wasted_ncores_frac
+            layout_config = LayoutSearchConfig(tol_around_ctrl_ratio=tol_around_ctrl_ratio, max_wasted_ncores_frac=mwf)
+            layouts = self.generate_core_layouts_from_node_count(
+                num_nodes,
+                cores_per_node=cores_per_node,
+                layout_search_config=layout_config,
+            )
+            if not layouts:
+                logger.warning(f"No layouts found for {num_nodes} nodes")
+                continue
+
+            layouts = [x for x in layouts if x not in seen_layouts]
+            seen_layouts.update(layouts)
+            logger.info(f"Generated {len(layouts)} layouts for {num_nodes} nodes. Layouts: {layouts}")
+
+            # TODO: the branch name needs to be simpler and model agnostic
+            branch_name = f"layout-unused-cores-to-cice-{layout_config.allocate_unused_cores_to_ice}"
+            walltime_hrs = walltime(num_nodes) if callable(walltime) else walltime
+
+            for layout in layouts:
+                pert_config = self.generate_perturbation_block(layout=layout, branch_name_prefix=branch_name)
+                branch = pert_config["branches"][0]
+                pert_config["config.yaml"]["walltime"] = str(timedelta(hours=walltime_hrs))
+
+                generator_config["Perturbation_Experiment"][f"Experiment_{seqnum}"] = pert_config
                 self.experiments[branch] = ProfilingExperiment(self.work_dir / branch / self._repository_directory)
+
+                seqnum += 1
+
+        ExperimentGenerator(generator_config).run()
 
     def run_experiments(self) -> None:
         """Runs Payu experiments for profiling data generation."""
