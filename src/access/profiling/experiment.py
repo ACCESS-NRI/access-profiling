@@ -149,7 +149,7 @@ class ProfilingExperiment:
         if self.path.suffixes == [".tar", ".gz"]:
             with tempfile.TemporaryDirectory(prefix="access-profiling_", suffix="_data") as tmpdir:
                 with tarfile.open(self.path) as tar:
-                    tar.extractall(path=Path(tmpdir))
+                    tar.extractall(path=Path(tmpdir), filter="data")
                 yield Path(tmpdir)
         else:
             yield self.path

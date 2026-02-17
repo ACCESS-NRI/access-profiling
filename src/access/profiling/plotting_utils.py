@@ -36,7 +36,7 @@ def calculate_column_widths(table_data: list[list], first_col_fraction: float = 
         raise ValueError("Table must have at least 2 columns (first column is row label)")
 
     if first_col_fraction is not None and not (0 <= first_col_fraction < 1):
-        raise ValueError("first_col_fration must be between 0 and 1 (exclusive)")
+        raise ValueError("first_col_fraction must be between 0 and 1 (exclusive)")
 
     n_cols = len(table_data[0])
 

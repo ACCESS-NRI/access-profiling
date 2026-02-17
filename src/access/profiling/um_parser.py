@@ -211,9 +211,9 @@ class UMProfilingParser(ProfilingParser):
 class UMTotalRuntimeParser(ProfilingParser):
     """Parser for UM total runtime from the UM log file."""
 
-    metrics = [tmax]
+    _metrics = [tmax]
 
-    def parse(self, file_path: str | Path | os.PathLike) -> float:
+    def parse(self, file_path: str | Path | os.PathLike) -> dict:
         """Parse UM total runtime from a file.
 
         Args:

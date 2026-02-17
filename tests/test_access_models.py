@@ -16,7 +16,7 @@ from access.profiling.um_parser import UMProfilingParser, UMTotalRuntimeParser
 @mock.patch.object(YAMLParser, "parse", return_value={"UM_STDOUT_FILE": "file", "model": "file"})
 @mock.patch.object(Path, "read_text", return_value="some text")
 @mock.patch.object(Path, "is_file")
-def test_esm16_config_profiling(mock_is_file, mock_yaml_parse, mock_path_read_text):
+def test_esm16_config_profiling(mock_is_file, mock_read_text, mock_yaml_parse):
     """Test the ESM16ConfigProfiling class."""
 
     # Instantiate ESM16ConfigProfiling

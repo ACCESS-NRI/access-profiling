@@ -65,5 +65,5 @@ def test_parse_ncpus(mock_read_text, mock_is_file, manager):
         manager.parse_ncpus(Path("/fake/path"))
 
     # mock presence of layout variable
-    mock_read_text.return_value += "\num_layout=2,3"
+    mock_read_text.return_value += "\n um_layout = 2,3"
     manager.parse_ncpus(Path("/fake/path"))

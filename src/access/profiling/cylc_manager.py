@@ -44,7 +44,7 @@ class CylcRoseManager(ProfilingManager, ABC):
         if not config_path.is_file():
             raise FileNotFoundError(f"Could not find suitable config file in {config_path}")
 
-        for line in config_path.read_text().split():
+        for line in config_path.read_text().splitlines():
             if not line.startswith("!!"):
                 keypair = line.split("=")
                 if keypair[0].strip() == self._layout_variable:
