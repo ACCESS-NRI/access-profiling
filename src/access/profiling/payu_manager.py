@@ -4,10 +4,10 @@
 import logging
 from abc import ABC, abstractmethod
 from collections.abc import Callable
-from datetime import timedelta
 from pathlib import Path
 
 from access.config import YAMLParser
+from access.config.accessom3_layout_input import OM3ConfigLayout, OM3LayoutSearchConfig
 from access.config.esm1p6_layout_input import LayoutSearchConfig
 from access.config.layout_config import LayoutTuple
 from experiment_generator.experiment_generator import ExperimentGenerator
@@ -18,6 +18,10 @@ from access.profiling.manager import ProfilingExperiment, ProfilingExperimentSta
 from access.profiling.payujson_parser import PayuJSONProfilingParser
 
 logger = logging.getLogger(__name__)
+
+# Type aliases for better readability
+SearchConfig = LayoutSearchConfig | OM3LayoutSearchConfig
+Layout = LayoutTuple | OM3ConfigLayout
 
 
 class PayuManager(ProfilingManager, ABC):
@@ -47,26 +51,42 @@ class PayuManager(ProfilingManager, ABC):
         self,
         num_nodes: float,
         cores_per_node: int,
-        layout_search_config: LayoutSearchConfig | None = None,
-    ) -> list:
+        layout_search_config: SearchConfig | None = None,
+    ) -> list[Layout]:
         """Generates core layouts from the given number of nodes.
 
         Args:
             num_nodes (float): Number of nodes.
             cores_per_node (int): Number of cores per node.
-            layout_search_config (LayoutSearchConfig | None): Configuration for layout search.
+            layout_search_config (SearchConfig | None): Configuration for layout search.
         """
 
     @abstractmethod
-    def generate_perturbation_block(self, layout: LayoutTuple, branch_name_prefix: str) -> dict:
+    def generate_perturbation_block(
+        self,
+        layout: Layout,
+        num_nodes: float,
+        branch_name_prefix: str,
+        walltime_hrs: float,
+        layout_search_config: SearchConfig | None = None,
+        block_overrides: dict | None = None,
+    ) -> dict:
         """Generates a perturbation block for the given layout to be passed to the experiment generator.
 
         Args:
-            layout (LayoutTuple): Core layout tuple.
+            layout (Layout): Core layout tuple.
+            num_nodes (float): Number of nodes.
             branch_name_prefix (str): Branch name prefix.
+            walltime_hrs (float): Walltime in hours.
+            layout_search_config (SearchConfig | None): Configuration for layout search.
+            block_overrides (dict | None): Overrides for the perturbation block.
         Returns:
             dict: Perturbation block configuration.
         """
+
+    @abstractmethod
+    def layout_key(self, layout: Layout) -> tuple:
+        """Returns a stable key for a layout so PayuManager can deduplicate layouts."""
 
     @property
     def nruns(self) -> int:
@@ -121,19 +141,21 @@ class PayuManager(ProfilingManager, ABC):
         num_nodes_list: list[float],
         control_options: dict,
         cores_per_node: int,
-        tol_around_ctrl_ratio: float,
-        max_wasted_ncores_frac: float | Callable[[float], float],
+        branch_name_prefix: str,
         walltime: float | Callable[[float], float],
+        layout_search_config_builder: Callable[[float], SearchConfig] | None = None,
+        block_overrides_builder: Callable[[Layout, float], dict] | None = None,
     ) -> None:
-        """Generates scaling experiments using the ExperimentGenerator.
+        """Generates scaling experiments using ExperimentGenerator.
 
         Args:
             num_nodes_list (list[int]): List of number of nodes to generate experiments for.
             control_options (dict): Options for the control experiment.
             cores_per_node (int): Number of cores per node.
-            tol_around_ctrl_ratio (float): Tolerance around control core ratio for layout generation.
-            max_wasted_ncores_frac (float | Callable[[float], float]): Maximum fraction of wasted cores allowed.
+            branch_name_prefix (str): Branch name prefix for the generated experiments.
             walltime (float | Callable[[float], float]): Walltime in hours for each experiment.
+            layout_search_config_builder: optional function (num_nodes)->OM3LayoutSearchConfig
+            block_overrides_builder: optional function (layout, num_nodes)->dict.
         """
 
         generator_config = {
@@ -144,37 +166,52 @@ class PayuManager(ProfilingManager, ABC):
             "repository_directory": self._repository_directory,
             "control_branch_name": "ctrl",
             "Control_Experiment": control_options,
+            "Perturbation_Experiment": {},
         }
 
         seen_layouts = set()
         seqnum = 1
-        generator_config["Perturbation_Experiment"] = {}
+
         for num_nodes in num_nodes_list:
-            mwf = max_wasted_ncores_frac(num_nodes) if callable(max_wasted_ncores_frac) else max_wasted_ncores_frac
-            layout_config = LayoutSearchConfig(tol_around_ctrl_ratio=tol_around_ctrl_ratio, max_wasted_ncores_frac=mwf)
+            layout_search_config = layout_search_config_builder(num_nodes) if layout_search_config_builder else None
             layouts = self.generate_core_layouts_from_node_count(
                 num_nodes,
                 cores_per_node=cores_per_node,
-                layout_search_config=layout_config,
+                layout_search_config=layout_search_config,
             )
+
             if not layouts:
                 logger.warning(f"No layouts found for {num_nodes} nodes")
                 continue
 
-            layouts = [x for x in layouts if x not in seen_layouts]
-            seen_layouts.update(layouts)
-            logger.info(f"Generated {len(layouts)} layouts for {num_nodes} nodes. Layouts: {layouts}")
-
-            # TODO: the branch name needs to be simpler and model agnostic
-            branch_name = f"layout-unused-cores-to-cice-{layout_config.allocate_unused_cores_to_ice}"
-            walltime_hrs = walltime(num_nodes) if callable(walltime) else walltime
-
+            unique_layouts: list[Layout] = []
             for layout in layouts:
-                pert_config = self.generate_perturbation_block(layout=layout, branch_name_prefix=branch_name)
-                branch = pert_config["branches"][0]
-                pert_config["config.yaml"]["walltime"] = str(timedelta(hours=walltime_hrs))
+                key = self.layout_key(layout)
+                if key in seen_layouts:
+                    continue
+                seen_layouts.add(key)
+                unique_layouts.append(layout)
 
-                generator_config["Perturbation_Experiment"][f"Experiment_{seqnum}"] = pert_config
+            logger.info(
+                f"Generated {len(layouts)} layouts for {num_nodes} nodes "
+                f"with {len(unique_layouts)} unique layouts: {unique_layouts}"
+            )
+
+            for layout in unique_layouts:
+                walltime_hrs = walltime(num_nodes) if callable(walltime) else walltime
+                block_overrides = block_overrides_builder(layout, num_nodes) if block_overrides_builder else None
+                perturb_block = self.generate_perturbation_block(
+                    layout=layout,
+                    num_nodes=num_nodes,
+                    branch_name_prefix=branch_name_prefix,
+                    walltime_hrs=walltime_hrs,
+                    layout_search_config=layout_search_config,
+                    block_overrides=block_overrides,
+                )
+
+                generator_config["Perturbation_Experiment"][f"Experiment_{seqnum}"] = perturb_block
+
+                branch = perturb_block["branches"][0]
                 self.experiments[branch] = ProfilingExperiment(self.work_dir / branch / self._repository_directory)
 
                 seqnum += 1

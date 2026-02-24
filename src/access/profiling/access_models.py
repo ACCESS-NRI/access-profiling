@@ -5,6 +5,12 @@ import logging
 from pathlib import Path
 
 from access.config import YAMLParser
+from access.config.accessom3_layout_input import (
+    OM3ConfigLayout,
+    OM3LayoutSearchConfig,
+    generate_om3_core_layouts_from_node_count,
+    generate_om3_perturb_block,
+)
 from access.config.esm1p6_layout_input import (
     LayoutSearchConfig,
     LayoutTuple,
@@ -24,6 +30,20 @@ logger = logging.getLogger(__name__)
 
 class ACCESSOM3Profiling(PayuManager):
     """Handles profiling of ACCESS-OM3 configurations."""
+
+    @property
+    def model_type(self) -> str:
+        return "access-om3"
+
+    def layout_key(self, layout: OM3ConfigLayout) -> tuple:
+        """
+        Return stable identity for OM3 layout.
+        """
+        return (
+            int(layout.ncpus),
+            tuple(sorted(layout.pool_ntasks.items())),
+            tuple(sorted(layout.pool_rootpe.items())),
+        )
 
     def get_component_logs(self, path: Path) -> dict[str, ProfilingLog]:
         """Returns available profiling logs for the components in ACCESS-OM3.
@@ -49,6 +69,31 @@ class ACCESSOM3Profiling(PayuManager):
             logs["CICE"] = ProfilingLog(cice6_logfile, CICE5ProfilingParser())
 
         return logs
+
+    def generate_core_layouts_from_node_count(
+        self, num_nodes: float, cores_per_node: int, layout_search_config: OM3LayoutSearchConfig | None = None
+    ) -> list:
+        return generate_om3_core_layouts_from_node_count(
+            num_nodes, cores_per_node, layout_search_config=layout_search_config
+        )
+
+    def generate_perturbation_block(
+        self,
+        layout: OM3ConfigLayout,
+        num_nodes: float,
+        branch_name_prefix: str,
+        walltime_hrs: float,
+        layout_search_config: OM3LayoutSearchConfig | None = None,
+        block_overrides: dict | None = None,
+    ) -> dict:
+        return generate_om3_perturb_block(
+            layout=layout,
+            num_nodes=num_nodes,
+            layout_search_config=layout_search_config,
+            branch_name_prefix=branch_name_prefix,
+            walltime_hrs=walltime_hrs,
+            block_overrides=block_overrides,
+        )
 
 
 class ESM16Profiling(PayuManager):
