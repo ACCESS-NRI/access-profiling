@@ -336,3 +336,94 @@ def test_profiling_logs(mock_glob, mock_is_dir, manager):
         assert isinstance(logs["payu"], ProfilingLog)
         assert "component" in logs
         assert isinstance(logs["component"], ProfilingLog)
+
+
+@mock.patch("access.profiling.payu_manager.ExperimentRunner")
+def test_delete_experiments_rejects_all_branches_and_branches(mock_experiment_runner, manager):
+    """delete_experiments raises an error if both all_branches and branches are provided."""
+    manager.experiments.clear()
+    manager.experiments["branch1"] = mock.MagicMock(status=ProfilingExperimentStatus.NEW, path=Path("branch1"))
+
+    with pytest.raises(ValueError):
+        manager.delete_experiments(branches=["branch1"], all_branches=True)
+
+    mock_experiment_runner.assert_not_called()
+
+
+@mock.patch("access.profiling.payu_manager.ExperimentRunner")
+def test_delete_experiments_no_branches_or_all_branches(mock_experiment_runner, manager):
+    """delete_experiments raises an error if neither branches nor all_branches is provided."""
+    manager.experiments.clear()
+    manager.experiments["branch1"] = mock.MagicMock(status=ProfilingExperimentStatus.NEW, path=Path("branch1"))
+
+    with pytest.raises(ValueError):
+        manager.delete_experiments()
+
+    mock_experiment_runner.assert_not_called()
+
+
+@mock.patch("access.profiling.payu_manager.ExperimentRunner")
+def test_delete_experiments_all_branches_but_no_experiments(mock_experiment_runner, manager):
+    """delete_experiments raises an error if all_branches is True but there are no experiments."""
+    manager.experiments.clear()
+
+    manager.delete_experiments(all_branches=True)
+    mock_experiment_runner.assert_not_called()
+
+
+@mock.patch("access.profiling.payu_manager.ExperimentRunner")
+def test_delete_experiments_rejects_unmanaged_branches(mock_experiment_runner, manager):
+    """delete_experiments raises an error if branches are provided that are not in the manager experiments."""
+    manager.experiments.clear()
+    manager.experiments["branch1"] = mock.MagicMock(status=ProfilingExperimentStatus.NEW, path=Path("branch1"))
+    manager.experiments["branch2"] = mock.MagicMock(status=ProfilingExperimentStatus.NEW, path=Path("branch2"))
+
+    with pytest.raises(KeyError):
+        manager.delete_experiments(branches=["branch2", "branch3"])
+
+    mock_experiment_runner.assert_not_called()
+
+
+@mock.patch("access.profiling.payu_manager.ExperimentRunner")
+def test_delete_experiments_valid_branches(mock_experiment_runner, manager):
+    """delete_experiments calls ExperimentRunner with correct branches when valid branches are provided."""
+    manager.experiments.clear()
+    manager.experiments["branch1"] = mock.MagicMock(status=ProfilingExperimentStatus.NEW, path=Path("branch1"))
+    manager.experiments["branch2"] = mock.MagicMock(status=ProfilingExperimentStatus.NEW, path=Path("branch2"))
+    manager.experiments["branch3"] = mock.MagicMock(status=ProfilingExperimentStatus.NEW, path=Path("branch3"))
+
+    runner = mock_experiment_runner.return_value
+
+    manager.delete_experiments(branches=["branch3", "branch1"])
+
+    mock_experiment_runner.assert_called_once_with({"test_path": manager.work_dir, "repository_directory": "config"})
+
+    assert runner.delete_experiments.call_count == 1
+    _, kwargs = runner.delete_experiments.call_args
+    assert set(kwargs["branches"]) == {"branch3", "branch1"}
+    assert kwargs["dry_run"] is False
+    assert kwargs["remove_repo_dir"] is False
+
+
+@mock.patch("access.profiling.payu_manager.ExperimentRunner")
+def test_delete_experiments_dry_run_does_not_modify_state(mock_experiment_runner, manager):
+    """delete_experiments with dry_run=True does not modify the manager state."""
+    manager.experiments.clear()
+    manager.experiments["branch1"] = mock.MagicMock(status=ProfilingExperimentStatus.NEW, path=Path("branch1"))
+    manager.experiments["branch2"] = mock.MagicMock(status=ProfilingExperimentStatus.NEW, path=Path("branch2"))
+
+    manager.delete_experiments(branches=["branch1"], dry_run=True)
+
+    assert set(manager.experiments.keys()) == {"branch1", "branch2"}
+
+
+@mock.patch("access.profiling.payu_manager.ExperimentRunner")
+def test_delete_experiments_non_dry_run_removes_from_state(mock_experiment_runner, manager):
+    """delete_experiments with dry_run=False removes deleted branches from the manager state."""
+    manager.experiments.clear()
+    manager.experiments["branch1"] = mock.MagicMock(status=ProfilingExperimentStatus.NEW, path=Path("branch1"))
+    manager.experiments["branch2"] = mock.MagicMock(status=ProfilingExperimentStatus.NEW, path=Path("branch2"))
+
+    manager.delete_experiments(branches=["branch1"], dry_run=False)
+
+    assert set(manager.experiments.keys()) == {"branch2"}
