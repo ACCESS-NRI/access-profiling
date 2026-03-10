@@ -11,6 +11,7 @@ from matplotlib.figure import Figure
 
 from access.profiling.experiment import ProfilingExperiment, ProfilingExperimentStatus, ProfilingLog
 from access.profiling.metrics import ProfilingMetric
+from access.profiling.plotting_utils import plot_bar_metrics
 from access.profiling.scaling import plot_scaling_metrics
 
 logger = logging.getLogger(__name__)
@@ -238,3 +239,55 @@ class ProfilingManager(ABC):
             scaling_data.append(component_data)
 
         return plot_scaling_metrics(scaling_data, metric)
+
+    def plot_bar_chart(
+        self,
+        components: list[str],
+        regions: list[list[str]],
+        metric: ProfilingMetric,
+        region_relabel_map: dict | None = None,
+        experiments: list[str] | None = None,
+        show: bool = True,
+    ) -> Figure:
+        """Plots a bar chart of a profiling metric over regions, grouped by experiment.
+
+        Regions are placed along the x-axis. Within each region group, there is one bar per
+        experiment, coloured by experiment name.
+
+        Args:
+            components (list[str]): List of component names to include.
+            regions (list[list[str]]): List of regions to include for each component.
+            metric (ProfilingMetric): Metric to plot.
+            region_relabel_map (dict | None): Optional mapping to relabel regions in the plot.
+            experiments (list[str] | None): Optional list of experiment names to include. If None, all experiments
+                are included.
+            show (bool): Whether to show the generated plot. Default: True.
+
+        Returns:
+            Figure: The Matplotlib figure containing the bar chart.
+
+        Raises:
+            ValueError: If no profiling data is found for a specified component in any experiment.
+        """
+        exp_names = experiments if experiments is not None else list(self.data.keys())
+        relabel = region_relabel_map or {}
+
+        # Build a lookup from display label to (component, original_region) and preserve input order.
+        region_info: list[tuple[str, str, str]] = []  # (component, original_region, display_label)
+        for component, component_regions in zip(components, regions, strict=True):
+            for region in component_regions:
+                region_info.append((component, region, relabel.get(region, region)))
+        region_labels = [label for _, _, label in region_info]
+
+        # Extract metric values per experiment, reading directly from the datasets
+        bar_data: dict[str, list[float]] = {}
+        for exp_name in exp_names:
+            values = []
+            for component, region, _ in region_info:
+                ds = self.data[exp_name].get(component)
+                if ds is None:
+                    raise ValueError(f"No profiling data found for component '{component}' in experiment '{exp_name}'.")
+                values.append(float(ds[metric].sel(region=region).pint.dequantify().values))
+            bar_data[exp_name] = values
+
+        return plot_bar_metrics(bar_data, region_labels, metric, show=show)

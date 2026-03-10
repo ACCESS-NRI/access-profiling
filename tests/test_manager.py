@@ -307,3 +307,66 @@ def test_scaling_data(mock_plot, scaling_data):
     assert component_data[count].sel(region="Total").values.tolist() == [1, 1]
     assert component_data[tavg].sel(region="Total").values.tolist() == [600365.0, 300182.5]
     assert mock_plot.call_args.args[1] == tavg
+
+
+@mock.patch("access.profiling.manager.plot_bar_metrics")
+def test_bar_chart_data(mock_plot, scaling_data):
+    """Test the plot_bar_chart method of ProfilingManager.
+
+    This test checks that bar chart data is correctly extracted from the datasets and that the
+    plotting function is called with the right arguments.
+    """
+    paths, ncpus, datasets = scaling_data
+    manager = MockProfilingManager(paths, ncpus, datasets)
+
+    # Test plotting bar chart for non-existing component
+    with pytest.raises(ValueError):
+        manager.plot_bar_chart(
+            components=["non_existing_component"],
+            regions=[["Region 1"]],
+            metric=tavg,
+        )
+
+    # Test plotting bar chart with region selection, relabelling, and experiment filtering
+    manager.plot_bar_chart(
+        components=["component"],
+        regions=[["Region 1", "Region 2"]],
+        metric=tavg,
+        region_relabel_map={"Region 1": "Total"},
+        experiments=["1cpu", "4cpu"],
+    )
+    assert mock_plot.call_count == 1
+
+    # Verify the data dict passed to plot_bar_metrics
+    bar_data = mock_plot.call_args.args[0]
+    assert isinstance(bar_data, dict)
+    assert set(bar_data.keys()) == {"1cpu", "4cpu"}
+    assert bar_data["1cpu"] == pytest.approx([600365.0, 2.345388])
+    assert bar_data["4cpu"] == pytest.approx([300182.5, 1.172694])
+
+    # Verify region labels
+    region_labels = mock_plot.call_args.args[1]
+    assert region_labels == ["Total", "Region 2"]
+
+    # Verify metric
+    assert mock_plot.call_args.args[2] == tavg
+
+    # Verify show kwarg is passed through
+    assert mock_plot.call_args.kwargs["show"] is True
+
+
+@mock.patch("access.profiling.manager.plot_bar_metrics")
+def test_bar_chart_all_experiments(mock_plot, scaling_data):
+    """Test plot_bar_chart includes all experiments when none are specified."""
+    paths, ncpus, datasets = scaling_data
+    manager = MockProfilingManager(paths, ncpus, datasets)
+
+    manager.plot_bar_chart(
+        components=["component"],
+        regions=[["Region 1"]],
+        metric=tavg,
+        show=False,
+    )
+    bar_data = mock_plot.call_args.args[0]
+    assert set(bar_data.keys()) == {"1cpu", "4cpu", "2cpu"}
+    assert mock_plot.call_args.kwargs["show"] is False
