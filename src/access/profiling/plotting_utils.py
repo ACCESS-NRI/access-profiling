@@ -1,6 +1,11 @@
 # Copyright 2025 ACCESS-NRI and contributors. See the top-level COPYRIGHT file for details.
 # SPDX-License-Identifier: Apache-2.0
 
+import matplotlib.pyplot as plt
+from matplotlib.figure import Figure
+
+from access.profiling.metrics import ProfilingMetric
+
 
 def calculate_column_widths(table_data: list[list], first_col_fraction: float = None) -> list:
     """Calculate column widths based on content character length and required width for first column.
@@ -61,3 +66,51 @@ def calculate_column_widths(table_data: list[list], first_col_fraction: float = 
         col_widths = [length / total_length for length in max_lengths]
 
     return col_widths
+
+
+def plot_bar_metrics(
+    data: dict[str, list[float]],
+    region_labels: list[str],
+    metric: ProfilingMetric,
+    show: bool = True,
+) -> Figure:
+    """Plots a grouped bar chart of a profiling metric over regions.
+
+    Regions are placed along the x-axis. Within each region group, there is one bar per
+    experiment, coloured by experiment name.
+
+    Args:
+        data (dict[str, list[float]]): Mapping of experiment name to a list of metric values,
+            one per region (in the same order as ``region_labels``).
+        region_labels (list[str]): Ordered list of region display labels for the x-axis.
+        metric (ProfilingMetric): The metric being plotted (used for axis labels and title).
+        show (bool): Whether to call ``plt.show()``. Default: True.
+
+    Returns:
+        Figure: The Matplotlib figure containing the bar chart.
+    """
+    exp_names = list(data.keys())
+    n_experiments = len(exp_names)
+    n_regions = len(region_labels)
+
+    fig, ax = plt.subplots(figsize=(max(8, n_experiments * n_regions * 0.8), 6))
+    bar_width = 0.8 / n_experiments
+    group_positions = list(range(n_regions))
+
+    for i, exp_name in enumerate(exp_names):
+        offsets = [pos + (i - (n_experiments - 1) / 2) * bar_width for pos in group_positions]
+        ax.bar(offsets, data[exp_name], width=bar_width, label=exp_name)
+
+    ax.set_xticks(group_positions)
+    ax.set_xticklabels(region_labels)
+    ax.set_xlabel("Region")
+    ax.set_ylabel(f"{metric.name} ({metric.units})")
+    ax.set_title(f"{metric.description}")
+    ax.legend(title="Experiment")
+    ax.grid(axis="y", linestyle="--", alpha=0.7)
+    fig.tight_layout()
+
+    if show:
+        plt.show()
+
+    return fig
