@@ -123,8 +123,8 @@ class ProfilingExperiment:
     Args:
         experiment_path (Path): Path to the experiment directory.
         result_path (Path | None): Path to a separate results directory. If None, results are assumed to be
-            inside experiment_path. When provided, the results directory is also traversed during archival
-            and its contents are stored at the archive root alongside experiment_path contents.
+            inside experiment_path. When provided, the results directory is also traversed during archival.
+            experiment_path contents are stored under experiment/ and result_path contents under results/.
     """
 
     experiment_path: Path  # Path to the experiment directory
@@ -178,7 +178,8 @@ class ProfilingExperiment:
 
         Symlinks to files and directories inside the experiment directory will be include as symlinks. Symlinks to files
         and directories outside the experiment directory will be followed if follow_symlinks is True, otherwise they
-        will be included as symlinks. If result_path is set, its contents are also archived at the archive root.
+        will be included as symlinks. experiment_path contents are stored under experiment/ in the archive. If
+        result_path is set, its contents are stored under results/ in the archive.
 
         Args:
             archive_path (Path): Path to the archive destination. This should include the file name, but without
@@ -210,19 +211,21 @@ class ProfilingExperiment:
 
         archive_file = archive_path.with_suffix(".tar.gz")
         mode = "w:gz" if overwrite else "x:gz"
-        if overwrite and archive_file.exists():
+        if not overwrite and archive_file.exists():
             raise FileExistsError(f"Archive destination {archive_file} already exists.")
 
         exclude_dirs = exclude_dirs or []
         exclude_files = exclude_files or []
 
-        paths_to_walk = [self.experiment_path] if self.result_path is None else [self.experiment_path, self.result_path]
+        paths_to_walk = (
+            [(self.experiment_path, Path("experiment"))]
+            if self.result_path is None
+            else [(self.experiment_path, Path("experiment")), (self.result_path, Path("results"))]
+        )
 
         with tarfile.open(archive_file, mode) as tar:
-            for root in paths_to_walk:
-                for file, arcname in experiment_directory_walker(
-                    root, root.relative_to(root), root, follow_symlinks=follow_symlinks
-                ):
+            for root, prefix in paths_to_walk:
+                for file, arcname in experiment_directory_walker(root, prefix, root, follow_symlinks=follow_symlinks):
                     # Skip if file is inside an excluded directory pattern
                     if any(any(parent.match(pat) for pat in exclude_dirs) for parent in file.parents):
                         continue

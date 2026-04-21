@@ -222,12 +222,12 @@ def test_profiling_experiment_archive(mock_open, tmp_path, setup_experiment_dire
     mock_open.assert_called_with(Path("/fake/archive").with_suffix(".tar.gz"), "x:gz")  # Check tarfile opening
     assert mock_tarfile.add.call_count == len(files), "All files should be added to the archive."
     for file in files:
-        if "scratch" in file.parts:
-            arcname = file.relative_to(Path("scratch"))
-        elif "exp1" in file.parts:
-            arcname = file.relative_to(Path("exp1"))
+        if "exp1" in file.parts:
+            arcname = Path("experiment") / file.relative_to(Path("exp1"))
+        elif "scratch" in file.parts:
+            arcname = Path("experiment") / file.relative_to(Path("scratch"))
         else:
-            arcname = file
+            arcname = Path("experiment") / file
         mock_tarfile.add.assert_any_call(tmp_path / file, arcname=arcname)
 
 
@@ -253,12 +253,12 @@ def test_profiling_experiment_archive_follow_symlinks(mock_open, tmp_path, setup
     mock_open.assert_called_with(Path("/fake/archive").with_suffix(".tar.gz"), "x:gz")  # Check tarfile opening
     assert mock_tarfile.add.call_count == len(files), "All files should be added to the archive."
     for file in files:
-        if "scratch" in file.parts:
-            arcname = file.relative_to(Path("scratch"))
-        elif "exp1" in file.parts:
-            arcname = file.relative_to(Path("exp1"))
+        if "exp1" in file.parts:
+            arcname = Path("experiment") / file.relative_to(Path("exp1"))
+        elif "scratch" in file.parts:
+            arcname = Path("experiment") / file.relative_to(Path("scratch"))
         else:
-            arcname = file
+            arcname = Path("experiment") / file
         mock_tarfile.add.assert_any_call(tmp_path / file, arcname=arcname)
 
 
@@ -296,18 +296,18 @@ def test_profiling_experiment_archive_with_filters(mock_open, tmp_path, setup_ex
         "Only non-excluded files should be added to the archive."
     )
     for file in files_to_archive:
-        if "scratch" in file.parts:
-            arcname = file.relative_to(Path("scratch"))
-        elif "exp1" in file.parts:
-            arcname = file.relative_to(Path("exp1"))
+        if "exp1" in file.parts:
+            arcname = Path("experiment") / file.relative_to(Path("exp1"))
+        elif "scratch" in file.parts:
+            arcname = Path("experiment") / file.relative_to(Path("scratch"))
         else:
-            arcname = file
+            arcname = Path("experiment") / file
         mock_tarfile.add.assert_any_call(tmp_path / file, arcname=arcname)
 
 
 @mock.patch("access.profiling.experiment.tarfile.open")
 def test_profiling_experiment_archive_with_result_path(mock_open, tmp_path):
-    """Test that archive() traverses both experiment_path and result_path, storing result files at archive root."""
+    """Test that archive() traverses both experiment_path and result_path, storing under experiment/ and results/."""
 
     # Create experiment directory with one file
     exp_dir = tmp_path / "exp1"
@@ -330,11 +330,11 @@ def test_profiling_experiment_archive_with_result_path(mock_open, tmp_path):
     exp.status = ProfilingExperimentStatus.DONE
     exp.archive(Path("/fake/archive"))
 
-    # experiment_path and result_path files should both be added
+    # experiment_path and result_path files should both be added under their respective prefixes
     assert mock_tarfile.add.call_count == 3
-    mock_tarfile.add.assert_any_call(exp_file, arcname=Path("config.yaml"))
-    mock_tarfile.add.assert_any_call(result_file1, arcname=Path("output.log"))
-    mock_tarfile.add.assert_any_call(result_file2, arcname=Path("timing.txt"))
+    mock_tarfile.add.assert_any_call(exp_file, arcname=Path("experiment/config.yaml"))
+    mock_tarfile.add.assert_any_call(result_file1, arcname=Path("results/output.log"))
+    mock_tarfile.add.assert_any_call(result_file2, arcname=Path("results/timing.txt"))
 
     # result_path cleared after archiving
     assert exp.result_path is None
