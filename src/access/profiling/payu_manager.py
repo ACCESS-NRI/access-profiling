@@ -175,7 +175,9 @@ class PayuManager(ProfilingManager, ABC):
                 pert_config["config.yaml"]["walltime"] = str(timedelta(hours=walltime_hrs))
 
                 generator_config["Perturbation_Experiment"][f"Experiment_{seqnum}"] = pert_config
-                self.experiments[branch] = ProfilingExperiment(self.work_dir / branch / self._repository_directory)
+                self.experiments[branch] = ProfilingExperiment(
+                    experiment_path=self.work_dir / branch / self._repository_directory
+                )
 
                 seqnum += 1
 

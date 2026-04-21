@@ -49,7 +49,7 @@ class ProfilingManager(ABC):
                 if branch_path.is_file():
                     branch_name = branch_path.name[: -len(".tar.gz")]
                     logger.info(f"Found archived experiment: {branch_name}")
-                    self.experiments[branch_name] = ProfilingExperiment(branch_path)
+                    self.experiments[branch_name] = ProfilingExperiment(experiment_path=branch_path)
 
     def __repr__(self) -> str:
         """Returns a string representation of the ProfilingManager."""
@@ -140,7 +140,7 @@ class ProfilingManager(ABC):
             raise ValueError(f"Experiment path '{path}' does not exist or is not a directory.")
         if not path.resolve().is_relative_to(self.work_dir.resolve()):
             raise ValueError(f"Experiment path '{path}' is not inside the working directory '{self.work_dir}'.")
-        self.experiments[name] = ProfilingExperiment(path)
+        self.experiments[name] = ProfilingExperiment(experiment_path=path)
         self.experiments[name].status = ProfilingExperimentStatus.DONE
 
     def delete_experiment(self, name: str) -> None:

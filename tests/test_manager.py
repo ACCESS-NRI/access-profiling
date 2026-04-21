@@ -36,7 +36,7 @@ class MockProfilingManager(ProfilingManager):
 
         # Pre-generate experiments
         for path in paths:
-            self.experiments[path.name] = ProfilingExperiment(path)
+            self.experiments[path.name] = ProfilingExperiment(experiment_path=path)
             self.experiments[path.name].status = ProfilingExperimentStatus.DONE
 
         if ncpus is not None:
@@ -92,7 +92,7 @@ def test_repr(scaling_data):
     Working directory: PosixPath('/fake/work_dir')
     Archive directory: PosixPath('/fake/archive_dir')
     Experiments:
-        'work_dir': ProfilingExperiment(path=PosixPath('/fake/work_dir'), status=DONE)
+        'work_dir': ProfilingExperiment(experiment_path=PosixPath('/fake/work_dir'), status=DONE)
     Data:
         No parsed data.
 """
@@ -136,8 +136,8 @@ def test_archive_discovery(mock_experiment, mock_is_file, mock_glob, mock_is_dir
     manager = MockProfilingManager(paths=[])
     assert set(manager.experiments.keys()) == {"exp1", "exp2"}
     assert mock_experiment.call_count == 2
-    mock_experiment.assert_any_call(Path("/fake/archive_dir/exp1.tar.gz"))
-    mock_experiment.assert_any_call(Path("/fake/archive_dir/exp2.tar.gz"))
+    mock_experiment.assert_any_call(experiment_path=Path("/fake/archive_dir/exp1.tar.gz"))
+    mock_experiment.assert_any_call(experiment_path=Path("/fake/archive_dir/exp2.tar.gz"))
 
 
 @mock.patch("access.profiling.manager.Path.mkdir")
@@ -191,7 +191,7 @@ def test_add_experiment_from_directory(mock_is_dir):
     assert manager.experiments["relative_experiment"].status == ProfilingExperimentStatus.DONE, (
         "Experiment status should be set to DONE."
     )
-    assert manager.experiments["relative_experiment"].path == Path("/fake/work_dir/relative_experiment"), (
+    assert manager.experiments["relative_experiment"].experiment_path == Path("/fake/work_dir/relative_experiment"), (
         "Experiment path should be correctly resolved to absolute path."
     )
 

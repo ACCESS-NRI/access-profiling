@@ -49,13 +49,13 @@ def test_profiling_experiment():
 
     # Instantiate ProfilingExperiment
     path = Path("/fake/work_dir")
-    experiment = ProfilingExperiment(path=path)
+    experiment = ProfilingExperiment(experiment_path=path)
 
     # Check representation
-    assert repr(experiment) == "ProfilingExperiment(path=PosixPath('/fake/work_dir'), status=NEW)"
+    assert repr(experiment) == "ProfilingExperiment(experiment_path=PosixPath('/fake/work_dir'), status=NEW)"
 
     # Assert path and status
-    assert experiment.path == path
+    assert experiment.experiment_path == path
     assert experiment.status == ProfilingExperimentStatus.NEW
 
     # Change status and assert
@@ -77,10 +77,10 @@ def test_profiling_experiment_archived(mock_tarfile_open):
 
     # Instantiate ProfilingExperiment with a .tar.gz path
     path = Path("/fake/path.tar.gz")
-    experiment = ProfilingExperiment(path=path)
+    experiment = ProfilingExperiment(experiment_path=path)
 
     # Assert path and status
-    assert experiment.path == path
+    assert experiment.experiment_path == path
     assert experiment.status == ProfilingExperimentStatus.ARCHIVED
 
     # Check directory context manager
@@ -96,7 +96,7 @@ def test_profiling_experiment_archived(mock_tarfile_open):
 def test_profiling_experiment_archive_not_done(mock_open, caplog):
     """Test the archive method of ProfilingExperiment for non-DONE statuses."""
 
-    exp = ProfilingExperiment(Path("/fake/work_dir/exp1"))
+    exp = ProfilingExperiment(experiment_path=Path("/fake/work_dir/exp1"))
     for status in ProfilingExperimentStatus:
         if status == ProfilingExperimentStatus.DONE:
             continue
@@ -113,7 +113,7 @@ def test_profiling_experiment_archive_not_done(mock_open, caplog):
 def test_profiling_experiment_archive_file_exists():
     """Test the archive method of ProfilingExperiment when the archive file already exists."""
 
-    exp = ProfilingExperiment(Path("/fake/work_dir/exp1"))
+    exp = ProfilingExperiment(experiment_path=Path("/fake/work_dir/exp1"))
     exp.status = ProfilingExperimentStatus.DONE
 
     with mock.patch.object(Path, "exists", return_value=True) as mock_exists, pytest.raises(FileExistsError):
@@ -126,7 +126,7 @@ def test_profiling_experiment_archive_file_exists():
 def test_profiling_experiment_archive_file_overwrite(mock_walker, mock_open):
     """Test the archive method of ProfilingExperiment when the archive file already exists and overwrite is True."""
 
-    exp = ProfilingExperiment(Path("/fake/work_dir/exp1"))
+    exp = ProfilingExperiment(experiment_path=Path("/fake/work_dir/exp1"))
     exp.status = ProfilingExperimentStatus.DONE
 
     exp.archive(Path("/fake/archive"), overwrite=True)
@@ -211,7 +211,7 @@ def test_profiling_experiment_archive(mock_open, tmp_path, setup_experiment_dire
     mock_open.return_value = mock.MagicMock(__enter__=lambda s: mock_tarfile, __exit__=lambda *a: None)
 
     # Instantiate ProfilingExperiment
-    exp = ProfilingExperiment(tmp_path / Path("exp1"))
+    exp = ProfilingExperiment(experiment_path=tmp_path / Path("exp1"))
     exp.status = ProfilingExperimentStatus.DONE
 
     # Archive experiment with no exclude patterns, not following symlinks (default)
@@ -242,7 +242,7 @@ def test_profiling_experiment_archive_follow_symlinks(mock_open, tmp_path, setup
     mock_open.return_value = mock.MagicMock(__enter__=lambda s: mock_tarfile, __exit__=lambda *a: None)
 
     # Instantiate ProfilingExperiment
-    exp = ProfilingExperiment(tmp_path / Path("exp1"))
+    exp = ProfilingExperiment(experiment_path=tmp_path / Path("exp1"))
     exp.status = ProfilingExperimentStatus.DONE
 
     # Archive experiment with no exclude patterns, following symlinks
@@ -284,7 +284,7 @@ def test_profiling_experiment_archive_with_filters(mock_open, tmp_path, setup_ex
     mock_open.return_value = mock.MagicMock(__enter__=lambda s: mock_tarfile, __exit__=lambda *a: None)
 
     # Instantiate ProfilingExperiment
-    exp = ProfilingExperiment(tmp_path / Path("exp1"))
+    exp = ProfilingExperiment(experiment_path=tmp_path / Path("exp1"))
     exp.status = ProfilingExperimentStatus.DONE
 
     # Archive experiment with exclude patterns
@@ -303,3 +303,39 @@ def test_profiling_experiment_archive_with_filters(mock_open, tmp_path, setup_ex
         else:
             arcname = file
         mock_tarfile.add.assert_any_call(tmp_path / file, arcname=arcname)
+
+
+@mock.patch("access.profiling.experiment.tarfile.open")
+def test_profiling_experiment_archive_with_result_path(mock_open, tmp_path):
+    """Test that archive() traverses both experiment_path and result_path, storing result files at archive root."""
+
+    # Create experiment directory with one file
+    exp_dir = tmp_path / "exp1"
+    exp_dir.mkdir()
+    exp_file = exp_dir / "config.yaml"
+    exp_file.touch()
+
+    # Create separate result directory with two files
+    result_dir = tmp_path / "scratch" / "results"
+    result_dir.mkdir(parents=True)
+    result_file1 = result_dir / "output.log"
+    result_file2 = result_dir / "timing.txt"
+    result_file1.touch()
+    result_file2.touch()
+
+    mock_tarfile = mock.MagicMock()
+    mock_open.return_value = mock.MagicMock(__enter__=lambda s: mock_tarfile, __exit__=lambda *a: None)
+
+    exp = ProfilingExperiment(experiment_path=exp_dir, result_path=result_dir)
+    exp.status = ProfilingExperimentStatus.DONE
+    exp.archive(Path("/fake/archive"))
+
+    # experiment_path and result_path files should both be added
+    assert mock_tarfile.add.call_count == 3
+    mock_tarfile.add.assert_any_call(exp_file, arcname=Path("config.yaml"))
+    mock_tarfile.add.assert_any_call(result_file1, arcname=Path("output.log"))
+    mock_tarfile.add.assert_any_call(result_file2, arcname=Path("timing.txt"))
+
+    # result_path cleared after archiving
+    assert exp.result_path is None
+    assert exp.experiment_path == Path("/fake/archive.tar.gz")

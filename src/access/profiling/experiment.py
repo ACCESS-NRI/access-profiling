@@ -121,20 +121,30 @@ class ProfilingExperiment:
     """Represents a profiling experiment.
 
     Args:
-        path (Path): Path to the experiment directory.
+        experiment_path (Path): Path to the experiment directory.
+        result_path (Path | None): Path to a separate results directory. If None, results are assumed to be
+            inside experiment_path. When provided, the results directory is also traversed during archival
+            and its contents are stored at the archive root alongside experiment_path contents.
     """
 
-    path: Path  # Path to the experiment directory
+    experiment_path: Path  # Path to the experiment directory
+    result_path: Path | None  # Path to a separate results directory, or None
     status: ProfilingExperimentStatus = ProfilingExperimentStatus.NEW  # Status of the experiment
 
-    def __init__(self, path: Path) -> None:
-        self.path = path
-        if self.path.suffixes == [".tar", ".gz"]:
+    def __init__(self, experiment_path: Path, result_path: Path | None = None) -> None:
+        self.experiment_path = experiment_path
+        self.result_path = result_path
+        if self.experiment_path.suffixes == [".tar", ".gz"]:
             self.status = ProfilingExperimentStatus.ARCHIVED
 
     def __repr__(self) -> str:
         """Returns a string representation of the ProfilingExperiment."""
-        return f"{type(self).__name__}(path={self.path!r}, status={self.status.name})"
+        if self.result_path is not None:
+            return (
+                f"{type(self).__name__}(experiment_path={self.experiment_path!r}, "
+                f"result_path={self.result_path!r}, status={self.status.name})"
+            )
+        return f"{type(self).__name__}(experiment_path={self.experiment_path!r}, status={self.status.name})"
 
     @contextmanager
     def directory(self):
@@ -146,13 +156,13 @@ class ProfilingExperiment:
         Returns:
             Path: The path to the directory.
         """
-        if self.path.suffixes == [".tar", ".gz"]:
+        if self.experiment_path.suffixes == [".tar", ".gz"]:
             with tempfile.TemporaryDirectory(prefix="access-profiling_", suffix="_data") as tmpdir:
-                with tarfile.open(self.path) as tar:
+                with tarfile.open(self.experiment_path) as tar:
                     tar.extractall(path=Path(tmpdir), filter="data")
                 yield Path(tmpdir)
         else:
-            yield self.path
+            yield self.experiment_path
 
     def archive(
         self,
@@ -168,7 +178,7 @@ class ProfilingExperiment:
 
         Symlinks to files and directories inside the experiment directory will be include as symlinks. Symlinks to files
         and directories outside the experiment directory will be followed if follow_symlinks is True, otherwise they
-        will be included as symlinks.
+        will be included as symlinks. If result_path is set, its contents are also archived at the archive root.
 
         Args:
             archive_path (Path): Path to the archive destination. This should include the file name, but without
@@ -183,39 +193,45 @@ class ProfilingExperiment:
             ValueError: If the experiment status is unknown.
         """
         if self.status == ProfilingExperimentStatus.NEW:
-            logger.warning(f"Experiment at {self.path} is not yet started. Skipping archiving.", stacklevel=2)
+            logger.warning(
+                f"Experiment at {self.experiment_path} is not yet started. Skipping archiving.", stacklevel=2
+            )
             return
         elif self.status == ProfilingExperimentStatus.RUNNING:
-            logger.warning(f"Experiment at {self.path} is still running. Skipping archiving.", stacklevel=2)
+            logger.warning(f"Experiment at {self.experiment_path} is still running. Skipping archiving.", stacklevel=2)
             return
         elif self.status == ProfilingExperimentStatus.DONE:
-            logger.info(f"Archiving experiment at {self.path} to {archive_path.with_suffix('.tar.gz')}")
+            logger.info(f"Archiving experiment at {self.experiment_path} to {archive_path.with_suffix('.tar.gz')}")
         elif self.status == ProfilingExperimentStatus.ARCHIVED:
-            logger.warning(f"Experiment at {self.path} is already archived. Skipping archiving.", stacklevel=2)
+            logger.warning(
+                f"Experiment at {self.experiment_path} is already archived. Skipping archiving.", stacklevel=2
+            )
             return
 
         archive_file = archive_path.with_suffix(".tar.gz")
-        if overwrite:
-            mode = "w:gz"
-        else:
-            mode = "x:gz"
-            if archive_file.exists():
-                raise FileExistsError(f"Archive destination {archive_file} already exists.")
+        mode = "w:gz" if overwrite else "x:gz"
+        if overwrite and archive_file.exists():
+            raise FileExistsError(f"Archive destination {archive_file} already exists.")
 
         exclude_dirs = exclude_dirs or []
         exclude_files = exclude_files or []
+
+        paths_to_walk = [self.experiment_path] if self.result_path is None else [self.experiment_path, self.result_path]
+
         with tarfile.open(archive_file, mode) as tar:
-            for file, arcname in experiment_directory_walker(
-                self.path, self.path.relative_to(self.path), self.path, follow_symlinks=follow_symlinks
-            ):
-                # Skip if file is inside an excluded directory pattern
-                if any(any(parent.match(pat) for pat in exclude_dirs) for parent in file.parents):
-                    continue
-                # Skip if the file itself matches an excluded filename pattern
-                if any(file.match(pat) for pat in exclude_files):
-                    continue
-                logger.debug(f"Archiving file: {file} as {arcname}")
-                tar.add(file, arcname=arcname)
+            for root in paths_to_walk:
+                for file, arcname in experiment_directory_walker(
+                    root, root.relative_to(root), root, follow_symlinks=follow_symlinks
+                ):
+                    # Skip if file is inside an excluded directory pattern
+                    if any(any(parent.match(pat) for pat in exclude_dirs) for parent in file.parents):
+                        continue
+                    # Skip if the file itself matches an excluded filename pattern
+                    if any(file.match(pat) for pat in exclude_files):
+                        continue
+                    logger.debug(f"Archiving file: {file} as {arcname}")
+                    tar.add(file, arcname=arcname)
 
         self.status = ProfilingExperimentStatus.ARCHIVED
-        self.path = archive_file
+        self.experiment_path = archive_file
+        self.result_path = None
