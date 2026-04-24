@@ -71,24 +71,24 @@ class ProfilingManager(ABC):
         return summary
 
     @abstractmethod
-    def profiling_logs(self, experiment_path: Path, result_path: Path | None) -> dict[str, ProfilingLog]:
+    def profiling_logs(self, experiment_path: Path, run_path: Path | None) -> dict[str, ProfilingLog]:
         """Returns all profiling logs from the specified path.
 
         Args:
             experiment_path (Path): Path to the experiment directory.
-            result_path (Path | None): Optional path to a separate results directory.
+            run_path (Path | None): Optional path to a separate runs directory.
 
         Returns:
             dict[str, ProfilingLog]: Dictionary of profiling logs.
         """
 
     @abstractmethod
-    def parse_ncpus(self, experiment_path: Path, result_path: Path | None) -> int:
+    def parse_ncpus(self, experiment_path: Path, run_path: Path | None) -> int:
         """Parses the number of CPUs used in a given experiment in the specified path.
 
         Args:
             experiment_path (Path): Path to the experiment directory.
-            result_path (Path | None): Optional path to a separate results directory.
+            run_path (Path | None): Optional path to a separate runs directory.
 
         Returns:
             int: Number of CPUs used in the experiment.
@@ -165,9 +165,9 @@ class ProfilingManager(ABC):
             if exp.status == ProfilingExperimentStatus.DONE or exp.status == ProfilingExperimentStatus.ARCHIVED:
                 logger.info(f"Parsing profiling data for experiment '{exp_name}'.")
                 self.data[exp_name] = {}
-                with exp.directory() as (exp_path, result_path):
+                with exp.directory() as (exp_path, run_path):
                     # Parse all logs
-                    logs = self.profiling_logs(exp_path, result_path)
+                    logs = self.profiling_logs(exp_path, run_path)
                     for log_name, log in logs.items():
                         logger.info(f"Parsing {log_name} profiling log: {log.filepath}. ")
                         if log.optional:
@@ -205,9 +205,9 @@ class ProfilingManager(ABC):
         # Find number of cpus used for each experiment
         ncpus = {}
         for exp_name in self.data:
-            with self.experiments[exp_name].directory() as (exp_path, result_path):
+            with self.experiments[exp_name].directory() as (exp_path, run_path):
                 # Find number of cpus used
-                ncpus[exp_name] = self.parse_ncpus(exp_path, result_path)
+                ncpus[exp_name] = self.parse_ncpus(exp_path, run_path)
 
         # Gather scaling data for each component
         scaling_data = []

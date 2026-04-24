@@ -122,49 +122,49 @@ class ProfilingExperiment:
 
     Args:
         experiment_path (Path): Path to the experiment directory.
-        result_path (Path | None): Path to a separate results directory. If None, results are assumed to be
-            inside experiment_path. When provided, the results directory is also traversed during archival.
-            experiment_path contents are stored under experiment/ and result_path contents under results/.
+        run_path (Path | None): Path to a separate runs directory. If None, runs are assumed to be
+            inside experiment_path. When provided, the runs directory is also traversed during archival.
+            experiment_path contents are stored under experiment/ and run_path contents under runs/.
     """
 
     experiment_path: Path  # Path to the experiment directory
-    result_path: Path | None  # Path to a separate results directory, or None
+    run_path: Path | None  # Path to a separate runs directory, or None
     status: ProfilingExperimentStatus = ProfilingExperimentStatus.NEW  # Status of the experiment
 
-    def __init__(self, experiment_path: Path, result_path: Path | None = None) -> None:
+    def __init__(self, experiment_path: Path, run_path: Path | None = None) -> None:
         self.experiment_path = experiment_path
-        self.result_path = result_path
+        self.run_path = run_path
         if self.experiment_path.suffixes == [".tar", ".gz"]:
             self.status = ProfilingExperimentStatus.ARCHIVED
 
     def __repr__(self) -> str:
         """Returns a string representation of the ProfilingExperiment."""
-        if self.result_path is not None:
+        if self.run_path is not None:
             return (
                 f"{type(self).__name__}(experiment_path={self.experiment_path!r}, "
-                f"result_path={self.result_path!r}, status={self.status.name})"
+                f"run_path={self.run_path!r}, status={self.status.name})"
             )
         return f"{type(self).__name__}(experiment_path={self.experiment_path!r}, status={self.status.name})"
 
     @contextmanager
     def directory(self):
-        """Context manager returning the experiment and results directories.
+        """Context manager returning the experiment and runs directories.
 
         If the experiment has been archived, it will be extracted to a temporary directory. Otherwise, the original
         directory paths will be used. Note that after exiting the context, the temporary directory is removed.
 
         Returns:
-            tuple[Path, Path | None]: The experiment directory path and optional results directory path.
+            tuple[Path, Path | None]: The experiment directory path and optional runs directory path.
         """
         if self.experiment_path.suffixes == [".tar", ".gz"]:
             with tempfile.TemporaryDirectory(prefix="access-profiling_", suffix="_data") as tmpdir:
                 with tarfile.open(self.experiment_path) as tar:
                     tar.extractall(path=Path(tmpdir), filter="data")
                 experiment_path = Path(tmpdir) / "experiment"
-                result_path = Path(tmpdir) / "results"
-                yield experiment_path, result_path if result_path.exists() else None
+                run_path = Path(tmpdir) / "runs"
+                yield experiment_path, run_path if run_path.exists() else None
         else:
-            yield self.experiment_path, self.result_path
+            yield self.experiment_path, self.run_path
 
     def archive(
         self,
@@ -181,7 +181,7 @@ class ProfilingExperiment:
         Symlinks to files and directories inside the experiment directory will be include as symlinks. Symlinks to files
         and directories outside the experiment directory will be followed if follow_symlinks is True, otherwise they
         will be included as symlinks. experiment_path contents are stored under experiment/ in the archive. If
-        result_path is set, its contents are stored under results/ in the archive.
+        run_path is set, its contents are stored under runs/ in the archive.
 
         Args:
             archive_path (Path): Path to the archive destination. This should include the file name, but without
@@ -221,8 +221,8 @@ class ProfilingExperiment:
 
         paths_to_walk = (
             [(self.experiment_path, Path("experiment"))]
-            if self.result_path is None
-            else [(self.experiment_path, Path("experiment")), (self.result_path, Path("results"))]
+            if self.run_path is None
+            else [(self.experiment_path, Path("experiment")), (self.run_path, Path("runs"))]
         )
 
         with tarfile.open(archive_file, mode) as tar:
@@ -239,4 +239,4 @@ class ProfilingExperiment:
 
         self.status = ProfilingExperimentStatus.ARCHIVED
         self.experiment_path = archive_file
-        self.result_path = None
+        self.run_path = None

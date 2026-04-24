@@ -48,13 +48,13 @@ class MockProfilingManager(ProfilingManager):
         if datasets is not None:
             self.data = dict(zip([path.name for path in paths], datasets, strict=True))
 
-    def parse_ncpus(self, experiment_path, result_path):
+    def parse_ncpus(self, experiment_path, run_path):
         """Simulate parsing number of CPUs for a given path."""
-        self._last_parse_ncpus_args = (experiment_path, result_path)
-        self._parse_ncpus_calls.append((experiment_path, result_path))
+        self._last_parse_ncpus_args = (experiment_path, run_path)
+        self._parse_ncpus_calls.append((experiment_path, run_path))
         return self._mock_ncpus[experiment_path.name]
 
-    def profiling_logs(self, experiment_path, result_path):  # pyright: ignore[reportIncompatibleMethodOverride]
+    def profiling_logs(self, experiment_path, run_path):  # pyright: ignore[reportIncompatibleMethodOverride]
         """Simulate parsing profiling data for a given path."""
         pass
 
@@ -235,7 +235,7 @@ def test_parse_profiling_data(caplog):
 
     exp_name = "exp1"
     manager = MockProfilingManager(paths=[Path("/fake/work_dir/" + exp_name)])
-    manager.experiments[exp_name].result_path = Path("/fake/results/exp1")
+    manager.experiments[exp_name].run_path = Path("/fake/runs/exp1")
 
     with mock.patch.object(manager, "profiling_logs") as mock_profiling_logs:
         # Setup mock profiling logs
@@ -256,7 +256,7 @@ def test_parse_profiling_data(caplog):
             "Parsed datasets should not contain 'missing_log' key as the file is missing."
         )
         assert mock_log.parse.call_count == 3, "Parse method should be called three times."
-        mock_profiling_logs.assert_called_once_with(Path("/fake/work_dir/exp1"), Path("/fake/results/exp1"))
+        mock_profiling_logs.assert_called_once_with(Path("/fake/work_dir/exp1"), Path("/fake/runs/exp1"))
 
     manager.experiments[exp_name].status = ProfilingExperimentStatus.RUNNING
     with caplog.at_level(logging.WARNING):
@@ -275,7 +275,7 @@ def test_scaling_data(mock_plot, scaling_data):
     """
     paths, ncpus, datasets = scaling_data
     manager = MockProfilingManager(paths, ncpus, datasets)
-    manager.experiments["4cpu"].result_path = Path("/fake/results/4cpu")
+    manager.experiments["4cpu"].run_path = Path("/fake/runs/4cpu")
 
     # Test that __repr__ returns info about the data
     result = repr(manager)
@@ -313,7 +313,7 @@ def test_scaling_data(mock_plot, scaling_data):
     assert component_data[count].sel(region="Total").values.tolist() == [1, 1]
     assert component_data[tavg].sel(region="Total").values.tolist() == [600365.0, 300182.5]
     assert mock_plot.call_args.args[1] == tavg
-    assert (Path("4cpu"), Path("/fake/results/4cpu")) in manager._parse_ncpus_calls
+    assert (Path("4cpu"), Path("/fake/runs/4cpu")) in manager._parse_ncpus_calls
 
 
 @mock.patch("access.profiling.manager.plot_bar_metrics")
