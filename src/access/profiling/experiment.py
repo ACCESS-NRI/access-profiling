@@ -121,30 +121,27 @@ class ProfilingExperiment:
     """Represents a profiling experiment.
 
     Args:
-        experiment_path (Path): Path to the experiment directory.
+        path (Path): Path to the experiment directory.
         run_path (Path | None): Path to a separate runs directory. If None, runs are assumed to be
-            inside experiment_path. When provided, the runs directory is also traversed during archival.
-            experiment_path contents are stored under experiment/ and run_path contents under runs/.
+            inside path. When provided, the runs directory is also traversed during archival.
+            path contents are stored under experiment/ and run_path contents under runs/.
     """
 
-    experiment_path: Path  # Path to the experiment directory
+    path: Path  # Path to the experiment directory
     run_path: Path | None  # Path to a separate runs directory, or None
     status: ProfilingExperimentStatus = ProfilingExperimentStatus.NEW  # Status of the experiment
 
-    def __init__(self, experiment_path: Path, run_path: Path | None = None) -> None:
-        self.experiment_path = experiment_path
+    def __init__(self, path: Path, run_path: Path | None = None) -> None:
+        self.path = path
         self.run_path = run_path
-        if self.experiment_path.suffixes == [".tar", ".gz"]:
+        if self.path.suffixes == [".tar", ".gz"]:
             self.status = ProfilingExperimentStatus.ARCHIVED
 
     def __repr__(self) -> str:
         """Returns a string representation of the ProfilingExperiment."""
         if self.run_path is not None:
-            return (
-                f"{type(self).__name__}(experiment_path={self.experiment_path!r}, "
-                f"run_path={self.run_path!r}, status={self.status.name})"
-            )
-        return f"{type(self).__name__}(experiment_path={self.experiment_path!r}, status={self.status.name})"
+            return f"{type(self).__name__}(path={self.path!r}, run_path={self.run_path!r}, status={self.status.name})"
+        return f"{type(self).__name__}(path={self.path!r}, status={self.status.name})"
 
     @contextmanager
     def directory(self):
@@ -156,15 +153,15 @@ class ProfilingExperiment:
         Returns:
             tuple[Path, Path | None]: The experiment directory path and optional runs directory path.
         """
-        if self.experiment_path.suffixes == [".tar", ".gz"]:
+        if self.path.suffixes == [".tar", ".gz"]:
             with tempfile.TemporaryDirectory(prefix="access-profiling_", suffix="_data") as tmpdir:
-                with tarfile.open(self.experiment_path) as tar:
+                with tarfile.open(self.path) as tar:
                     tar.extractall(path=Path(tmpdir), filter="data")
-                experiment_path = Path(tmpdir) / "experiment"
+                path = Path(tmpdir) / "experiment"
                 run_path = Path(tmpdir) / "runs"
-                yield experiment_path, run_path if run_path.exists() else None
+                yield path, run_path if run_path.exists() else None
         else:
-            yield self.experiment_path, self.run_path
+            yield self.path, self.run_path
 
     def archive(
         self,
@@ -180,7 +177,7 @@ class ProfilingExperiment:
 
         Symlinks to files and directories inside the experiment directory will be include as symlinks. Symlinks to files
         and directories outside the experiment directory will be followed if follow_symlinks is True, otherwise they
-        will be included as symlinks. experiment_path contents are stored under experiment/ in the archive. If
+        will be included as symlinks. path contents are stored under experiment/ in the archive. If
         run_path is set, its contents are stored under runs/ in the archive.
 
         Args:
@@ -196,19 +193,15 @@ class ProfilingExperiment:
             ValueError: If the experiment status is unknown.
         """
         if self.status == ProfilingExperimentStatus.NEW:
-            logger.warning(
-                f"Experiment at {self.experiment_path} is not yet started. Skipping archiving.", stacklevel=2
-            )
+            logger.warning(f"Experiment at {self.path} is not yet started. Skipping archiving.", stacklevel=2)
             return
         elif self.status == ProfilingExperimentStatus.RUNNING:
-            logger.warning(f"Experiment at {self.experiment_path} is still running. Skipping archiving.", stacklevel=2)
+            logger.warning(f"Experiment at {self.path} is still running. Skipping archiving.", stacklevel=2)
             return
         elif self.status == ProfilingExperimentStatus.DONE:
-            logger.info(f"Archiving experiment at {self.experiment_path} to {archive_path.with_suffix('.tar.gz')}")
+            logger.info(f"Archiving experiment at {self.path} to {archive_path.with_suffix('.tar.gz')}")
         elif self.status == ProfilingExperimentStatus.ARCHIVED:
-            logger.warning(
-                f"Experiment at {self.experiment_path} is already archived. Skipping archiving.", stacklevel=2
-            )
+            logger.warning(f"Experiment at {self.path} is already archived. Skipping archiving.", stacklevel=2)
             return
 
         archive_file = archive_path.with_suffix(".tar.gz")
@@ -220,9 +213,9 @@ class ProfilingExperiment:
         exclude_files = exclude_files or []
 
         paths_to_walk = (
-            [(self.experiment_path, Path("experiment"))]
+            [(self.path, Path("experiment"))]
             if self.run_path is None
-            else [(self.experiment_path, Path("experiment")), (self.run_path, Path("runs"))]
+            else [(self.path, Path("experiment")), (self.run_path, Path("runs"))]
         )
 
         with tarfile.open(archive_file, mode) as tar:
@@ -238,5 +231,5 @@ class ProfilingExperiment:
                     tar.add(file, arcname=arcname)
 
         self.status = ProfilingExperimentStatus.ARCHIVED
-        self.experiment_path = archive_file
+        self.path = archive_file
         self.run_path = None

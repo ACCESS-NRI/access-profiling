@@ -49,7 +49,7 @@ class ProfilingManager(ABC):
                 if branch_path.is_file():
                     branch_name = branch_path.name[: -len(".tar.gz")]
                     logger.info(f"Found archived experiment: {branch_name}")
-                    self.experiments[branch_name] = ProfilingExperiment(experiment_path=branch_path)
+                    self.experiments[branch_name] = ProfilingExperiment(path=branch_path)
 
     def __repr__(self) -> str:
         """Returns a string representation of the ProfilingManager."""
@@ -71,11 +71,11 @@ class ProfilingManager(ABC):
         return summary
 
     @abstractmethod
-    def profiling_logs(self, experiment_path: Path, run_path: Path | None) -> dict[str, ProfilingLog]:
+    def profiling_logs(self, path: Path, run_path: Path | None) -> dict[str, ProfilingLog]:
         """Returns all profiling logs from the specified path.
 
         Args:
-            experiment_path (Path): Path to the experiment directory.
+            path (Path): Path to the experiment directory.
             run_path (Path | None): Optional path to a separate runs directory.
 
         Returns:
@@ -83,11 +83,11 @@ class ProfilingManager(ABC):
         """
 
     @abstractmethod
-    def parse_ncpus(self, experiment_path: Path, run_path: Path | None) -> int:
+    def parse_ncpus(self, path: Path, run_path: Path | None) -> int:
         """Parses the number of CPUs used in a given experiment in the specified path.
 
         Args:
-            experiment_path (Path): Path to the experiment directory.
+            path (Path): Path to the experiment directory.
             run_path (Path | None): Optional path to a separate runs directory.
 
         Returns:
@@ -142,7 +142,7 @@ class ProfilingManager(ABC):
             raise ValueError(f"Experiment path '{path}' does not exist or is not a directory.")
         if not path.resolve().is_relative_to(self.work_dir.resolve()):
             raise ValueError(f"Experiment path '{path}' is not inside the working directory '{self.work_dir}'.")
-        self.experiments[name] = ProfilingExperiment(experiment_path=path)
+        self.experiments[name] = ProfilingExperiment(path=path)
         self.experiments[name].status = ProfilingExperimentStatus.DONE
 
     def delete_experiment(self, name: str) -> None:

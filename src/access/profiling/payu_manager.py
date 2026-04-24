@@ -175,9 +175,7 @@ class PayuManager(ProfilingManager, ABC):
                 pert_config["config.yaml"]["walltime"] = str(timedelta(hours=walltime_hrs))
 
                 generator_config["Perturbation_Experiment"][f"Experiment_{seqnum}"] = pert_config
-                self.experiments[branch] = ProfilingExperiment(
-                    experiment_path=self.work_dir / branch / self._repository_directory
-                )
+                self.experiments[branch] = ProfilingExperiment(path=self.work_dir / branch / self._repository_directory)
 
                 seqnum += 1
 
@@ -296,27 +294,27 @@ class PayuManager(ProfilingManager, ABC):
             exclude_dirs=exclude_dirs, exclude_files=exclude_files, follow_symlinks=follow_symlinks, overwrite=overwrite
         )
 
-    def parse_ncpus(self, experiment_path: Path, run_path: Path | None) -> int:
+    def parse_ncpus(self, path: Path, run_path: Path | None) -> int:
         """Parses the number of CPUs used in a given Payu experiment.
 
         Args:
-            experiment_path (Path): Path to the Payu experiment directory. Must contain a config.yaml file.
+            path (Path): Path to the Payu experiment directory. Must contain a config.yaml file.
             run_path (Path | None): Optional path to a separate runs directory. Unused for Payu experiments.
         Returns:
             int: Number of CPUs used in the experiment. If multiple submodels are defined, returns the sum of their
                  ncpus.
         """
-        config_path = experiment_path / "config.yaml"
+        config_path = path / "config.yaml"
         payu_config = YAMLParser().parse(config_path.read_text())
         if "submodels" in payu_config:
             return sum(submodel["ncpus"] for submodel in payu_config["submodels"])
         else:
             return payu_config["ncpus"]
 
-    def profiling_logs(self, experiment_path: Path, run_path: Path | None) -> dict[str, ProfilingLog]:
+    def profiling_logs(self, path: Path, run_path: Path | None) -> dict[str, ProfilingLog]:
         """Returns all profiling logs from the specified path.
         Args:
-            experiment_path (Path): Path to the experiment directory.
+            path (Path): Path to the experiment directory.
             run_path (Path | None): Optional path to a separate runs directory. Unused for Payu experiments.
         Returns:
             dict[str, ProfilingLog]: Dictionary of profiling logs.
@@ -324,23 +322,23 @@ class PayuManager(ProfilingManager, ABC):
         logs = {}
 
         # Check archive directory exists
-        archive = experiment_path / "archive"
+        archive = path / "archive"
         if not archive.is_dir():
             raise FileNotFoundError(f"Directory {archive} does not exist!")
 
         # Parse payu json profiling data if available
         matches = sorted(archive.glob("payu_jobs/*/run/*.json"))
         if len(matches) > 1:
-            logger.warning(f"Multiple payu json logs found in {experiment_path}! Using the first one found.")
+            logger.warning(f"Multiple payu json logs found in {path}! Using the first one found.")
         if len(matches) >= 1:
             logs["payu"] = ProfilingLog(matches[0], PayuJSONProfilingParser())
 
         # Find how many output directories are available and get logs from each component
         matches = sorted(archive.glob("output*"))
         if len(matches) == 0:
-            raise FileNotFoundError(f"No output files found in {experiment_path}!")
+            raise FileNotFoundError(f"No output files found in {path}!")
         elif len(matches) > 1:
-            logger.warning(f"Multiple output directories found in {experiment_path}! Using the first one found.")
+            logger.warning(f"Multiple output directories found in {path}! Using the first one found.")
         logs.update(self.get_component_logs(matches[0]))
 
         return logs
