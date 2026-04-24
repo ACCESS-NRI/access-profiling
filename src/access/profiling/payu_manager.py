@@ -294,7 +294,7 @@ class PayuManager(ProfilingManager, ABC):
             exclude_dirs=exclude_dirs, exclude_files=exclude_files, follow_symlinks=follow_symlinks, overwrite=overwrite
         )
 
-    def parse_ncpus(self, path: Path, run_path: Path | None) -> int:
+    def parse_ncpus(self, path: Path, run_path: Path | None = None) -> int:
         """Parses the number of CPUs used in a given Payu experiment.
 
         Args:
@@ -311,7 +311,7 @@ class PayuManager(ProfilingManager, ABC):
         else:
             return payu_config["ncpus"]
 
-    def profiling_logs(self, path: Path, run_path: Path | None) -> dict[str, ProfilingLog]:
+    def profiling_logs(self, path: Path, run_path: Path | None = None) -> dict[str, ProfilingLog]:
         """Returns all profiling logs from the specified path.
         Args:
             path (Path): Path to the experiment directory.

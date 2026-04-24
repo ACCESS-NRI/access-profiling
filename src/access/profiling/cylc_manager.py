@@ -37,7 +37,7 @@ class CylcRoseManager(ProfilingManager, ABC):
             dict[str, ProfilingParser]: a dictionary of known parsers with names as keys.
         """
 
-    def parse_ncpus(self, path: Path, run_path: Path | None) -> int:
+    def parse_ncpus(self, path: Path, run_path: Path | None = None) -> int:
         # this is a symlink
         config_path = path / "log/rose-suite-run.conf"
 
@@ -53,7 +53,7 @@ class CylcRoseManager(ProfilingManager, ABC):
 
         raise ValueError(f"Cannot find layout key, {self._layout_variable}, in {config_path}.")
 
-    def profiling_logs(self, path: Path, run_path: Path | None) -> dict[str, ProfilingLog]:
+    def profiling_logs(self, path: Path, run_path: Path | None = None) -> dict[str, ProfilingLog]:
         """Returns all profiling logs from the specified path.
 
         Args:

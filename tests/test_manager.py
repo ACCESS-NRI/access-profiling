@@ -48,13 +48,13 @@ class MockProfilingManager(ProfilingManager):
         if datasets is not None:
             self.data = dict(zip([path.name for path in paths], datasets, strict=True))
 
-    def parse_ncpus(self, path, run_path):
+    def parse_ncpus(self, path, run_path=None):
         """Simulate parsing number of CPUs for a given path."""
         self._last_parse_ncpus_args = (path, run_path)
         self._parse_ncpus_calls.append((path, run_path))
         return self._mock_ncpus[path.name]
 
-    def profiling_logs(self, path, run_path):  # pyright: ignore[reportIncompatibleMethodOverride]
+    def profiling_logs(self, path, run_path=None):  # pyright: ignore[reportIncompatibleMethodOverride]
         """Simulate parsing profiling data for a given path."""
         pass
 

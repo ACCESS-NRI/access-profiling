@@ -85,13 +85,13 @@ def test_ncpus(mock_read_text, mock_yaml_parser, manager):
 
     # Mock the YAMLParser to return the number of cpus
     mock_yaml_parser().parse.return_value = {"ncpus": 4}
-    ncpus = manager.parse_ncpus(Path("/fake/path"), None)
+    ncpus = manager.parse_ncpus(Path("/fake/path"))
     assert mock_read_text.call_count == 1
     assert ncpus == 4
 
     # Mock the YAMLParser to return dictionary of submodels
     mock_yaml_parser().parse.return_value = {"submodels": [{"ncpus": 2}, {"ncpus": 3}]}
-    ncpus = manager.parse_ncpus(Path("/fake/path"), None)
+    ncpus = manager.parse_ncpus(Path("/fake/path"))
     assert mock_read_text.call_count == 2
     assert ncpus == 5
 
@@ -296,14 +296,14 @@ def test_profiling_logs_missing_directories(mock_glob, mock_is_dir, manager):
     # Missing archive directory
     mock_is_dir.return_value = False
     with pytest.raises(FileNotFoundError):
-        manager.profiling_logs(Path("/fake/path"), None)
+        manager.profiling_logs(Path("/fake/path"))
     mock_is_dir.assert_called_once()
 
     # Missing output directories
     mock_is_dir.return_value = True
     mock_glob.return_value = []
     with pytest.raises(FileNotFoundError):
-        manager.profiling_logs(Path("/fake/path"), None)
+        manager.profiling_logs(Path("/fake/path"))
     mock_glob.assert_called_with("output*")
 
 
@@ -324,7 +324,7 @@ def test_profiling_logs(mock_glob, mock_is_dir, manager):
     """Test the profiling_logs method of PayuManager."""
 
     with mock.patch.object(manager, "get_component_logs", wraps=manager.get_component_logs) as mock_get_logs:
-        logs = manager.profiling_logs(Path("/fake/path"), None)
+        logs = manager.profiling_logs(Path("/fake/path"))
         # Check correct path access
         assert mock_is_dir.call_count == 1  # Called to check archive directory
         assert mock_glob.call_count == 2  # Called for payu_jobs and output directories

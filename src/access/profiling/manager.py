@@ -71,7 +71,7 @@ class ProfilingManager(ABC):
         return summary
 
     @abstractmethod
-    def profiling_logs(self, path: Path, run_path: Path | None) -> dict[str, ProfilingLog]:
+    def profiling_logs(self, path: Path, run_path: Path | None = None) -> dict[str, ProfilingLog]:
         """Returns all profiling logs from the specified path.
 
         Args:
@@ -83,7 +83,7 @@ class ProfilingManager(ABC):
         """
 
     @abstractmethod
-    def parse_ncpus(self, path: Path, run_path: Path | None) -> int:
+    def parse_ncpus(self, path: Path, run_path: Path | None = None) -> int:
         """Parses the number of CPUs used in a given experiment in the specified path.
 
         Args:
