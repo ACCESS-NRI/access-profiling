@@ -148,21 +148,23 @@ class ProfilingExperiment:
 
     @contextmanager
     def directory(self):
-        """Context manager returning the experiment directory, handling archived experiments appropriately.
+        """Context manager returning the experiment and results directories.
 
         If the experiment has been archived, it will be extracted to a temporary directory. Otherwise, the original
-        directory path will be used. Note that after exiting the context, the temporary directory is removed.
+        directory paths will be used. Note that after exiting the context, the temporary directory is removed.
 
         Returns:
-            Path: The path to the directory.
+            tuple[Path, Path | None]: The experiment directory path and optional results directory path.
         """
         if self.experiment_path.suffixes == [".tar", ".gz"]:
             with tempfile.TemporaryDirectory(prefix="access-profiling_", suffix="_data") as tmpdir:
                 with tarfile.open(self.experiment_path) as tar:
                     tar.extractall(path=Path(tmpdir), filter="data")
-                yield Path(tmpdir)
+                experiment_path = Path(tmpdir) / "experiment"
+                result_path = Path(tmpdir) / "results"
+                yield experiment_path, result_path if result_path.exists() else None
         else:
-            yield self.experiment_path
+            yield self.experiment_path, self.result_path
 
     def archive(
         self,

@@ -70,8 +70,13 @@ def test_profiling_experiment():
     assert experiment.status == ProfilingExperimentStatus.RUNNING
 
     # Check directory context manager
-    with experiment.directory() as temp_dir:
-        assert temp_dir == path
+    with experiment.directory() as (experiment_dir, result_dir):
+        assert experiment_dir == path
+        assert result_dir is None
+
+    with experiment_with_result.directory() as (experiment_dir, result_dir):
+        assert experiment_dir == path
+        assert result_dir == Path("/fake/result_dir")
 
 
 @mock.patch("access.profiling.experiment.tarfile.open")
@@ -91,12 +96,36 @@ def test_profiling_experiment_archived(mock_tarfile_open):
     assert experiment.status == ProfilingExperimentStatus.ARCHIVED
 
     # Check directory context manager
-    with experiment.directory() as temp_dir:
-        assert temp_dir.name.startswith("access-profiling_")
-        assert temp_dir.name.endswith("_data")
-        assert temp_dir.parent == Path(tempfile.gettempdir())
+    with experiment.directory() as (experiment_dir, result_dir):
+        assert experiment_dir.name == "experiment"
+        assert experiment_dir.parent.name.startswith("access-profiling_")
+        assert experiment_dir.parent.name.endswith("_data")
+        assert experiment_dir.parent.parent == Path(tempfile.gettempdir())
+        assert result_dir is None
         mock_tarfile_open.assert_called_once_with(path)
-        mock_tarfile.extractall.assert_called_once_with(path=Path(temp_dir), filter="data")
+        mock_tarfile.extractall.assert_called_once_with(path=experiment_dir.parent, filter="data")
+
+
+@mock.patch("access.profiling.experiment.tarfile.open")
+def test_profiling_experiment_archived_with_results(mock_tarfile_open):
+    """Archived experiments expose an extracted results directory when one is present."""
+
+    def extractall_side_effect(*, path, filter):
+        assert filter == "data"
+        (path / "experiment").mkdir()
+        (path / "results").mkdir()
+
+    mock_tarfile = mock.MagicMock()
+    mock_tarfile.extractall.side_effect = extractall_side_effect
+    mock_tarfile_open.return_value = mock.MagicMock(__enter__=lambda s: mock_tarfile, __exit__=lambda *a: None)
+
+    experiment = ProfilingExperiment(experiment_path=Path("/fake/path.tar.gz"))
+
+    with experiment.directory() as (experiment_dir, result_dir):
+        assert experiment_dir.name == "experiment"
+        assert result_dir is not None
+        assert result_dir.name == "results"
+        assert result_dir.parent == experiment_dir.parent
 
 
 @mock.patch("access.profiling.experiment.tarfile.open")

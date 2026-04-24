@@ -31,14 +31,14 @@ def test_parse_profiling_logs(mock_path_glob, manager):
     # no component log files
     mock_path_glob.return_value = []
     with pytest.raises(RuntimeError):
-        manager.profiling_logs(Path("/fake/path"))
+        manager.profiling_logs(Path("/fake/path"), None)
     mock_path_glob.assert_called_once()
 
     # component log files are present
     mock_path_glob.reset_mock()
     mock_path_glob.return_value = [Path("/fake/path/cycle1/task1/NN/job.out")]
     # return something "valid" for the cylc loc and db, but fail to read the component log.
-    logs = manager.profiling_logs(Path("/fake/path"))
+    logs = manager.profiling_logs(Path("/fake/path"), None)
     mock_path_glob.assert_called_once()
     assert "cylc_suite_log" in logs
     assert isinstance(logs["cylc_suite_log"].parser, CylcProfilingParser)
@@ -56,14 +56,14 @@ def test_parse_ncpus(mock_read_text, mock_is_file, manager):
     # mock absence of rose-conf file
     mock_is_file.return_value = False
     with pytest.raises(FileNotFoundError):
-        manager.parse_ncpus(Path("/fake/path"))
+        manager.parse_ncpus(Path("/fake/path"), None)
 
     # mock absence of layout variable
     mock_is_file.return_value = True
     mock_read_text.return_value = "another_var=another_value"
     with pytest.raises(ValueError):
-        manager.parse_ncpus(Path("/fake/path"))
+        manager.parse_ncpus(Path("/fake/path"), None)
 
     # mock presence of layout variable
     mock_read_text.return_value += "\n um_layout = 2,3"
-    manager.parse_ncpus(Path("/fake/path"))
+    manager.parse_ncpus(Path("/fake/path"), None)

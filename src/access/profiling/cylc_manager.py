@@ -37,9 +37,10 @@ class CylcRoseManager(ProfilingManager, ABC):
             dict[str, ProfilingParser]: a dictionary of known parsers with names as keys.
         """
 
-    def parse_ncpus(self, path: Path) -> int:
+    def parse_ncpus(self, experiment_path: Path, result_path: Path | None) -> int:
+        del result_path
         # this is a symlink
-        config_path = path / "log/rose-suite-run.conf"
+        config_path = experiment_path / "log/rose-suite-run.conf"
 
         if not config_path.is_file():
             raise FileNotFoundError(f"Could not find suitable config file in {config_path}")
@@ -53,20 +54,22 @@ class CylcRoseManager(ProfilingManager, ABC):
 
         raise ValueError(f"Cannot find layout key, {self._layout_variable}, in {config_path}.")
 
-    def profiling_logs(self, path: Path) -> dict[str, ProfilingLog]:
+    def profiling_logs(self, experiment_path: Path, result_path: Path | None) -> dict[str, ProfilingLog]:
         """Returns all profiling logs from the specified path.
 
         Args:
-            path (Path): Path to the experiment directory.
+            experiment_path (Path): Path to the experiment directory.
+            result_path (Path | None): Optional path to a separate results directory.
         Returns:
             dict[str, ProfilingLog]: Dictionary of profiling logs.
         """
+        del result_path
         logs = {}
 
         # setup log paths
-        suite_log = path / "log/suite/log"  # cylc log file
-        cylcdb = path / "cylc-suite.db"  # database with task runtimes
-        jobdir = path / "log/job"  # where task logs are stored
+        suite_log = experiment_path / "log/suite/log"  # cylc log file
+        cylcdb = experiment_path / "cylc-suite.db"  # database with task runtimes
+        jobdir = experiment_path / "log/job"  # where task logs are stored
 
         logs["cylc_suite_log"] = ProfilingLog(suite_log, CylcProfilingParser())
         # cylcdb.read_text = lambda x: x # hack to make log work
