@@ -36,22 +36,25 @@ class MockProfilingManager(ProfilingManager):
 
         # Pre-generate experiments
         for path in paths:
-            self.experiments[path.name] = ProfilingExperiment(path)
+            self.experiments[path.name] = ProfilingExperiment(path=path)
             self.experiments[path.name].status = ProfilingExperimentStatus.DONE
 
         if ncpus is not None:
             self._mock_ncpus = dict(zip([path.name for path in paths], ncpus, strict=True))
         else:
             self._mock_ncpus = {}
+        self._parse_ncpus_calls = []
 
         if datasets is not None:
             self.data = dict(zip([path.name for path in paths], datasets, strict=True))
 
-    def parse_ncpus(self, path):
+    def parse_ncpus(self, path, run_path=None):
         """Simulate parsing number of CPUs for a given path."""
+        self._last_parse_ncpus_args = (path, run_path)
+        self._parse_ncpus_calls.append((path, run_path))
         return self._mock_ncpus[path.name]
 
-    def profiling_logs(self, path):  # pyright: ignore[reportIncompatibleMethodOverride]
+    def profiling_logs(self, path, run_path=None):  # pyright: ignore[reportIncompatibleMethodOverride]
         """Simulate parsing profiling data for a given path."""
         pass
 
@@ -136,8 +139,8 @@ def test_archive_discovery(mock_experiment, mock_is_file, mock_glob, mock_is_dir
     manager = MockProfilingManager(paths=[])
     assert set(manager.experiments.keys()) == {"exp1", "exp2"}
     assert mock_experiment.call_count == 2
-    mock_experiment.assert_any_call(Path("/fake/archive_dir/exp1.tar.gz"))
-    mock_experiment.assert_any_call(Path("/fake/archive_dir/exp2.tar.gz"))
+    mock_experiment.assert_any_call(path=Path("/fake/archive_dir/exp1.tar.gz"))
+    mock_experiment.assert_any_call(path=Path("/fake/archive_dir/exp2.tar.gz"))
 
 
 @mock.patch("access.profiling.manager.Path.mkdir")
@@ -232,6 +235,7 @@ def test_parse_profiling_data(caplog):
 
     exp_name = "exp1"
     manager = MockProfilingManager(paths=[Path("/fake/work_dir/" + exp_name)])
+    manager.experiments[exp_name].run_path = Path("/fake/runs/exp1")
 
     with mock.patch.object(manager, "profiling_logs") as mock_profiling_logs:
         # Setup mock profiling logs
@@ -252,6 +256,7 @@ def test_parse_profiling_data(caplog):
             "Parsed datasets should not contain 'missing_log' key as the file is missing."
         )
         assert mock_log.parse.call_count == 3, "Parse method should be called three times."
+        mock_profiling_logs.assert_called_once_with(Path("/fake/work_dir/exp1"), Path("/fake/runs/exp1"))
 
     manager.experiments[exp_name].status = ProfilingExperimentStatus.RUNNING
     with caplog.at_level(logging.WARNING):
@@ -270,6 +275,7 @@ def test_scaling_data(mock_plot, scaling_data):
     """
     paths, ncpus, datasets = scaling_data
     manager = MockProfilingManager(paths, ncpus, datasets)
+    manager.experiments["4cpu"].run_path = Path("/fake/runs/4cpu")
 
     # Test that __repr__ returns info about the data
     result = repr(manager)
@@ -307,6 +313,7 @@ def test_scaling_data(mock_plot, scaling_data):
     assert component_data[count].sel(region="Total").values.tolist() == [1, 1]
     assert component_data[tavg].sel(region="Total").values.tolist() == [600365.0, 300182.5]
     assert mock_plot.call_args.args[1] == tavg
+    assert (Path("4cpu"), Path("/fake/runs/4cpu")) in manager._parse_ncpus_calls
 
 
 @mock.patch("access.profiling.manager.plot_bar_metrics")

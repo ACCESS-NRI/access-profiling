@@ -175,7 +175,7 @@ class PayuManager(ProfilingManager, ABC):
                 pert_config["config.yaml"]["walltime"] = str(timedelta(hours=walltime_hrs))
 
                 generator_config["Perturbation_Experiment"][f"Experiment_{seqnum}"] = pert_config
-                self.experiments[branch] = ProfilingExperiment(self.work_dir / branch / self._repository_directory)
+                self.experiments[branch] = ProfilingExperiment(path=self.work_dir / branch / self._repository_directory)
 
                 seqnum += 1
 
@@ -294,11 +294,12 @@ class PayuManager(ProfilingManager, ABC):
             exclude_dirs=exclude_dirs, exclude_files=exclude_files, follow_symlinks=follow_symlinks, overwrite=overwrite
         )
 
-    def parse_ncpus(self, path: Path) -> int:
+    def parse_ncpus(self, path: Path, run_path: Path | None = None) -> int:
         """Parses the number of CPUs used in a given Payu experiment.
 
         Args:
             path (Path): Path to the Payu experiment directory. Must contain a config.yaml file.
+            run_path (Path | None): Optional path to a separate runs directory. Unused for Payu experiments.
         Returns:
             int: Number of CPUs used in the experiment. If multiple submodels are defined, returns the sum of their
                  ncpus.
@@ -310,10 +311,11 @@ class PayuManager(ProfilingManager, ABC):
         else:
             return payu_config["ncpus"]
 
-    def profiling_logs(self, path: Path) -> dict[str, ProfilingLog]:
+    def profiling_logs(self, path: Path, run_path: Path | None = None) -> dict[str, ProfilingLog]:
         """Returns all profiling logs from the specified path.
         Args:
             path (Path): Path to the experiment directory.
+            run_path (Path | None): Optional path to a separate runs directory. Unused for Payu experiments.
         Returns:
             dict[str, ProfilingLog]: Dictionary of profiling logs.
         """

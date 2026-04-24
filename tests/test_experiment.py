@@ -51,8 +51,14 @@ def test_profiling_experiment():
     path = Path("/fake/work_dir")
     experiment = ProfilingExperiment(path=path)
 
-    # Check representation
+    # Check representation without run_path
     assert repr(experiment) == "ProfilingExperiment(path=PosixPath('/fake/work_dir'), status=NEW)"
+
+    # Check representation with run_path
+    experiment_with_result = ProfilingExperiment(path=path, run_path=Path("/fake/run_dir"))
+    assert repr(experiment_with_result) == (
+        "ProfilingExperiment(path=PosixPath('/fake/work_dir'), run_path=PosixPath('/fake/run_dir'), status=NEW)"
+    )
 
     # Assert path and status
     assert experiment.path == path
@@ -63,8 +69,13 @@ def test_profiling_experiment():
     assert experiment.status == ProfilingExperimentStatus.RUNNING
 
     # Check directory context manager
-    with experiment.directory() as temp_dir:
-        assert temp_dir == path
+    with experiment.directory() as (experiment_dir, run_dir):
+        assert experiment_dir == path
+        assert run_dir is None
+
+    with experiment_with_result.directory() as (experiment_dir, run_dir):
+        assert experiment_dir == path
+        assert run_dir == Path("/fake/run_dir")
 
 
 @mock.patch("access.profiling.experiment.tarfile.open")
@@ -84,19 +95,43 @@ def test_profiling_experiment_archived(mock_tarfile_open):
     assert experiment.status == ProfilingExperimentStatus.ARCHIVED
 
     # Check directory context manager
-    with experiment.directory() as temp_dir:
-        assert temp_dir.name.startswith("access-profiling_")
-        assert temp_dir.name.endswith("_data")
-        assert temp_dir.parent == Path(tempfile.gettempdir())
+    with experiment.directory() as (experiment_dir, run_dir):
+        assert experiment_dir.name == "experiment"
+        assert experiment_dir.parent.name.startswith("access-profiling_")
+        assert experiment_dir.parent.name.endswith("_data")
+        assert experiment_dir.parent.parent == Path(tempfile.gettempdir())
+        assert run_dir is None
         mock_tarfile_open.assert_called_once_with(path)
-        mock_tarfile.extractall.assert_called_once_with(path=Path(temp_dir), filter="data")
+        mock_tarfile.extractall.assert_called_once_with(path=experiment_dir.parent, filter="data")
+
+
+@mock.patch("access.profiling.experiment.tarfile.open")
+def test_profiling_experiment_archived_with_runs(mock_tarfile_open):
+    """Archived experiments expose an extracted runs directory when one is present."""
+
+    def extractall_side_effect(*, path, filter):
+        assert filter == "data"
+        (path / "experiment").mkdir()
+        (path / "runs").mkdir()
+
+    mock_tarfile = mock.MagicMock()
+    mock_tarfile.extractall.side_effect = extractall_side_effect
+    mock_tarfile_open.return_value = mock.MagicMock(__enter__=lambda s: mock_tarfile, __exit__=lambda *a: None)
+
+    experiment = ProfilingExperiment(path=Path("/fake/path.tar.gz"))
+
+    with experiment.directory() as (experiment_dir, run_dir):
+        assert experiment_dir.name == "experiment"
+        assert run_dir is not None
+        assert run_dir.name == "runs"
+        assert run_dir.parent == experiment_dir.parent
 
 
 @mock.patch("access.profiling.experiment.tarfile.open")
 def test_profiling_experiment_archive_not_done(mock_open, caplog):
     """Test the archive method of ProfilingExperiment for non-DONE statuses."""
 
-    exp = ProfilingExperiment(Path("/fake/work_dir/exp1"))
+    exp = ProfilingExperiment(path=Path("/fake/work_dir/exp1"))
     for status in ProfilingExperimentStatus:
         if status == ProfilingExperimentStatus.DONE:
             continue
@@ -113,7 +148,7 @@ def test_profiling_experiment_archive_not_done(mock_open, caplog):
 def test_profiling_experiment_archive_file_exists():
     """Test the archive method of ProfilingExperiment when the archive file already exists."""
 
-    exp = ProfilingExperiment(Path("/fake/work_dir/exp1"))
+    exp = ProfilingExperiment(path=Path("/fake/work_dir/exp1"))
     exp.status = ProfilingExperimentStatus.DONE
 
     with mock.patch.object(Path, "exists", return_value=True) as mock_exists, pytest.raises(FileExistsError):
@@ -126,7 +161,7 @@ def test_profiling_experiment_archive_file_exists():
 def test_profiling_experiment_archive_file_overwrite(mock_walker, mock_open):
     """Test the archive method of ProfilingExperiment when the archive file already exists and overwrite is True."""
 
-    exp = ProfilingExperiment(Path("/fake/work_dir/exp1"))
+    exp = ProfilingExperiment(path=Path("/fake/work_dir/exp1"))
     exp.status = ProfilingExperimentStatus.DONE
 
     exp.archive(Path("/fake/archive"), overwrite=True)
@@ -211,7 +246,7 @@ def test_profiling_experiment_archive(mock_open, tmp_path, setup_experiment_dire
     mock_open.return_value = mock.MagicMock(__enter__=lambda s: mock_tarfile, __exit__=lambda *a: None)
 
     # Instantiate ProfilingExperiment
-    exp = ProfilingExperiment(tmp_path / Path("exp1"))
+    exp = ProfilingExperiment(path=tmp_path / Path("exp1"))
     exp.status = ProfilingExperimentStatus.DONE
 
     # Archive experiment with no exclude patterns, not following symlinks (default)
@@ -222,12 +257,12 @@ def test_profiling_experiment_archive(mock_open, tmp_path, setup_experiment_dire
     mock_open.assert_called_with(Path("/fake/archive").with_suffix(".tar.gz"), "x:gz")  # Check tarfile opening
     assert mock_tarfile.add.call_count == len(files), "All files should be added to the archive."
     for file in files:
-        if "scratch" in file.parts:
-            arcname = file.relative_to(Path("scratch"))
-        elif "exp1" in file.parts:
-            arcname = file.relative_to(Path("exp1"))
+        if "exp1" in file.parts:
+            arcname = Path("experiment") / file.relative_to(Path("exp1"))
+        elif "scratch" in file.parts:
+            arcname = Path("experiment") / file.relative_to(Path("scratch"))
         else:
-            arcname = file
+            arcname = Path("experiment") / file
         mock_tarfile.add.assert_any_call(tmp_path / file, arcname=arcname)
 
 
@@ -242,7 +277,7 @@ def test_profiling_experiment_archive_follow_symlinks(mock_open, tmp_path, setup
     mock_open.return_value = mock.MagicMock(__enter__=lambda s: mock_tarfile, __exit__=lambda *a: None)
 
     # Instantiate ProfilingExperiment
-    exp = ProfilingExperiment(tmp_path / Path("exp1"))
+    exp = ProfilingExperiment(path=tmp_path / Path("exp1"))
     exp.status = ProfilingExperimentStatus.DONE
 
     # Archive experiment with no exclude patterns, following symlinks
@@ -253,12 +288,12 @@ def test_profiling_experiment_archive_follow_symlinks(mock_open, tmp_path, setup
     mock_open.assert_called_with(Path("/fake/archive").with_suffix(".tar.gz"), "x:gz")  # Check tarfile opening
     assert mock_tarfile.add.call_count == len(files), "All files should be added to the archive."
     for file in files:
-        if "scratch" in file.parts:
-            arcname = file.relative_to(Path("scratch"))
-        elif "exp1" in file.parts:
-            arcname = file.relative_to(Path("exp1"))
+        if "exp1" in file.parts:
+            arcname = Path("experiment") / file.relative_to(Path("exp1"))
+        elif "scratch" in file.parts:
+            arcname = Path("experiment") / file.relative_to(Path("scratch"))
         else:
-            arcname = file
+            arcname = Path("experiment") / file
         mock_tarfile.add.assert_any_call(tmp_path / file, arcname=arcname)
 
 
@@ -284,7 +319,7 @@ def test_profiling_experiment_archive_with_filters(mock_open, tmp_path, setup_ex
     mock_open.return_value = mock.MagicMock(__enter__=lambda s: mock_tarfile, __exit__=lambda *a: None)
 
     # Instantiate ProfilingExperiment
-    exp = ProfilingExperiment(tmp_path / Path("exp1"))
+    exp = ProfilingExperiment(path=tmp_path / Path("exp1"))
     exp.status = ProfilingExperimentStatus.DONE
 
     # Archive experiment with exclude patterns
@@ -296,10 +331,46 @@ def test_profiling_experiment_archive_with_filters(mock_open, tmp_path, setup_ex
         "Only non-excluded files should be added to the archive."
     )
     for file in files_to_archive:
-        if "scratch" in file.parts:
-            arcname = file.relative_to(Path("scratch"))
-        elif "exp1" in file.parts:
-            arcname = file.relative_to(Path("exp1"))
+        if "exp1" in file.parts:
+            arcname = Path("experiment") / file.relative_to(Path("exp1"))
+        elif "scratch" in file.parts:
+            arcname = Path("experiment") / file.relative_to(Path("scratch"))
         else:
-            arcname = file
+            arcname = Path("experiment") / file
         mock_tarfile.add.assert_any_call(tmp_path / file, arcname=arcname)
+
+
+@mock.patch("access.profiling.experiment.tarfile.open")
+def test_profiling_experiment_archive_with_run_path(mock_open, tmp_path):
+    """Test that archive() traverses both path and run_path, storing under experiment/ and runs/."""
+
+    # Create experiment directory with one file
+    exp_dir = tmp_path / "exp1"
+    exp_dir.mkdir()
+    exp_file = exp_dir / "config.yaml"
+    exp_file.touch()
+
+    # Create separate run directory with two files
+    run_dir = tmp_path / "scratch" / "runs"
+    run_dir.mkdir(parents=True)
+    run_file1 = run_dir / "output.log"
+    run_file2 = run_dir / "timing.txt"
+    run_file1.touch()
+    run_file2.touch()
+
+    mock_tarfile = mock.MagicMock()
+    mock_open.return_value = mock.MagicMock(__enter__=lambda s: mock_tarfile, __exit__=lambda *a: None)
+
+    exp = ProfilingExperiment(path=exp_dir, run_path=run_dir)
+    exp.status = ProfilingExperimentStatus.DONE
+    exp.archive(Path("/fake/archive"))
+
+    # path and run_path files should both be added under their respective prefixes
+    assert mock_tarfile.add.call_count == 3
+    mock_tarfile.add.assert_any_call(exp_file, arcname=Path("experiment/config.yaml"))
+    mock_tarfile.add.assert_any_call(run_file1, arcname=Path("runs/output.log"))
+    mock_tarfile.add.assert_any_call(run_file2, arcname=Path("runs/timing.txt"))
+
+    # run_path cleared after archiving
+    assert exp.run_path is None
+    assert exp.path == Path("/fake/archive.tar.gz")

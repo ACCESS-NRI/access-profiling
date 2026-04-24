@@ -122,37 +122,46 @@ class ProfilingExperiment:
 
     Args:
         path (Path): Path to the experiment directory.
+        run_path (Path | None): Path to a separate runs directory. If None, runs are assumed to be
+            inside path. When provided, the runs directory is also traversed during archival.
+            path contents are stored under experiment/ and run_path contents under runs/.
     """
 
     path: Path  # Path to the experiment directory
+    run_path: Path | None  # Path to a separate runs directory, or None
     status: ProfilingExperimentStatus = ProfilingExperimentStatus.NEW  # Status of the experiment
 
-    def __init__(self, path: Path) -> None:
+    def __init__(self, path: Path, run_path: Path | None = None) -> None:
         self.path = path
+        self.run_path = run_path
         if self.path.suffixes == [".tar", ".gz"]:
             self.status = ProfilingExperimentStatus.ARCHIVED
 
     def __repr__(self) -> str:
         """Returns a string representation of the ProfilingExperiment."""
+        if self.run_path is not None:
+            return f"{type(self).__name__}(path={self.path!r}, run_path={self.run_path!r}, status={self.status.name})"
         return f"{type(self).__name__}(path={self.path!r}, status={self.status.name})"
 
     @contextmanager
     def directory(self):
-        """Context manager returning the experiment directory, handling archived experiments appropriately.
+        """Context manager returning the experiment and runs directories.
 
         If the experiment has been archived, it will be extracted to a temporary directory. Otherwise, the original
-        directory path will be used. Note that after exiting the context, the temporary directory is removed.
+        directory paths will be used. Note that after exiting the context, the temporary directory is removed.
 
         Returns:
-            Path: The path to the directory.
+            tuple[Path, Path | None]: The experiment directory path and optional runs directory path.
         """
         if self.path.suffixes == [".tar", ".gz"]:
             with tempfile.TemporaryDirectory(prefix="access-profiling_", suffix="_data") as tmpdir:
                 with tarfile.open(self.path) as tar:
                     tar.extractall(path=Path(tmpdir), filter="data")
-                yield Path(tmpdir)
+                path = Path(tmpdir) / "experiment"
+                run_path = Path(tmpdir) / "runs"
+                yield path, run_path if run_path.exists() else None
         else:
-            yield self.path
+            yield self.path, self.run_path
 
     def archive(
         self,
@@ -168,7 +177,8 @@ class ProfilingExperiment:
 
         Symlinks to files and directories inside the experiment directory will be include as symlinks. Symlinks to files
         and directories outside the experiment directory will be followed if follow_symlinks is True, otherwise they
-        will be included as symlinks.
+        will be included as symlinks. path contents are stored under experiment/ in the archive. If
+        run_path is set, its contents are stored under runs/ in the archive.
 
         Args:
             archive_path (Path): Path to the archive destination. This should include the file name, but without
@@ -195,27 +205,31 @@ class ProfilingExperiment:
             return
 
         archive_file = archive_path.with_suffix(".tar.gz")
-        if overwrite:
-            mode = "w:gz"
-        else:
-            mode = "x:gz"
-            if archive_file.exists():
-                raise FileExistsError(f"Archive destination {archive_file} already exists.")
+        mode = "w:gz" if overwrite else "x:gz"
+        if not overwrite and archive_file.exists():
+            raise FileExistsError(f"Archive destination {archive_file} already exists.")
 
         exclude_dirs = exclude_dirs or []
         exclude_files = exclude_files or []
+
+        paths_to_walk = (
+            [(self.path, Path("experiment"))]
+            if self.run_path is None
+            else [(self.path, Path("experiment")), (self.run_path, Path("runs"))]
+        )
+
         with tarfile.open(archive_file, mode) as tar:
-            for file, arcname in experiment_directory_walker(
-                self.path, self.path.relative_to(self.path), self.path, follow_symlinks=follow_symlinks
-            ):
-                # Skip if file is inside an excluded directory pattern
-                if any(any(parent.match(pat) for pat in exclude_dirs) for parent in file.parents):
-                    continue
-                # Skip if the file itself matches an excluded filename pattern
-                if any(file.match(pat) for pat in exclude_files):
-                    continue
-                logger.debug(f"Archiving file: {file} as {arcname}")
-                tar.add(file, arcname=arcname)
+            for root, prefix in paths_to_walk:
+                for file, arcname in experiment_directory_walker(root, prefix, root, follow_symlinks=follow_symlinks):
+                    # Skip if file is inside an excluded directory pattern
+                    if any(any(parent.match(pat) for pat in exclude_dirs) for parent in file.parents):
+                        continue
+                    # Skip if the file itself matches an excluded filename pattern
+                    if any(file.match(pat) for pat in exclude_files):
+                        continue
+                    logger.debug(f"Archiving file: {file} as {arcname}")
+                    tar.add(file, arcname=arcname)
 
         self.status = ProfilingExperimentStatus.ARCHIVED
         self.path = archive_file
+        self.run_path = None
