@@ -235,6 +235,61 @@ def test_delete_experiments_dry_run_keeps_directories_and_manager_state(tmp_path
     assert f"Dry run: would delete experiment directory '{exp_path}' and run directory '{run_path}'." in caplog.text
 
 
+@mock.patch("access.profiling.cylc_manager.subprocess.run")
+def test_run_experiments_skips_when_no_new_experiments(mock_subprocess, caplog, manager):
+    """run_experiments should do nothing when there are no NEW experiments."""
+
+    manager.experiments["u-aa123"] = ProfilingExperiment(path=Path("/fake/path"))
+    manager.experiments["u-aa123"].status = ProfilingExperimentStatus.DONE
+
+    with caplog.at_level(logging.INFO):
+        manager.run_experiments()
+
+    mock_subprocess.assert_not_called()
+    assert "No new experiments to run" in caplog.text
+
+
+@mock.patch("access.profiling.cylc_manager.subprocess.run")
+def test_run_experiments_calls_rose_suite_run(mock_subprocess, manager):
+    """run_experiments should call rose suite-run in each NEW experiment's path."""
+
+    exp_path = Path("/fake/u-aa123")
+    manager.experiments["u-aa123"] = ProfilingExperiment(path=exp_path)
+    manager.experiments["u-aa123"].status = ProfilingExperimentStatus.NEW
+
+    manager.run_experiments()
+
+    mock_subprocess.assert_called_once_with(["rose", "suite-run"], cwd=exp_path, check=True)
+
+
+@mock.patch("access.profiling.cylc_manager.subprocess.run")
+def test_run_experiments_only_runs_new_experiments(mock_subprocess, manager):
+    """run_experiments should only submit experiments with NEW status."""
+
+    manager.experiments["new"] = ProfilingExperiment(path=Path("/fake/new"))
+    manager.experiments["new"].status = ProfilingExperimentStatus.NEW
+    manager.experiments["done"] = ProfilingExperiment(path=Path("/fake/done"))
+    manager.experiments["done"].status = ProfilingExperimentStatus.DONE
+
+    manager.run_experiments()
+
+    assert mock_subprocess.call_count == 1
+    mock_subprocess.assert_called_once_with(["rose", "suite-run"], cwd=Path("/fake/new"), check=True)
+
+
+@mock.patch("access.profiling.cylc_manager.subprocess.run", side_effect=Exception("rose suite-run failed"))
+def test_run_experiments_propagates_subprocess_failure(mock_subprocess, manager):
+    """A failed rose suite-run should propagate the exception."""
+
+    manager.experiments["u-aa123"] = ProfilingExperiment(path=Path("/fake/path"))
+    manager.experiments["u-aa123"].status = ProfilingExperimentStatus.NEW
+
+    with pytest.raises(Exception, match="rose suite-run failed"):
+        manager.run_experiments()
+
+    mock_subprocess.assert_called_once()
+
+
 @mock.patch.object(ProfilingManager, "archive_experiments")
 def test_archive_experiments_defaults(mock_archive, manager):
     """Cylc archive defaults should be applied before calling the base manager."""
