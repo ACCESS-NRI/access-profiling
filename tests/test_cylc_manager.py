@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import logging
+import subprocess
 from pathlib import Path
 from unittest import mock
 
@@ -259,7 +260,9 @@ def test_run_experiments_calls_rose_suite_run(mock_subprocess, manager):
 
     manager.run_experiments()
 
-    mock_subprocess.assert_called_once_with(["rose", "suite-run"], cwd=exp_path, check=True)
+    mock_subprocess.assert_called_once_with(
+        ["rose", "suite-run"], cwd=exp_path, check=True, capture_output=True, text=True
+    )
 
 
 @mock.patch("access.profiling.cylc_manager.subprocess.run")
@@ -274,20 +277,48 @@ def test_run_experiments_only_runs_new_experiments(mock_subprocess, manager):
     manager.run_experiments()
 
     assert mock_subprocess.call_count == 1
-    mock_subprocess.assert_called_once_with(["rose", "suite-run"], cwd=Path("/fake/new"), check=True)
+    mock_subprocess.assert_called_once_with(
+        ["rose", "suite-run"], cwd=Path("/fake/new"), check=True, capture_output=True, text=True
+    )
 
 
-@mock.patch("access.profiling.cylc_manager.subprocess.run", side_effect=Exception("rose suite-run failed"))
-def test_run_experiments_propagates_subprocess_failure(mock_subprocess, manager):
-    """A failed rose suite-run should propagate the exception."""
+@mock.patch("access.profiling.cylc_manager.subprocess.run")
+def test_run_experiments_forwards_output_with_prefix(mock_subprocess, caplog, manager):
+    """stdout and stderr lines should be logged with the experiment name as prefix."""
 
+    stdout = (
+        "[INFO] export CYLC_VERSION=7.9.9\n"
+        "[INFO] export ROSE_ORIG_HOST=gadi-login-03.gadi.nci.org.au\n"
+        "[INFO] export ROSE_SITE=nci\n"
+        "[INFO] export ROSE_VERSION=2019.01.8\n"
+    )
+    mock_subprocess.return_value = mock.MagicMock(stdout=stdout, stderr="warning: low disk\n")
     manager.experiments["u-aa123"] = ProfilingExperiment(path=Path("/fake/path"))
     manager.experiments["u-aa123"].status = ProfilingExperimentStatus.NEW
 
-    with pytest.raises(Exception, match="rose suite-run failed"):
+    with caplog.at_level(logging.INFO):
         manager.run_experiments()
 
-    mock_subprocess.assert_called_once()
+    assert "[u-aa123] [INFO] export CYLC_VERSION=7.9.9" in caplog.text
+    assert "[u-aa123] [INFO] export ROSE_ORIG_HOST=gadi-login-03.gadi.nci.org.au" in caplog.text
+    assert "[u-aa123] [INFO] export ROSE_SITE=nci" in caplog.text
+    assert "[u-aa123] [INFO] export ROSE_VERSION=2019.01.8" in caplog.text
+    assert "[u-aa123] warning: low disk" in caplog.text
+
+
+def test_run_experiments_logs_stderr_on_failure(caplog, manager):
+    """stderr should be logged at ERROR level before the CalledProcessError propagates."""
+
+    error = subprocess.CalledProcessError(1, "rose suite-run", output="partial output\n", stderr="fatal: bad config\n")
+    with mock.patch("access.profiling.cylc_manager.subprocess.run", side_effect=error):
+        manager.experiments["u-aa123"] = ProfilingExperiment(path=Path("/fake/path"))
+        manager.experiments["u-aa123"].status = ProfilingExperimentStatus.NEW
+
+        with caplog.at_level(logging.INFO), pytest.raises(subprocess.CalledProcessError):
+            manager.run_experiments()
+
+    assert "[u-aa123] partial output" in caplog.text
+    assert "[u-aa123] fatal: bad config" in caplog.text
 
 
 @mock.patch.object(ProfilingManager, "archive_experiments")
