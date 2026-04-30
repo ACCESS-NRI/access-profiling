@@ -101,7 +101,18 @@ class CylcRoseManager(ProfilingManager, ABC):
 
         for name, exp in to_run.items():
             logger.info(f"Running experiment '{name}' via rose suite-run in '{exp.path}'.")
-            subprocess.run(["rose", "suite-run", "--no-gcontrol"], cwd=exp.path, check=True)
+            try:
+                result = subprocess.run(["rose", "suite-run"], cwd=exp.path, check=True, capture_output=True, text=True)
+            except subprocess.CalledProcessError as e:
+                for line in e.stdout.splitlines():
+                    logger.info(f"[{name}] {line}")
+                for line in e.stderr.splitlines():
+                    logger.error(f"[{name}] {line}")
+                raise
+            for line in result.stdout.splitlines():
+                logger.info(f"[{name}] {line}")
+            for line in result.stderr.splitlines():
+                logger.warning(f"[{name}] {line}")
             exp.status = ProfilingExperimentStatus.RUNNING
 
         # TODO: properly detect when running experiments have completed rather than marking them done immediately.
