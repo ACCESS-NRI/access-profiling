@@ -5,6 +5,7 @@ import getpass
 import logging
 import os
 import shutil
+import subprocess
 from abc import ABC, abstractmethod
 from pathlib import Path
 
@@ -88,6 +89,25 @@ class CylcRoseManager(ProfilingManager, ABC):
 
         self.experiments[rose] = ProfilingExperiment(path=experiment_path, run_path=run_path)
         self.experiments[rose].status = ProfilingExperimentStatus.DONE
+
+    def run_experiments(self) -> None:
+        """Runs Rose Cylc experiments via `rose suite-run` for profiling data generation."""
+
+        to_run = {name: exp for name, exp in self.experiments.items() if exp.status == ProfilingExperimentStatus.NEW}
+
+        if not to_run:
+            logger.info("No new experiments to run. Will skip execution.")
+            return
+
+        for name, exp in to_run.items():
+            logger.info(f"Running experiment '{name}' via rose suite-run in '{exp.path}'.")
+            subprocess.run(["rose", "suite-run", "--no-gcontrol"], cwd=exp.path, check=True)
+            exp.status = ProfilingExperimentStatus.RUNNING
+
+        # TODO: properly detect when running experiments have completed rather than marking them done immediately.
+        for exp in self.experiments.values():
+            if exp.status == ProfilingExperimentStatus.RUNNING:
+                exp.status = ProfilingExperimentStatus.DONE
 
     def delete_experiments(
         self,
