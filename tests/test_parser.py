@@ -105,15 +105,14 @@ def test_aggregate_pe_data_values(per_pe_dataset):
     result = aggregate_pe_data(per_pe_dataset)
 
     base = str(tmin).replace(" ", "_")
+    expected_std = (sum((x - 2.5) ** 2 for x in [1, 2, 3, 4]) / 4) ** 0.5
 
     # Region 1 tmin values: [1, 2, 3, 4]
     assert result[f"{base}_min_pe"].sel(region="Region 1").item() == pytest.approx(1.0)
     assert result[f"{base}_max_pe"].sel(region="Region 1").item() == pytest.approx(4.0)
     assert result[f"{base}_mean_pe"].sel(region="Region 1").item() == pytest.approx(2.5)
     assert result[f"{base}_median_pe"].sel(region="Region 1").item() == pytest.approx(2.5)
-    assert result[f"{base}_std_pe"].sel(region="Region 1").item() == pytest.approx(
-        pytest.approx((sum((x - 2.5) ** 2 for x in [1, 2, 3, 4]) / 4) ** 0.5, rel=1e-5)
-    )
+    assert result[f"{base}_std_pe"].sel(region="Region 1").item() == pytest.approx(expected_std, rel=1e-5)
     assert result[f"{base}_total_pe"].sel(region="Region 1").item() == pytest.approx(10.0)
     assert result[f"{base}_argmin_pe"].sel(region="Region 1").item() == 0  # PE 0 has min
     assert result[f"{base}_argmax_pe"].sel(region="Region 1").item() == 3  # PE 3 has max
