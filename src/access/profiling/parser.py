@@ -191,7 +191,7 @@ def aggregate_pe_data(ds: xr.Dataset) -> xr.Dataset:
         result_vars[f"{base}_total_pe"] = da.sum("pe")
         result_vars[f"{base}_argmin_pe"] = da.argmin("pe")
         result_vars[f"{base}_argmax_pe"] = da.argmax("pe")
-        result_vars[f"{base}_imbalance_pe"] = (vmax - vmin) / vmean
+        result_vars[f"{base}_imbalance_pe"] = xr.where(vmean != 0, (vmax - vmin) / vmean, 0)
 
     coords = {k: v for k, v in ds.coords.items() if k != "pe"}
     return xr.Dataset(result_vars, coords=coords)
