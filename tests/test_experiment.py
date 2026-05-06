@@ -44,6 +44,50 @@ def test_profiling_log():
     mock_parser.parse.assert_called_once_with(mock_path)
 
 
+def test_profiling_log_hierarchical():
+    """Test ProfilingLog.parse() with hierarchical (nested dict) parser output."""
+    mock_parser = mock.MagicMock(autospec=True)
+    mock_parser.metrics = [tavg, tmax]
+    # Nested dict: no 'region' key — string keys are children, metric keys are values
+    mock_parser.parse.return_value = {
+        "Root": {
+            tavg: 10.0,
+            tmax: 12.0,
+            "Child1": {tavg: 4.0, tmax: 5.0},
+            "Child2": {tavg: 6.0, tmax: 7.0},
+        }
+    }
+
+    mock_path = mock.MagicMock()
+    dataset = ProfilingLog(filepath=mock_path, parser=mock_parser).parse()
+
+    # DFS pre-order: Root, Child1, Child2
+    assert list(dataset["region"].values) == ["Root", "Child1", "Child2"]
+    assert list(dataset[tavg].values) == [10.0, 4.0, 6.0]
+    assert list(dataset[tmax].values) == [12.0, 5.0, 7.0]
+    assert set(dataset.dims) == {"region"}
+
+
+def test_profiling_log_with_pe():
+    """Test ProfilingLog.parse() with per-PE parser output."""
+    mock_parser = mock.MagicMock(autospec=True)
+    mock_parser.metrics = [tavg]
+    mock_parser.parse.return_value = {
+        "region": ["Region 1", "Region 2"],
+        "pe": [0, 1, 2],
+        tavg: [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]],
+    }
+
+    mock_path = mock.MagicMock()
+    dataset = ProfilingLog(filepath=mock_path, parser=mock_parser).parse()
+
+    assert set(dataset.dims) == {"region", "pe"}
+    assert dataset[tavg].shape == (2, 3)
+    assert list(dataset.coords["pe"].values) == [0, 1, 2]
+    assert list(dataset[tavg].isel(region=0).pint.dequantify().values) == [1.0, 2.0, 3.0]
+    assert list(dataset[tavg].isel(region=1).pint.dequantify().values) == [4.0, 5.0, 6.0]
+
+
 def test_profiling_experiment():
     """Test the ProfilingExperiment class constructor, status and directory context manager."""
 

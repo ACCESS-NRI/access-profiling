@@ -10,7 +10,7 @@ from pathlib import Path
 
 import xarray as xr
 
-from access.profiling.parser import ProfilingParser
+from access.profiling.parser import ProfilingParser, flatten_hierarchical
 
 logger = logging.getLogger(__name__)
 
@@ -42,22 +42,38 @@ class ProfilingLog:
     def parse(self) -> xr.Dataset:
         """Parses the log file and returns the profiling data as an xarray Dataset.
 
+        Accepts all three parser output formats (see parser.py module docstring):
+
+        - **Flat**: standard 1D Dataset over the ``region`` dimension.
+        - **Hierarchical nested dict**: automatically flattened via
+          :func:`flatten_hierarchical` before building the Dataset.
+        - **Per-PE**: produces a 2D Dataset with both ``region`` and ``pe`` dimensions.
+          Use :func:`aggregate_pe_data` on the result to compute summary statistics.
+
         Returns:
-           xr.Dataset: Parsed profiling data."""
-        path = self.filepath
-        data = self.parser.parse(path)
+           xr.Dataset: Parsed profiling data.
+        """
+        data = self.parser.parse(self.filepath)
+
+        # Flatten hierarchical (nested dict) format if needed
+        if "region" not in data:
+            data = flatten_hierarchical(data, self.parser.metrics)
+
+        has_pe = "pe" in data
+        dims = ["region", "pe"] if has_pe else ["region"]
+        coords: dict = {"region": data["region"]}
+        if has_pe:
+            coords["pe"] = data["pe"]
+
         return xr.Dataset(
             data_vars=dict(
                 zip(
                     self.parser.metrics,
-                    [
-                        xr.DataArray(data[metric], dims=["region"]).pint.quantify(metric.units)
-                        for metric in self.parser.metrics
-                    ],
+                    [xr.DataArray(data[m], dims=dims).pint.quantify(m.units) for m in self.parser.metrics],
                     strict=True,
                 )
             ),
-            coords={"region": data["region"]},
+            coords=coords,
         )
 
 
