@@ -158,6 +158,34 @@ class ProfilingManager(ABC):
         else:
             logger.warning(f"Experiment '{name}' not found; cannot delete.")
 
+    def _resolve_names(self, names: list[str] | None, all_experiments: bool) -> set[str]:
+        """Validates and resolves a selection of experiment names to operate on.
+
+        Args:
+            names: Explicit list of experiment names, or None when all_experiments is True.
+            all_experiments: If True, selects all managed experiments.
+
+        Returns:
+            Set of experiment names to operate on.
+
+        Raises:
+            ValueError: If both names and all_experiments are provided, or neither is.
+            KeyError: If any specified name is not managed by this instance.
+        """
+        if all_experiments and names is not None:
+            raise ValueError("Pass either names=[...] or all_experiments=True, not both.")
+        if not all_experiments and not names:
+            raise ValueError("No experiments specified. Pass either names=[...] or all_experiments=True.")
+        existing = set(self.experiments.keys())
+        to_process = existing if all_experiments else set(names)
+        unmanaged = [e for e in to_process if e not in existing]
+        if unmanaged:
+            raise KeyError(
+                f"Experiments {unmanaged} are not managed by this manager "
+                f"(existing: {existing}). Please check the names and try again."
+            )
+        return to_process
+
     def parse_profiling_data(self):
         """Parses profiling data from the experiments."""
         self.data = {}

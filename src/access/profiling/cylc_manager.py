@@ -137,20 +137,7 @@ class CylcRoseManager(ProfilingManager, ABC):
             ValueError: If both experiments and all_experiments are specified, or neither is.
             KeyError: If any experiment name is not managed by this instance.
         """
-        if all_experiments and experiments is not None:
-            raise ValueError("Pass either experiments=[...] or all_experiments=True")
-        if not all_experiments and not experiments:
-            raise ValueError("No experiments specified. Pass either experiments=[...] or all_experiments=True")
-
-        existing = set(self.experiments.keys())
-        names_to_delete = existing if all_experiments else set(experiments)
-
-        unmanaged = [e for e in names_to_delete if e not in existing]
-        if unmanaged:
-            raise KeyError(
-                f"Experiments {unmanaged} are not managed by this CylcRoseManager "
-                f"(existing: {existing}). Please check the names and try again."
-            )
+        names_to_delete = self._resolve_names(experiments, all_experiments)
 
         for name in names_to_delete:
             exp = self.experiments[name]
