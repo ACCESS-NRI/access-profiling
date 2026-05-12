@@ -227,21 +227,8 @@ class PayuManager(ProfilingManager, ABC):
             dry_run (bool): If True, performs a dry run without deleting files. Defaults to False.
             remove_repo_dir (bool): If True, removes the base repository directory if no branches are using it.
         """
-        if all_branches and branches is not None:
-            raise ValueError("Pass either branches=[...] or all_branches=True")
+        branches_to_delete = self._resolve_names(branches, all_branches)
 
-        if not all_branches and not branches:
-            raise ValueError("No branches specified for delete! Pass either branches=[...] or all_branches=True")
-
-        existing_branches = set(self.experiments.keys())
-        branches_to_delete = existing_branches if all_branches else set(branches)
-
-        unmanaged_branches = [i for i in branches_to_delete if i not in existing_branches]
-        if unmanaged_branches:
-            raise KeyError(
-                f"Branches {unmanaged_branches} are not managed by the PayuManager"
-                f" (existing branches: {existing_branches}). Please check the branch names and try again."
-            )
         if not branches_to_delete:
             logger.info("No branches to delete after checking against existing branches. Will skip delete.")
             return
