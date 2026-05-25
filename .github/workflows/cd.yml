@@ -6,6 +6,7 @@ on:
 
 env:
   PY_VERSION: 3.12
+  PIP_UPLOADED_PRIOR_TO: P7D
 
 jobs:
   pypi-build:
