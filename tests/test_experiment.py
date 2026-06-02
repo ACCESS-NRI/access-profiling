@@ -44,6 +44,28 @@ def test_profiling_log():
     mock_parser.parse.assert_called_once_with(mock_path)
 
 
+def test_profiling_log_duplicate_regions():
+    """Test duplicate region names are renamed correctly during parsing."""
+
+    mock_parser = mock.MagicMock(autospec=True)
+    mock_parser.metrics = [tavg]
+    mock_parser.parse.return_value = {
+        "region": ["Region 1", "Region 1", "Region 2", "Region 1"],
+        tavg: [1.0, 2.0, 3.0, 4.0],
+    }
+
+    mock_path = mock.MagicMock()
+    profiling_log = ProfilingLog(filepath=mock_path, parser=mock_parser)
+
+    dataset = profiling_log.parse()
+
+    expected_unique_regions = ["Region 1", "Region 1_2", "Region 2", "Region 1_3"]
+    assert list(dataset["region"].values) == expected_unique_regions
+    assert list(dataset[tavg].values) == [1.0, 2.0, 3.0, 4.0]
+    assert mock_parser.parse.call_count == 1
+    assert mock_parser.parse.return_value["region"] == ["Region 1", "Region 1", "Region 2", "Region 1"]
+
+
 def test_profiling_log_hierarchical():
     """Test ProfilingLog.parse() with hierarchical (nested dict) parser output."""
     mock_parser = mock.MagicMock(autospec=True)
