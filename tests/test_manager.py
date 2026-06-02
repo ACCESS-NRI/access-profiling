@@ -321,6 +321,60 @@ def test_scaling_data(mock_plot, scaling_data):
     assert (Path("4cpu"), Path("/fake/runs/4cpu")) in manager._parse_ncpus_calls
 
 
+def test_scaling_data_missing_region_raises_value_error(scaling_data):
+    """Test plot_scaling_data raises a clear error when a requested region is missing."""
+
+    paths, ncpus, datasets = scaling_data
+    manager = MockProfilingManager(paths, ncpus, datasets)
+
+    with pytest.raises(ValueError, match="Requested region\\(s\\)") as exc_info:
+        manager.plot_scaling_data(
+            components=["component"],
+            regions=[["Missing Region"]],
+            metric=tavg,
+            experiments=["1cpu"],
+        )
+
+    message = str(exc_info.value)
+    assert "Missing Region" in message
+    assert "component 'component'" in message
+    assert "experiment '1cpu'" in message
+
+
+def test_scaling_data_no_selected_experiments_raises_value_error(scaling_data):
+    """Test plot_scaling_data raises when no experiments are selected."""
+
+    paths, ncpus, datasets = scaling_data
+    manager = MockProfilingManager(paths, ncpus, datasets)
+
+    with pytest.raises(ValueError, match="No experiments selected for scaling plot"):
+        manager.plot_scaling_data(
+            components=["component"],
+            regions=[["Region 1"]],
+            metric=tavg,
+            experiments=[],
+        )
+
+
+def test_scaling_data_missing_experiment_data_raises_value_error(scaling_data):
+    """Test plot_scaling_data raises when selected experiments have no parsed data."""
+
+    paths, ncpus, datasets = scaling_data
+    manager = MockProfilingManager(paths, ncpus, datasets)
+
+    with pytest.raises(ValueError, match="No parsed profiling data found for experiment\(s\)") as exc_info:
+        manager.plot_scaling_data(
+            components=["component"],
+            regions=[["Region 1"]],
+            metric=tavg,
+            experiments=["missing_exp"],
+        )
+
+    message = str(exc_info.value)
+    assert "missing_exp" in message
+    assert "Available experiments" in message
+
+
 @mock.patch("access.profiling.manager.plot_bar_metrics")
 def test_bar_chart_data(mock_plot, scaling_data):
     """Test the plot_bar_chart method of ProfilingManager.
