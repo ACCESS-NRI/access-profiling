@@ -65,9 +65,11 @@ class ProfilingManager(ABC):
         if self.data == {}:
             summary += indent * 2 + "No parsed data.\n"
         else:
-            for name, ds in self.data.items():
+            for name, exp_data in self.data.items():
                 summary += indent * 2 + f"'{name}':\n"
-                summary += textwrap.indent(f"{ds}\n", indent * 3)
+                for comp_name, ds in exp_data.items():
+                    summary += indent * 3 + f"'{comp_name}':\n"
+                    summary += textwrap.indent(f"{ds}\n", indent * 4)
         return summary
 
     @abstractmethod
