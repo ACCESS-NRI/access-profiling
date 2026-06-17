@@ -112,44 +112,30 @@ class CylcRoseManager(ProfilingManager, ABC):
             if exp.status == ProfilingExperimentStatus.RUNNING:
                 exp.status = ProfilingExperimentStatus.DONE
 
-    def delete_experiments(
-        self,
-        experiments: list[str] | None = None,
-        all_experiments: bool = False,
-        dry_run: bool = False,
-    ) -> None:
-        """Deletes Rose Cylc experiments from the work directory and removes them from the manager.
+    def _delete_experiment(self, name: str, dry_run: bool) -> None:
+        """Deletes the experiment and run directories of a single Rose Cylc experiment.
 
         Args:
-            experiments (list[str] | None): List of experiment names to delete.
-            all_experiments (bool): If True, deletes all experiments managed by this instance.
-            dry_run (bool): If True, logs what would be deleted without making any changes. Defaults to False.
-
-        Raises:
-            ValueError: If both experiments and all_experiments are specified, or neither is.
-            KeyError: If any experiment name is not managed by this instance.
+            name (str): Name of the experiment to delete.
+            dry_run (bool): If True, logs what would be deleted without making any changes.
         """
-        names_to_delete = self._resolve_names(experiments, all_experiments)
-
-        for name in names_to_delete:
-            exp = self.experiments[name]
-            exp_path = exp.path
-            run_path = exp.run_path
-            if dry_run:
-                logger.info(f"Dry run: would delete experiment directory '{exp_path}' and run directory '{run_path}'.")
-                continue
-            if exp_path.is_dir():
-                logger.info(f"Deleting experiment directory '{exp_path}'.")
-                shutil.rmtree(exp_path)
+        exp = self.experiments[name]
+        exp_path = exp.path
+        run_path = exp.run_path
+        if dry_run:
+            logger.info(f"Dry run: would delete experiment directory '{exp_path}' and run directory '{run_path}'.")
+            return
+        if exp_path.is_dir():
+            logger.info(f"Deleting experiment directory '{exp_path}'.")
+            shutil.rmtree(exp_path)
+        else:
+            logger.warning(f"Experiment directory '{exp_path}' does not exist. Skipping deletion.")
+        if run_path is not None:
+            if run_path.is_dir():
+                logger.info(f"Deleting run directory '{run_path}'.")
+                shutil.rmtree(run_path)
             else:
-                logger.warning(f"Experiment directory '{exp_path}' does not exist. Skipping deletion.")
-            if run_path is not None:
-                if run_path.is_dir():
-                    logger.info(f"Deleting run directory '{run_path}'.")
-                    shutil.rmtree(run_path)
-                else:
-                    logger.warning(f"Run directory '{run_path}' does not exist. Skipping deletion.")
-            del self.experiments[name]
+                logger.warning(f"Run directory '{run_path}' does not exist. Skipping deletion.")
 
     def archive_experiments(
         self,

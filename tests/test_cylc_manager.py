@@ -190,7 +190,7 @@ def test_delete_experiments_removes_path_and_run_path(tmp_path):
 def test_delete_experiments_rejects_invalid_selection(manager):
     """delete_experiments requires exactly one selection mode."""
 
-    with pytest.raises(ValueError, match="Pass either names=\\[\\.\\.\\.\\] or all_experiments=True"):
+    with pytest.raises(ValueError, match="Pass either experiments=\\[\\.\\.\\.\\] or all_experiments=True"):
         manager.delete_experiments(experiments=["u-aa123"], all_experiments=True)
 
     with pytest.raises(ValueError, match="No experiments specified"):
