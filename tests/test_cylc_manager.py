@@ -111,8 +111,7 @@ def test_parse_ncpus_uses_run_path(tmp_path, manager):
     assert manager.parse_ncpus(exp_path, run_path) == 6
 
 
-@mock.patch("access.profiling.cylc_manager.getpass.getuser", return_value="fake-user")
-def test_add_rose_experiment_uses_new_experiment_api(mock_getuser, manager):
+def test_add_rose_experiment_uses_new_experiment_api(manager):
     """add_rose_experiment should populate ProfilingExperiment.path and run_path."""
 
     rose = "u-aa123"
@@ -121,21 +120,11 @@ def test_add_rose_experiment_uses_new_experiment_api(mock_getuser, manager):
 
     with mock.patch("access.profiling.cylc_manager.Path.is_dir", autospec=True) as mock_is_dir:
         mock_is_dir.side_effect = lambda path: path in {experiment_path, run_path}
-        manager.add_rose_experiment(rose, project="proj")
+        manager.add_rose_experiment(rose, run_path=run_path)
 
     assert manager.experiments[rose].path == experiment_path
     assert manager.experiments[rose].run_path == run_path
     assert manager.experiments[rose].status == ProfilingExperimentStatus.DONE
-    mock_getuser.assert_called_once()
-
-
-def test_add_rose_experiment_requires_project(monkeypatch, manager):
-    """A project must be provided explicitly or through the PROJECT environment variable."""
-
-    monkeypatch.delenv("PROJECT", raising=False)
-
-    with pytest.raises(ValueError, match="No project specified and PROJECT environment variable is not set"):
-        manager.add_rose_experiment("u-aa123")
 
 
 def test_add_rose_experiment_rejects_missing_experiment_path(manager):
@@ -145,12 +134,11 @@ def test_add_rose_experiment_rejects_missing_experiment_path(manager):
         mock.patch("access.profiling.cylc_manager.Path.is_dir", return_value=False),
         pytest.raises(ValueError, match="does not exist or is not a directory"),
     ):
-        manager.add_rose_experiment("u-aa123", project="proj")
+        manager.add_rose_experiment("u-aa123", run_path=Path("/scratch/proj/fake-user/cylc-run/u-aa123"))
 
 
-@mock.patch("access.profiling.cylc_manager.getpass.getuser", return_value="fake-user")
-def test_add_rose_experiment_missing_run_path(mock_getuser, caplog, manager):
-    """Missing Cylc run directories are allowed, but stored as None."""
+def test_add_rose_experiment_missing_run_path(caplog, manager):
+    """A missing or omitted Cylc run directory is allowed, but stored as None."""
 
     rose = "u-aa123"
     experiment_path = manager.work_dir / rose
@@ -159,12 +147,27 @@ def test_add_rose_experiment_missing_run_path(mock_getuser, caplog, manager):
     with mock.patch("access.profiling.cylc_manager.Path.is_dir", autospec=True) as mock_is_dir:
         mock_is_dir.side_effect = lambda path: path == experiment_path
         with caplog.at_level(logging.WARNING):
-            manager.add_rose_experiment(rose, project="proj")
+            manager.add_rose_experiment(rose, run_path=run_path)
 
     assert manager.experiments[rose].path == experiment_path
     assert manager.experiments[rose].run_path is None
     assert f"Run path '{run_path}' does not exist" in caplog.text
-    mock_getuser.assert_called_once()
+
+
+def test_add_rose_experiment_without_run_path(caplog, manager):
+    """Omitting run_path stores None without emitting a warning."""
+
+    rose = "u-aa123"
+    experiment_path = manager.work_dir / rose
+
+    with mock.patch("access.profiling.cylc_manager.Path.is_dir", autospec=True) as mock_is_dir:
+        mock_is_dir.side_effect = lambda path: path == experiment_path
+        with caplog.at_level(logging.WARNING):
+            manager.add_rose_experiment(rose)
+
+    assert manager.experiments[rose].path == experiment_path
+    assert manager.experiments[rose].run_path is None
+    assert "does not exist" not in caplog.text
 
 
 def test_delete_experiments_removes_path_and_run_path(tmp_path):

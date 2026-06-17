@@ -1,9 +1,7 @@
 # Copyright 2025 ACCESS-NRI and contributors. See the top-level COPYRIGHT file for details.
 # SPDX-License-Identifier: Apache-2.0
 
-import getpass
 import logging
-import os
 import shutil
 import subprocess
 from abc import ABC, abstractmethod
@@ -62,28 +60,22 @@ class CylcRoseManager(ProfilingManager, ABC):
 
         raise ValueError(f"Cannot find layout key, {self._layout_variable}, in {config_path}.")
 
-    def add_rose_experiment(self, rose: str, project: str | None = None) -> None:
+    def add_rose_experiment(self, rose: str, run_path: Path | None = None) -> None:
         """Adds the given rose as an experiment to this manager.
 
         Args:
             rose (str): The rose to add as an experiment.
-            project (str): The project to use to look for the results. If no project is provided,
-                the project in the PROJECT environment variable will be used.
+            run_path (Path | None): Path to the Cylc run directory holding the results. If not provided, or if the
+                provided directory does not exist, archiving will only include the experiment files.
 
         Raises:
-            ValueError: If no project is specified and the PROJECT environment variable is not set,
-                or if the experiment path does not exist.
+            ValueError: If the experiment path does not exist.
         """
-        project = project or os.environ.get("PROJECT")
-        if project is None:
-            raise ValueError("No project specified and PROJECT environment variable is not set.")
-
         experiment_path = self.work_dir / rose
         if not experiment_path.is_dir():
             raise ValueError(f"Experiment path '{experiment_path}' does not exist or is not a directory.")
 
-        run_path = Path("/scratch") / project / getpass.getuser() / "cylc-run" / rose
-        if not run_path.is_dir():
+        if run_path is not None and not run_path.is_dir():
             logger.warning(f"Run path '{run_path}' does not exist. Archiving will only include experiment files.")
             run_path = None
 
