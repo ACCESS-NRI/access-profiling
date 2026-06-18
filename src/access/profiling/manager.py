@@ -214,7 +214,7 @@ class ProfilingManager(ABC):
             return
 
         for name in names_to_delete:
-            self.experiments.pop(name, None)
+            del self.experiments[name]
 
     def parse_profiling_data(self):
         """Parses profiling data from the experiments."""
