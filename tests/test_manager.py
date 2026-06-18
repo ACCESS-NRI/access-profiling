@@ -44,6 +44,7 @@ class MockProfilingManager(ProfilingManager):
         else:
             self._mock_ncpus = {}
         self._parse_ncpus_calls = []
+        self._deleted_experiments = []
 
         if datasets is not None:
             self.data = dict(zip([path.name for path in paths], datasets, strict=True))
@@ -57,6 +58,10 @@ class MockProfilingManager(ProfilingManager):
     def profiling_logs(self, path, run_path=None):  # pyright: ignore[reportIncompatibleMethodOverride]
         """Simulate parsing profiling data for a given path."""
         pass
+
+    def _delete_experiment(self, name, dry_run):
+        """Record requested deletions instead of touching the filesystem."""
+        self._deleted_experiments.append((name, dry_run))
 
 
 @pytest.fixture()

@@ -214,38 +214,37 @@ class PayuManager(ProfilingManager, ABC):
 
     def delete_experiments(
         self,
-        branches: list[str] | None = None,
-        all_branches: bool = False,
+        experiments: list[str] | None = None,
+        all_experiments: bool = False,
         dry_run: bool = False,
         remove_repo_dir: bool = False,
     ) -> None:
         """Deletes Payu experiments from the work directory and remove them from the manager.
 
         Args:
-            branches (list[str] | None): List of branches to delete.
-            all_branches (bool): If True, deletes all branches managed by this instance.
+            experiments (list[str] | None): List of experiments (branches) to delete.
+            all_experiments (bool): If True, deletes all experiments managed by this instance.
             dry_run (bool): If True, performs a dry run without deleting files. Defaults to False.
             remove_repo_dir (bool): If True, removes the base repository directory if no branches are using it.
         """
-        if all_branches and branches is not None:
-            raise ValueError("Pass either branches=[...] or all_branches=True")
+        # remove_repo_dir would already be forwarded to _delete_experiment via the base class **kwargs, but this
+        # override declares it explicitly so it stays a documented, discoverable and typo-checked argument of the
+        # public Payu API rather than a hidden keyword convention.
+        super().delete_experiments(
+            experiments=experiments,
+            all_experiments=all_experiments,
+            dry_run=dry_run,
+            remove_repo_dir=remove_repo_dir,
+        )
 
-        if not all_branches and not branches:
-            raise ValueError("No branches specified for delete! Pass either branches=[...] or all_branches=True")
+    def _delete_experiment(self, name: str, dry_run: bool, remove_repo_dir: bool = False) -> None:
+        """Deletes a single Payu experiment (branch) via the experiment runner.
 
-        existing_branches = set(self.experiments.keys())
-        branches_to_delete = existing_branches if all_branches else set(branches)
-
-        unmanaged_branches = [i for i in branches_to_delete if i not in existing_branches]
-        if unmanaged_branches:
-            raise KeyError(
-                f"Branches {unmanaged_branches} are not managed by the PayuManager"
-                f" (existing branches: {existing_branches}). Please check the branch names and try again."
-            )
-        if not branches_to_delete:
-            logger.info("No branches to delete after checking against existing branches. Will skip delete.")
-            return
-
+        Args:
+            name (str): Name of the experiment (branch) to delete.
+            dry_run (bool): If True, performs a dry run without deleting files.
+            remove_repo_dir (bool): If True, removes the base repository directory if no branches are using it.
+        """
         runner_config = {
             "test_path": self.work_dir,
             "repository_directory": self._repository_directory,
@@ -253,21 +252,12 @@ class PayuManager(ProfilingManager, ABC):
 
         runner = ExperimentRunner(runner_config)
 
-        # all_branches is not passed to the runner as we already resolved the explicit list
-        # from self.experiments so the runner only receives known safe branches to delete.
         runner.delete_experiments(
-            branches=branches_to_delete,
+            branches=[name],
             hard=True,
             dry_run=dry_run,
             remove_repo_dir=remove_repo_dir,
         )
-
-        if dry_run:
-            return
-
-        # remove deleted branches from manager state
-        for branch in branches_to_delete:
-            self.experiments.pop(branch, None)
 
     def archive_experiments(
         self,

@@ -158,6 +158,64 @@ class ProfilingManager(ABC):
         else:
             logger.warning(f"Experiment '{name}' not found; cannot delete.")
 
+    @abstractmethod
+    def _delete_experiment(self, name: str, dry_run: bool, **kwargs) -> None:
+        """Deletes the on-disk artifacts of a single experiment.
+
+        This is the configuration-specific counterpart to delete_experiments, which handles selection, validation and
+        manager-state bookkeeping. Implementations should only remove files and, when dry_run is True, log what would
+        be removed without making any changes.
+
+        Args:
+            name (str): Name of the experiment to delete. Guaranteed to be managed by this instance.
+            dry_run (bool): If True, log what would be deleted without making any changes.
+            **kwargs: Configuration-specific options forwarded verbatim from delete_experiments.
+        """
+
+    def delete_experiments(
+        self,
+        experiments: list[str] | None = None,
+        all_experiments: bool = False,
+        dry_run: bool = False,
+        **kwargs,
+    ) -> None:
+        """Deletes experiments and removes them from the manager.
+
+        The selection, validation and manager-state bookkeeping are handled here, while the actual on-disk deletion is
+        delegated to the configuration-specific _delete_experiment method.
+
+        Args:
+            experiments (list[str] | None): List of experiment names to delete.
+            all_experiments (bool): If True, deletes all experiments managed by this instance.
+            dry_run (bool): If True, logs what would be deleted without making any changes. Defaults to False.
+            **kwargs: Configuration-specific options forwarded to _delete_experiment.
+
+        Raises:
+            ValueError: If both experiments and all_experiments are specified, or neither is.
+            KeyError: If any experiment name is not managed by this instance.
+        """
+        if all_experiments and experiments is not None:
+            raise ValueError("Pass either experiments=[...] or all_experiments=True, not both.")
+        if not all_experiments and not experiments:
+            raise ValueError("No experiments specified. Pass either experiments=[...] or all_experiments=True.")
+        existing = set(self.experiments.keys())
+        names_to_delete = existing if all_experiments else set(experiments)
+        unmanaged = names_to_delete - existing
+        if unmanaged:
+            raise KeyError(
+                f"Experiments {unmanaged} are not managed by this manager "
+                f"(existing: {existing}). Please check the names and try again."
+            )
+
+        for name in names_to_delete:
+            self._delete_experiment(name, dry_run=dry_run, **kwargs)
+
+        if dry_run:
+            return
+
+        for name in names_to_delete:
+            del self.experiments[name]
+
     def parse_profiling_data(self):
         """Parses profiling data from the experiments."""
         self.data = {}
