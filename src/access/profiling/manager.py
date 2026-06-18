@@ -65,9 +65,11 @@ class ProfilingManager(ABC):
         if self.data == {}:
             summary += indent * 2 + "No parsed data.\n"
         else:
-            for name, ds in self.data.items():
+            for name, exp_data in self.data.items():
                 summary += indent * 2 + f"'{name}':\n"
-                summary += textwrap.indent(f"{ds}\n", indent * 3)
+                for comp_name, ds in exp_data.items():
+                    summary += indent * 3 + f"'{comp_name}':\n"
+                    summary += textwrap.indent(f"{ds}\n", indent * 4)
         return summary
 
     @abstractmethod
@@ -260,9 +262,20 @@ class ProfilingManager(ABC):
             region_relabel_map (dict | None): Optional mapping to relabel regions in the plots.
         """
 
+        exp_names = experiments if experiments is not None else list(self.data.keys())
+        if not exp_names:
+            raise ValueError("No experiments selected for scaling plot.")
+
+        missing_experiments = [exp_name for exp_name in exp_names if exp_name not in self.data]
+        if missing_experiments:
+            raise ValueError(
+                f"No parsed profiling data found for experiment(s): {missing_experiments}. "
+                f"Available experiments: {list(self.data.keys())}."
+            )
+
         # Find number of cpus used for each experiment
         ncpus = {}
-        for exp_name in self.data:
+        for exp_name in exp_names:
             with self.experiments[exp_name].directory() as (exp_path, run_path):
                 # Find number of cpus used
                 ncpus[exp_name] = self.parse_ncpus(exp_path, run_path)
@@ -271,14 +284,18 @@ class ProfilingManager(ABC):
         scaling_data = []
         for component, component_regions in zip(components, regions, strict=True):
             component_data = None
-            for exp_name in self.data:
-                # Skip experiments not in the specified list
-                if experiments is not None and exp_name not in experiments:
-                    continue
-
+            for exp_name in exp_names:
                 ds = self.data[exp_name].get(component)
                 if ds is None:
                     raise ValueError(f"No profiling data found for component '{component}' in experiment '{exp_name}'.")
+
+                available_regions = ds.coords["region"].values.tolist()
+                missing_regions = [region for region in component_regions if region not in available_regions]
+                if missing_regions:
+                    raise ValueError(
+                        f"Requested region(s) {missing_regions} not found for component '{component}' "
+                        f"in experiment '{exp_name}'. Available regions: {available_regions}."
+                    )
 
                 # Select only the desired regions
                 ds = ds.sel(region=component_regions)

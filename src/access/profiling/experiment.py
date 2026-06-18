@@ -15,6 +15,18 @@ from access.profiling.parser import ProfilingParser, flatten_hierarchical
 logger = logging.getLogger(__name__)
 
 
+def _make_unique_region_names(regions: list[object]) -> list[object]:
+    """Return region names with deterministic suffixes for duplicates."""
+
+    counts: dict[object, int] = {}
+    unique_regions: list[object] = []
+    for region in regions:
+        count = counts.get(region, 0) + 1
+        counts[region] = count
+        unique_regions.append(region if count == 1 else f"{region}_{count}")
+    return unique_regions
+
+
 class ProfilingLog:
     """Represents a profiling log file.
 
@@ -61,7 +73,7 @@ class ProfilingLog:
 
         has_pe = "pe" in data
         dims = ["region", "pe"] if has_pe else ["region"]
-        coords: dict = {"region": data["region"]}
+        coords: dict = {"region": _make_unique_region_names(list(data["region"]))}
         if has_pe:
             coords["pe"] = data["pe"]
 
