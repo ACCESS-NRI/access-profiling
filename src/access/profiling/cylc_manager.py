@@ -108,9 +108,9 @@ class CylcRoseManager(ProfilingManager, ABC):
             exp.status = ProfilingExperimentStatus.RUNNING
 
         # TODO: properly detect when running experiments have completed rather than marking them done immediately.
-        for exp in self.experiments.values():
-            if exp.status == ProfilingExperimentStatus.RUNNING:
-                exp.status = ProfilingExperimentStatus.DONE
+        for exp_name in self.experiments:
+            if self.experiments[exp_name].status == ProfilingExperimentStatus.RUNNING:
+                self.experiments[exp_name].status = ProfilingExperimentStatus.DONE
 
     def _delete_experiment(self, name: str, dry_run: bool) -> None:
         """Deletes the experiment and run directories of a single Rose Cylc experiment.
