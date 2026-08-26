@@ -1,6 +1,7 @@
 # Copyright 2025 ACCESS-NRI and contributors. See the top-level COPYRIGHT file for details.
 # SPDX-License-Identifier: Apache-2.0
 
+import itertools
 import logging
 from abc import ABC, abstractmethod
 from collections.abc import Callable
@@ -8,8 +9,9 @@ from datetime import timedelta
 from pathlib import Path
 
 from access.config import YAMLParser
-from access.config.esm1p6_layout_input import LayoutSearchConfig
-from access.config.layout_config import LayoutTuple
+from access.config.parallel_allocation_strategies import RootAllocation
+from access.config.parallel_component import ComponentLayout, ParallelComponent
+from access.config.parallel_layouts import iter_layouts
 from experiment_generator.experiment_generator import ExperimentGenerator
 from experiment_runner.experiment_runner import ExperimentRunner
 
@@ -26,6 +28,8 @@ class PayuManager(ProfilingManager, ABC):
     _repository_directory: str = "config"  # Repository directory name needed by the experiment generator and runner.
     _nruns: int = 1  # Number of repetitions for the Payu experiments.
     _startfrom_restart: str = "cold"  # Restart option for the Payu experiments.
+    _repository: str  # Git repository URL or path of the control experiment. Set by set_control.
+    _control_commit: str  # Git commit of the control experiment. Set by set_control.
 
     @abstractmethod
     def get_component_logs(self, path: Path) -> dict[str, ProfilingLog]:
@@ -42,30 +46,35 @@ class PayuManager(ProfilingManager, ABC):
     def model_type(self) -> str:
         """Returns the model type identifier, as defined in Payu."""
 
+    @property
     @abstractmethod
-    def generate_core_layouts_from_node_count(
-        self,
-        num_nodes: float,
-        cores_per_node: int,
-        layout_search_config: LayoutSearchConfig | None = None,
-    ) -> list:
-        """Generates core layouts from the given number of nodes.
+    def parallel_component(self) -> ParallelComponent:
+        """Returns the component tree describing how the model is parallelised.
 
-        Args:
-            num_nodes (float): Number of nodes.
-            cores_per_node (int): Number of cores per node.
-            layout_search_config (LayoutSearchConfig | None): Configuration for layout search.
+        Returns:
+            ParallelComponent: Root of the component tree, holding the domains and the requirements that every
+                valid layout of this model must satisfy. Requirements specific to a particular study belong in the
+                allocation strategy passed to generate_scaling_experiments instead.
         """
 
     @abstractmethod
-    def generate_perturbation_block(self, layout: LayoutTuple, branch_name_prefix: str) -> dict:
-        """Generates a perturbation block for the given layout to be passed to the experiment generator.
+    def layout_branch_name(self, layout: ComponentLayout) -> str:
+        """Returns the name of the branch holding the experiment for a given layout.
 
         Args:
-            layout (LayoutTuple): Core layout tuple.
-            branch_name_prefix (str): Branch name prefix.
+            layout (ComponentLayout): Layout of the model components, as returned by the layout search.
         Returns:
-            dict: Perturbation block configuration.
+            str: Branch name. Must be distinct for every distinct layout, as it is what identifies an experiment.
+        """
+
+    @abstractmethod
+    def layout_config_changes(self, layout: ComponentLayout) -> dict:
+        """Returns the configuration file changes needed to run the model with a given layout.
+
+        Args:
+            layout (ComponentLayout): Layout of the model components, as returned by the layout search.
+        Returns:
+            dict: Changes to apply, keyed by the path of each configuration file relative to the control directory.
         """
 
     @property
@@ -116,24 +125,64 @@ class PayuManager(ProfilingManager, ABC):
         self._repository = repository
         self._control_commit = commit
 
-    def generate_scaling_experiments(
+    def select_layouts(
         self,
-        num_nodes_list: list[float],
-        control_options: dict,
-        cores_per_node: int,
-        tol_around_ctrl_ratio: float,
-        max_wasted_ncores_frac: float | Callable[[float], float],
-        walltime: float | Callable[[float], float],
-    ) -> None:
-        """Generates scaling experiments using the ExperimentGenerator.
+        total_cores: int,
+        allocations: RootAllocation | None = None,
+        max_layouts: int | None = None,
+    ) -> list[ComponentLayout]:
+        """Returns the valid layouts of the model for a given number of cores, fewest idle cores first.
 
         Args:
-            num_nodes_list (list[int]): List of number of nodes to generate experiments for.
-            control_options (dict): Options for the control experiment.
-            cores_per_node (int): Number of cores per node.
-            tol_around_ctrl_ratio (float): Tolerance around control core ratio for layout generation.
-            max_wasted_ncores_frac (float | Callable[[float], float]): Maximum fraction of wasted cores allowed.
-            walltime (float | Callable[[float], float]): Walltime in hours for each experiment.
+            total_cores (int): Total number of cores the layouts must distribute among the model components.
+            allocations (RootAllocation | None): Allocation strategy deciding how many cores each component may
+                receive, and any further constraints the layouts must satisfy. None (the default) leaves every
+                component unconstrained, which is rarely what is wanted: the number of valid layouts grows very
+                quickly with the number of cores.
+            max_layouts (int | None): Maximum number of layouts to enumerate. None (the default) enumerates all of
+                them. Note that this bounds the *enumeration*, so the returned layouts are the first ones found and
+                not necessarily those with the fewest idle cores.
+        Returns:
+            list[ComponentLayout]: The layouts found, sorted by increasing number of idle cores.
+        """
+        layouts = iter_layouts(self.parallel_component, total_cores, allocations=allocations)
+        if max_layouts is not None:
+            layouts = itertools.islice(layouts, max_layouts + 1)
+        found = list(layouts)
+        if max_layouts is not None and len(found) > max_layouts:
+            logger.warning(
+                f"More than {max_layouts} layouts found for {total_cores} cores. Only the first {max_layouts} "
+                "will be used; they are not necessarily the ones with the fewest idle cores."
+            )
+            found = found[:max_layouts]
+        return sorted(found, key=lambda layout: layout.idle_cores)
+
+    def generate_scaling_experiments(
+        self,
+        total_cores_list: list[int],
+        control_options: dict,
+        walltime: float | Callable[[int], float],
+        allocations: RootAllocation | Callable[[int], RootAllocation] | None = None,
+        max_layouts: int | None = None,
+    ) -> None:
+        """Generates scaling experiments, one per valid layout of the model.
+
+        For each requested number of cores, the valid layouts of the model are enumerated and each one becomes a
+        perturbation experiment. Layouts whose branch is already known to this manager are skipped, so the same
+        layout found for two different numbers of cores only generates one experiment.
+
+        Args:
+            total_cores_list (list[int]): Numbers of cores to generate experiments for. Note that these are cores
+                and not nodes, so a caller working in nodes multiplies by the number of cores per node first.
+            control_options (dict): Options of the control experiment, passed to the experiment generator.
+            walltime (float | Callable[[int], float]): Walltime in hours to request for each experiment, either as a
+                fixed value or as a function of the total number of cores.
+            allocations (RootAllocation | Callable[[int], RootAllocation] | None): Allocation strategy deciding how
+                many cores each component may receive, either as a fixed strategy or as a function of the total
+                number of cores. The latter is usually what is needed, as the bounds of an allocation are expressed
+                in cores. None (the default) leaves every component unconstrained.
+            max_layouts (int | None): Maximum number of layouts to enumerate for each number of cores. None (the
+                default) enumerates all of them.
         """
 
         generator_config = {
@@ -144,40 +193,43 @@ class PayuManager(ProfilingManager, ABC):
             "repository_directory": self._repository_directory,
             "control_branch_name": "ctrl",
             "Control_Experiment": control_options,
+            "Perturbation_Experiment": {},
         }
 
-        seen_layouts = set()
         seqnum = 1
-        generator_config["Perturbation_Experiment"] = {}
-        for num_nodes in num_nodes_list:
-            mwf = max_wasted_ncores_frac(num_nodes) if callable(max_wasted_ncores_frac) else max_wasted_ncores_frac
-            layout_config = LayoutSearchConfig(tol_around_ctrl_ratio=tol_around_ctrl_ratio, max_wasted_ncores_frac=mwf)
-            layouts = self.generate_core_layouts_from_node_count(
-                num_nodes,
-                cores_per_node=cores_per_node,
-                layout_search_config=layout_config,
+        for total_cores in total_cores_list:
+            layouts = self.select_layouts(
+                total_cores,
+                allocations=allocations(total_cores) if callable(allocations) else allocations,
+                max_layouts=max_layouts,
             )
             if not layouts:
-                logger.warning(f"No layouts found for {num_nodes} nodes")
+                logger.warning(
+                    f"No layouts found for {total_cores} cores. Check the bounds and the constraints of the "
+                    "allocation strategy."
+                )
                 continue
+            logger.info(f"Found {len(layouts)} layouts for {total_cores} cores.")
 
-            layouts = [x for x in layouts if x not in seen_layouts]
-            seen_layouts.update(layouts)
-            logger.info(f"Generated {len(layouts)} layouts for {num_nodes} nodes. Layouts: {layouts}")
-
-            # TODO: the branch name needs to be simpler and model agnostic
-            branch_name = f"layout-unused-cores-to-cice-{layout_config.allocate_unused_cores_to_ice}"
-            walltime_hrs = walltime(num_nodes) if callable(walltime) else walltime
+            walltime_hrs = walltime(total_cores) if callable(walltime) else walltime
 
             for layout in layouts:
-                pert_config = self.generate_perturbation_block(layout=layout, branch_name_prefix=branch_name)
-                branch = pert_config["branches"][0]
-                pert_config["config.yaml"]["walltime"] = str(timedelta(hours=walltime_hrs))
+                branch = self.layout_branch_name(layout)
+                if branch in self.experiments:
+                    logger.info(f"Experiment for branch {branch} already exists. Skipping addition.")
+                    continue
+
+                pert_config = {"branches": [branch], **self.layout_config_changes(layout)}
+                pert_config.setdefault("config.yaml", {})["walltime"] = str(timedelta(hours=walltime_hrs))
 
                 generator_config["Perturbation_Experiment"][f"Experiment_{seqnum}"] = pert_config
                 self.experiments[branch] = ProfilingExperiment(path=self.work_dir / branch / self._repository_directory)
 
                 seqnum += 1
+
+        if not generator_config["Perturbation_Experiment"]:
+            logger.warning("No new experiments to generate. Will skip generation.")
+            return
 
         ExperimentGenerator(generator_config).run()
 
