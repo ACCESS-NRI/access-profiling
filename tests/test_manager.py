@@ -64,6 +64,21 @@ class MockProfilingManager(ProfilingManager):
         self._deleted_experiments.append((name, dry_run))
 
 
+def make_component_dataset(tavg_values: list[float]) -> dict[str, xr.Dataset]:
+    """Builds mock parsed profiling data for a single component with two regions.
+
+    Args:
+        tavg_values (list[float]): Values of the tavg metric for "Region 1" and "Region 2".
+
+    Returns:
+        dict[str, xr.Dataset]: Mock data for a single component, named "component".
+    """
+    regions = ["Region 1", "Region 2"]
+    count_array = xr.DataArray([1, 2], dims=["region"]).pint.quantify(count.units)
+    tavg_array = xr.DataArray(list(tavg_values), dims=["region"]).pint.quantify(tavg.units)
+    return {"component": xr.Dataset(data_vars={count: count_array, tavg: tavg_array}, coords={"region": regions})}
+
+
 @pytest.fixture()
 def scaling_data():
     """Fixture instantiating fake parsed profiling data for different CPU configurations, as one would get from
@@ -450,3 +465,118 @@ def test_bar_chart_all_experiments(mock_plot, scaling_data):
     bar_data = mock_plot.call_args.args[0]
     assert set(bar_data.keys()) == {"1cpu", "4cpu", "2cpu"}
     assert mock_plot.call_args.kwargs["show"] is False
+
+
+@pytest.fixture()
+def layout_scaling_data():
+    """Fixture instantiating fake parsed profiling data where two experiments use the same number of CPUs.
+
+    This is what a layout study looks like: '2cpu_slow' and '2cpu_fast' both use 2 CPUs, but '2cpu_fast' is the
+    better performing decomposition. The tavg values on "Region 1" are 400 s, 800 s and 300 s respectively.
+    """
+    paths = [Path("2cpu_slow"), Path("1cpu"), Path("2cpu_fast")]
+    ncpus = [2, 1, 2]  # Intentionally unordered, with a repeated number of CPUs
+    datasets = [
+        make_component_dataset([400.0, 4.0]),
+        make_component_dataset([800.0, 8.0]),
+        make_component_dataset([300.0, 3.0]),
+    ]
+
+    return paths, ncpus, datasets
+
+
+def test_select_best_experiments(layout_scaling_data):
+    """Test select_best_experiments keeps the fastest experiment for each number of CPUs."""
+
+    paths, ncpus, datasets = layout_scaling_data
+    manager = MockProfilingManager(paths, ncpus, datasets)
+
+    # Only one experiment per CPU count, ordered by increasing number of CPUs
+    assert manager.select_best_experiments("component", "Region 1", tavg) == ["1cpu", "2cpu_fast"]
+
+
+def test_select_best_experiments_subset(layout_scaling_data):
+    """Test select_best_experiments only selects among the requested experiments."""
+
+    paths, ncpus, datasets = layout_scaling_data
+    manager = MockProfilingManager(paths, ncpus, datasets)
+
+    # The faster 2 CPU experiment is not a candidate, so the slower one survives
+    selected = manager.select_best_experiments("component", "Region 1", tavg, experiments=["2cpu_slow", "1cpu"])
+    assert selected == ["1cpu", "2cpu_slow"]
+
+
+def test_select_best_experiments_unique_ncpus(scaling_data):
+    """Test select_best_experiments is a no-op, apart from sorting, when all CPU counts are distinct."""
+
+    paths, ncpus, datasets = scaling_data
+    manager = MockProfilingManager(paths, ncpus, datasets)
+
+    assert manager.select_best_experiments("component", "Region 1", tavg) == ["1cpu", "2cpu", "4cpu"]
+
+
+def test_select_best_experiments_tie_keeps_first(caplog):
+    """Test select_best_experiments keeps the first experiment and warns when two experiments tie."""
+
+    paths = [Path("2cpu_a"), Path("2cpu_b")]
+    datasets = [make_component_dataset([400.0, 4.0]), make_component_dataset([400.0, 4.0])]
+    manager = MockProfilingManager(paths, ncpus=[2, 2], datasets=datasets)
+
+    with caplog.at_level(logging.WARNING):
+        selected = manager.select_best_experiments("component", "Region 1", tavg)
+
+    assert selected == ["2cpu_a"]
+    assert len(caplog.records) == 1
+    assert caplog.records[0].levelname == "WARNING"
+    assert "2cpu_a" in caplog.records[0].message and "2cpu_b" in caplog.records[0].message
+
+
+def test_experiment_ncpus_parsed_once(layout_scaling_data):
+    """Test that the number of CPUs of an experiment is only parsed once, however often it is needed."""
+
+    paths, ncpus, datasets = layout_scaling_data
+    manager = MockProfilingManager(paths, ncpus, datasets)
+
+    manager.select_best_experiments("component", "Region 1", tavg)
+    manager.select_best_experiments("component", "Region 1", tavg)
+
+    assert len(manager._parse_ncpus_calls) == 3  # One per experiment, not one per call
+
+
+@mock.patch("access.profiling.manager.plot_scaling_metrics")
+def test_scaling_data_with_best_experiments(mock_plot, layout_scaling_data):
+    """Test that feeding select_best_experiments into plot_scaling_data drops the slower layouts."""
+
+    paths, ncpus, datasets = layout_scaling_data
+    manager = MockProfilingManager(paths, ncpus, datasets)
+
+    manager.plot_scaling_data(
+        components=["component"],
+        regions=[["Region 1"]],
+        metric=tavg,
+        experiments=manager.select_best_experiments("component", "Region 1", tavg),
+    )
+
+    component_data = mock_plot.call_args.args[0][0]
+    assert component_data.coords["ncpus"].values.tolist() == [1, 2]  # No duplicated CPU counts
+    assert component_data[tavg].sel(region="Region 1").values.tolist() == [800.0, 300.0]  # Fastest 2 CPU layout
+
+    assert len(manager._parse_ncpus_calls) == 3  # Selecting and plotting does not parse an experiment twice
+
+
+def test_scaling_data_duplicate_ncpus_raises_value_error(layout_scaling_data):
+    """Test plot_scaling_data refuses to plot when several experiments share a number of CPUs."""
+
+    paths, ncpus, datasets = layout_scaling_data
+    manager = MockProfilingManager(paths, ncpus, datasets)
+
+    with pytest.raises(ValueError, match="same number of CPUs") as exc_info:
+        manager.plot_scaling_data(
+            components=["component"],
+            regions=[["Region 1"]],
+            metric=tavg,
+        )
+
+    message = str(exc_info.value)
+    assert "[2]" in message
+    assert "select_best_experiments" in message

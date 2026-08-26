@@ -21,7 +21,8 @@ class ProfilingManager(ABC):
     """Abstract base class to handle profiling data and workflows.
 
     This high-level class defines methods to parse different types of profiling data. Currently,
-    it supports parsing and plotting scaling data.
+    it supports parsing and plotting scaling data, including selecting the best performing experiment
+    for each number of CPUs.
 
     Args:
         work_dir (Path): Working directory where profiling experiments will be generated and run.
@@ -35,6 +36,7 @@ class ProfilingManager(ABC):
     data: dict[
         str, dict[str, xr.Dataset]
     ]  # Dictionary mapping experiments to component names and their profiling datasets.
+    _ncpus_cache: dict[str, int]  # Number of CPUs of each experiment, parsed on demand.
 
     def __init__(self, work_dir: Path, archive_dir: Path):
         super().__init__()
@@ -42,6 +44,7 @@ class ProfilingManager(ABC):
         self.archive_dir = archive_dir
         self.experiments = {}
         self.data = {}
+        self._ncpus_cache = {}
 
         # Discover experiments in the archive directory
         if self.archive_dir.is_dir():
@@ -245,6 +248,72 @@ class ProfilingManager(ABC):
                     "data."
                 )
 
+    def _ncpus(self, exp_name: str) -> int:
+        """Returns the number of CPUs used by an experiment, parsing it at most once.
+
+        Args:
+            exp_name (str): Name of the experiment.
+
+        Returns:
+            int: Number of CPUs used by the experiment.
+        """
+        if exp_name not in self._ncpus_cache:
+            with self.experiments[exp_name].directory() as (exp_path, run_path):
+                self._ncpus_cache[exp_name] = self.parse_ncpus(exp_path, run_path)
+        return self._ncpus_cache[exp_name]
+
+    def select_best_experiments(
+        self,
+        component: str,
+        region: str,
+        metric: ProfilingMetric,
+        experiments: list[str] | None = None,
+    ) -> list[str]:
+        """Selects the best performing experiment for each number of CPUs.
+
+        Scaling studies often contain several experiments that use the same number of CPUs, for instance different
+        domain decomposition layouts of the same total core count. Plotting all of them produces duplicated ncpus
+        coordinates and meaningless speedup and efficiency curves. This method keeps a single experiment per CPU
+        count: the one with the smallest value of the given metric, measured on the given region of the given
+        component. Smaller is always better.
+
+        The returned list is meant to be passed to the experiments argument of the plotting methods. If two
+        experiments with the same number of CPUs have exactly the same value, the first one is kept and a warning
+        is logged.
+
+        Args:
+            component (str): Name of the component holding the region used to rank experiments.
+            region (str): Name of the region used to rank experiments.
+            metric (ProfilingMetric): Metric used to rank experiments. The smallest value wins.
+            experiments (list[str] | None): Optional list of experiment names to select from. If None, all
+                experiments with parsed profiling data are considered.
+
+        Returns:
+            list[str]: Names of the selected experiments, one per distinct number of CPUs, ordered by increasing
+                number of CPUs.
+
+        Raises:
+            KeyError: If an experiment has no parsed profiling data, or if the component, region or metric is not
+                available in one of them.
+        """
+        exp_names = experiments if experiments is not None else list(self.data.keys())
+
+        best: dict[int, tuple[str, float]] = {}
+        for exp_name in exp_names:
+            value = float(self.data[exp_name][component][metric].sel(region=region).pint.dequantify().values)
+            ncpus = self._ncpus(exp_name)
+            incumbent = best.get(ncpus)
+            if incumbent is None or value < incumbent[1]:
+                best[ncpus] = (exp_name, value)
+            elif value == incumbent[1]:
+                logger.warning(
+                    f"Experiments '{incumbent[0]}' and '{exp_name}' have the same {metric} ({value} "
+                    f"{metric.units}) for region '{region}' of component '{component}' at {ncpus} CPUs. "
+                    f"Keeping '{incumbent[0]}'."
+                )
+
+        return [name for _, (name, _) in sorted(best.items())]
+
     def plot_scaling_data(
         self,
         components: list[str],
@@ -260,6 +329,16 @@ class ProfilingManager(ABC):
             regions (list[list[str]]): List of regions to plot for each component.
             metric (ProfilingMetric): Metric to use for the scaling plots.
             region_relabel_map (dict | None): Optional mapping to relabel regions in the plots.
+            experiments (list[str] | None): Optional list of experiment names to include. If None, all experiments
+                with parsed profiling data are included.
+
+        Returns:
+            Figure: The Matplotlib figure containing the scaling plots.
+
+        Raises:
+            ValueError: If no experiments are selected, if a selected experiment has no parsed profiling data, if no
+                profiling data is found for a specified component, if a requested region is missing, or if several
+                of the selected experiments use the same number of CPUs.
         """
 
         exp_names = experiments if experiments is not None else list(self.data.keys())
@@ -274,11 +353,17 @@ class ProfilingManager(ABC):
             )
 
         # Find number of cpus used for each experiment
-        ncpus = {}
-        for exp_name in exp_names:
-            with self.experiments[exp_name].directory() as (exp_path, run_path):
-                # Find number of cpus used
-                ncpus[exp_name] = self.parse_ncpus(exp_path, run_path)
+        ncpus = {exp_name: self._ncpus(exp_name) for exp_name in exp_names}
+
+        # Speedup and efficiency are ill-defined if several experiments share the same number of cpus
+        cpu_counts = list(ncpus.values())
+        duplicated_ncpus = sorted({n for n in cpu_counts if cpu_counts.count(n) > 1})
+        if duplicated_ncpus:
+            raise ValueError(
+                f"Several selected experiments use the same number of CPUs {duplicated_ncpus}, which makes speedup "
+                "and efficiency ill-defined. Use select_best_experiments() to keep only the best performing "
+                "experiment for each number of CPUs, or restrict the selection with experiments=[...]."
+            )
 
         # Gather scaling data for each component
         scaling_data = []
