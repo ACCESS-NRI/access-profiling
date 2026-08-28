@@ -1,7 +1,6 @@
 # Copyright 2025 ACCESS-NRI and contributors. See the top-level COPYRIGHT file for details.
 # SPDX-License-Identifier: Apache-2.0
 
-import itertools
 import logging
 from abc import ABC, abstractmethod
 from collections.abc import Callable
@@ -10,8 +9,6 @@ from pathlib import Path
 
 from access.config import YAMLParser
 from access.config.parallel_allocation_strategies import RootAllocation
-from access.config.parallel_component import ComponentLayout, ParallelComponent
-from access.config.parallel_layouts import iter_layouts
 from experiment_generator.experiment_generator import ExperimentGenerator
 from experiment_runner.experiment_runner import ExperimentRunner
 
@@ -45,37 +42,6 @@ class PayuManager(ProfilingManager, ABC):
     @abstractmethod
     def model_type(self) -> str:
         """Returns the model type identifier, as defined in Payu."""
-
-    @property
-    @abstractmethod
-    def parallel_component(self) -> ParallelComponent:
-        """Returns the component tree describing how the model is parallelised.
-
-        Returns:
-            ParallelComponent: Root of the component tree, holding the domains and the requirements that every
-                valid layout of this model must satisfy. Requirements specific to a particular study belong in the
-                allocation strategy passed to generate_scaling_experiments instead.
-        """
-
-    @abstractmethod
-    def layout_branch_name(self, layout: ComponentLayout) -> str:
-        """Returns the name of the branch holding the experiment for a given layout.
-
-        Args:
-            layout (ComponentLayout): Layout of the model components, as returned by the layout search.
-        Returns:
-            str: Branch name. Must be distinct for every distinct layout, as it is what identifies an experiment.
-        """
-
-    @abstractmethod
-    def layout_config_changes(self, layout: ComponentLayout) -> dict:
-        """Returns the configuration file changes needed to run the model with a given layout.
-
-        Args:
-            layout (ComponentLayout): Layout of the model components, as returned by the layout search.
-        Returns:
-            dict: Changes to apply, keyed by the path of each configuration file relative to the control directory.
-        """
 
     @property
     def nruns(self) -> int:
@@ -124,38 +90,6 @@ class PayuManager(ProfilingManager, ABC):
         """
         self._repository = repository
         self._control_commit = commit
-
-    def select_layouts(
-        self,
-        total_cores: int,
-        allocations: RootAllocation | None = None,
-        max_layouts: int | None = None,
-    ) -> list[ComponentLayout]:
-        """Returns the valid layouts of the model for a given number of cores, fewest idle cores first.
-
-        Args:
-            total_cores (int): Total number of cores the layouts must distribute among the model components.
-            allocations (RootAllocation | None): Allocation strategy deciding how many cores each component may
-                receive, and any further constraints the layouts must satisfy. None (the default) leaves every
-                component unconstrained, which is rarely what is wanted: the number of valid layouts grows very
-                quickly with the number of cores.
-            max_layouts (int | None): Maximum number of layouts to enumerate. None (the default) enumerates all of
-                them. Note that this bounds the *enumeration*, so the returned layouts are the first ones found and
-                not necessarily those with the fewest idle cores.
-        Returns:
-            list[ComponentLayout]: The layouts found, sorted by increasing number of idle cores.
-        """
-        layouts = iter_layouts(self.parallel_component, total_cores, allocations=allocations)
-        if max_layouts is not None:
-            layouts = itertools.islice(layouts, max_layouts + 1)
-        found = list(layouts)
-        if max_layouts is not None and len(found) > max_layouts:
-            logger.warning(
-                f"More than {max_layouts} layouts found for {total_cores} cores. Only the first {max_layouts} "
-                "will be used; they are not necessarily the ones with the fewest idle cores."
-            )
-            found = found[:max_layouts]
-        return sorted(found, key=lambda layout: layout.idle_cores)
 
     def generate_scaling_experiments(
         self,

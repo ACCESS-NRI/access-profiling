@@ -49,6 +49,18 @@ class MockProfilingManager(ProfilingManager):
         if datasets is not None:
             self.data = dict(zip([path.name for path in paths], datasets, strict=True))
 
+    # The layout API is abstract on ProfilingManager but plays no part in these tests, which cover the parsing,
+    # archiving and bookkeeping side of the manager.
+    @property
+    def parallel_component(self):
+        raise NotImplementedError
+
+    def layout_branch_name(self, layout):
+        raise NotImplementedError
+
+    def layout_config_changes(self, layout):
+        raise NotImplementedError
+
     def parse_ncpus(self, path, run_path=None):
         """Simulate parsing number of CPUs for a given path."""
         self._last_parse_ncpus_args = (path, run_path)

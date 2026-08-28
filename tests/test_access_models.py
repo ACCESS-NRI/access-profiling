@@ -1,25 +1,25 @@
 # Copyright 2025 ACCESS-NRI and contributors. See the top-level COPYRIGHT file for details.
 # SPDX-License-Identifier: Apache-2.0
 
+import math
 from pathlib import Path
 from unittest import mock
 
 import pytest
 from access.config import YAMLParser
-from access.config.parallel_allocation_strategies import FixedAllocation, RootAllocation
-from access.config.parallel_component import ComponentLayout
+from access.config.parallel_allocation_strategies import FixedAllocation, FreeAllocation, RootAllocation
 from access.config.parallel_constraints import SubdomainAspectRatioConstraint
-from access.config.parallel_domain import Domain, DomainDecompositionSpec
-from access.config.parallel_mpi_grid import MPICartesianGrid
 
 from access.profiling.access_models import (
     ESM16_CICE5_NAME,
     ESM16_CICE5_NBLOCKS,
+    ESM16_MAX_SUBDOMAIN_ASPECT_RATIO,
+    ESM16_MAX_WASTED_CORE_FRACTION,
     ESM16_MOM5_NAME,
+    ESM16_PI_CONTROL_CORES,
     ESM16_UM7_NAME,
     ESM16Profiling,
     RAM3Profiling,
-    esm16_scaling_allocations,
 )
 from access.profiling.cice5_parser import CICE5ProfilingParser
 from access.profiling.fms_parser import FMSProfilingParser
@@ -146,50 +146,39 @@ def test_esm16_layout_config_changes(esm16, pi_control_layout):
     assert changes["ice/cice_in.nml"] == {"domain_nml": {"nprocs": ["12"]}}
 
 
-def test_esm16_layout_requires_esm16_layout(esm16, pi_control_layout):
-    """Test that the ESM1.6 layout methods reject layouts of other models."""
+def esm16_scaling_allocations(total_cores: int, core_fraction_tolerance: float = 0.05) -> RootAllocation:
+    """An allocation strategy following the proportions of the ACCESS-ESM1.6 PI control configuration.
 
-    # A layout that does not have the ACCESS-ESM1.6 components
-    other_model = ComponentLayout(
-        name="other-model",
-        n_cores=4,
-        n_ranks=4,
-        threads_per_rank=None,
-        decomposition=None,
-        sub_layouts=(
-            ComponentLayout(
-                name="other-component",
-                n_cores=4,
-                n_ranks=4,
-                threads_per_rank=1,
-                decomposition=DomainDecompositionSpec(Domain((8, 8)), MPICartesianGrid((2, 2))),
-            ),
-        ),
-    )
-    with pytest.raises(ValueError):
-        esm16.layout_branch_name(other_model)
+    This is the kind of strategy a caller supplies to the layout search: it is the study's own choice, not a
+    requirement of ACCESS-ESM1.6, which is why it lives here rather than in access.profiling.access_models.
 
-    # A layout whose components have no domain decomposition
-    no_decomposition = ComponentLayout(
-        name=pi_control_layout.name,
-        n_cores=pi_control_layout.n_cores,
-        n_ranks=pi_control_layout.n_ranks,
-        threads_per_rank=None,
-        decomposition=None,
-        sub_layouts=tuple(
-            ComponentLayout(
-                name=sub.name, n_cores=sub.n_cores, n_ranks=sub.n_ranks, threads_per_rank=1, decomposition=None
-            )
-            for sub in pi_control_layout.sub_layouts
-        ),
-    )
-    with pytest.raises(ValueError):
-        esm16.layout_config_changes(no_decomposition)
+    UM7 and MOM5 are given a range of core counts around their proportional share of total_cores. CICE5 is instead
+    pinned to the core count closest to its own share that divides the number of CICE5 blocks exactly, as required
+    by the available executables. A range would often contain no such value at all, and no layout would be found.
+    """
+    pi_control_cores = sum(ESM16_PI_CONTROL_CORES.values())
+
+    subcomponents: dict = {}
+    for name in (ESM16_UM7_NAME, ESM16_MOM5_NAME):
+        target = ESM16_PI_CONTROL_CORES[name] * total_cores / pi_control_cores
+        min_cores = max(1, math.floor(target * (1.0 - core_fraction_tolerance)))
+        max_cores = max(min_cores, math.ceil(target * (1.0 + core_fraction_tolerance)))
+        subcomponents[name] = FreeAllocation(
+            min_cores=min_cores,
+            max_cores=max_cores,
+            local_constraints=(SubdomainAspectRatioConstraint(max_ratio=1.5),),
+        )
+
+    ice_target = ESM16_PI_CONTROL_CORES[ESM16_CICE5_NAME] * total_cores / pi_control_cores
+    divisors = [n for n in range(1, ESM16_CICE5_NBLOCKS + 1) if ESM16_CICE5_NBLOCKS % n == 0]
+    subcomponents[ESM16_CICE5_NAME] = FixedAllocation(min(divisors, key=lambda n: abs(n - ice_target)))
+
+    return RootAllocation(subcomponents=subcomponents)
 
 
 @pytest.mark.parametrize("total_cores", [PI_CONTROL_TOTAL_CORES, 520, 5200])
-def test_esm16_scaling_allocations(esm16, total_cores):
-    """Test that the ACCESS-ESM1.6 allocation strategy generates usable layouts."""
+def test_esm16_caller_supplied_allocations(esm16, total_cores):
+    """Test that a caller-supplied allocation strategy generates usable ACCESS-ESM1.6 layouts."""
 
     layouts = esm16.select_layouts(total_cores, allocations=esm16_scaling_allocations(total_cores))
     assert layouts, f"No layout found for {total_cores} cores."
@@ -200,19 +189,24 @@ def test_esm16_scaling_allocations(esm16, total_cores):
         assert ESM16_CICE5_NBLOCKS % cice5.n_ranks == 0
         # The UM requires an even number of processes along x
         assert um7.decomposition.grid.shape[0] % 2 == 0
-        # The allocation strategy bounds the number of cores left unused
-        assert layout.idle_cores / layout.n_cores <= 0.02
 
 
-def test_esm16_scaling_allocations_pins_ice_to_a_divisor(esm16):
-    """Test that CICE5 is always given a number of cores that divides the number of CICE5 blocks.
+def test_esm16_component_tree_bounds_layouts_on_its_own(esm16):
+    """Test that the component tree rules out unreasonable layouts without any strategy constraints.
 
-    A range of core counts would often contain no such value, and the search would then find no layout at all.
+    The bounds in the tree are the ones a caller cannot relax, so they must hold for every layout the search
+    returns when the caller states no preferences at all.
     """
 
-    for total_cores in (PI_CONTROL_TOTAL_CORES, 520, 1000, 2080, 5000, 5200, 10400):
-        ice_cores = esm16_scaling_allocations(total_cores).subcomponents[ESM16_CICE5_NAME].n_cores
-        assert ESM16_CICE5_NBLOCKS % ice_cores == 0, f"{ice_cores} cores does not divide {ESM16_CICE5_NBLOCKS}."
+    layouts = esm16.select_layouts(PI_CONTROL_TOTAL_CORES, max_layouts=200)
+    assert layouts, "The component tree alone should still admit layouts."
+
+    for layout in layouts:
+        assert layout.idle_cores / layout.n_cores <= ESM16_MAX_WASTED_CORE_FRACTION
+        for component in (layout.sub_layouts[0], layout.sub_layouts[1]):
+            local_shape = component.decomposition.mean_local_shape
+            assert max(local_shape) / min(local_shape) <= ESM16_MAX_SUBDOMAIN_ASPECT_RATIO
+        assert ESM16_CICE5_NBLOCKS % layout.sub_layouts[2].n_ranks == 0
 
 
 @mock.patch("access.profiling.payu_manager.ExperimentGenerator")
