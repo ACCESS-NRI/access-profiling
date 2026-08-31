@@ -263,9 +263,9 @@ def test_parse_profiling_data(caplog):
         type(mock_log).optional = mock.PropertyMock(side_effect=[False, False, True])
         mock_log.parse.side_effect = (xr.Dataset(), xr.Dataset(), FileNotFoundError("Mocked missing file."))
         mock_profiling_logs.return_value = {
-            "log": mock_log,
-            "optional_log": mock_log,
-            "missing_log": mock_log,
+            "log": {0: mock_log},
+            "optional_log": {0: mock_log},
+            "missing_log": {0: mock_log},
         }
 
         # Parse profiling data for each experiment
@@ -276,6 +276,7 @@ def test_parse_profiling_data(caplog):
             "Parsed datasets should not contain 'missing_log' key as the file is missing."
         )
         assert mock_log.parse.call_count == 3, "Parse method should be called three times."
+        assert "run" not in manager.data[exp_name]["log"].dims, "A single run should not add a 'run' dimension."
         mock_profiling_logs.assert_called_once_with(Path("/fake/work_dir/exp1"), Path("/fake/runs/exp1"))
 
     manager.experiments[exp_name].status = ProfilingExperimentStatus.RUNNING
@@ -580,3 +581,201 @@ def test_scaling_data_duplicate_ncpus_raises_value_error(layout_scaling_data):
     message = str(exc_info.value)
     assert "[2]" in message
     assert "select_best_experiments" in message
+
+
+def make_run_log(datasets: list[xr.Dataset]) -> dict[int, mock.MagicMock]:
+    """Builds mock profiling logs for several runs of the same component.
+
+    Args:
+        datasets (list[xr.Dataset]): Dataset each run parses to.
+
+    Returns:
+        dict[int, mock.MagicMock]: Mock logs keyed by run number. Run numbers are 0, 3, 7, ... so that tests
+            distinguish a run number from its position along the run dimension.
+    """
+    run_logs = {}
+    for run, dataset in zip([0, 3, 7, 11], datasets, strict=False):
+        log = mock.MagicMock()
+        log.optional = False
+        log.parse.return_value = dataset
+        run_logs[run] = log
+    return run_logs
+
+
+@pytest.fixture()
+def run_data():
+    """Fixture instantiating a manager whose experiment was run three times.
+
+    Both components hold the same three runs, numbered 0, 3 and 7. Run 7 is the fastest on "Region 1" while run 0
+    is the fastest on "Region 2", so tests can tell a whole-experiment selection from a per-region reduction.
+    """
+    manager = MockProfilingManager(paths=[Path("/fake/work_dir/exp1")])
+    logs = {
+        "component": make_run_log(
+            [
+                make_component_dataset([400.0, 1.0])["component"],
+                make_component_dataset([600.0, 5.0])["component"],
+                make_component_dataset([200.0, 9.0])["component"],
+            ]
+        ),
+        "other": make_run_log(
+            [
+                make_component_dataset([40.0, 10.0])["component"],
+                make_component_dataset([60.0, 50.0])["component"],
+                make_component_dataset([20.0, 90.0])["component"],
+            ]
+        ),
+    }
+    with mock.patch.object(manager, "profiling_logs", return_value=logs):
+        manager.parse_profiling_data()
+    return manager
+
+
+def test_parse_profiling_data_multiple_runs(run_data):
+    """Several runs of the same log are concatenated along a 'run' dimension."""
+
+    ds = run_data.data["exp1"]["component"]
+    assert ds.sizes["run"] == 3
+    assert ds.run.values.tolist() == [0, 3, 7]  # Run numbers, not positions
+    assert ds[tavg].sel(region="Region 1").pint.dequantify().values.tolist() == [400.0, 600.0, 200.0]
+
+
+def test_parse_profiling_data_runs_sorted():
+    """Runs are ordered by run number, whatever order the logs are reported in."""
+
+    manager = MockProfilingManager(paths=[Path("/fake/work_dir/exp1")])
+    logs = {"component": {}}
+    for run, tavg_value in ((3, 600.0), (0, 100.0)):  # Deliberately out of order
+        log = mock.MagicMock()
+        log.optional = False
+        log.parse.return_value = make_component_dataset([tavg_value, 1.0])["component"]
+        logs["component"][run] = log
+
+    with mock.patch.object(manager, "profiling_logs", return_value=logs):
+        manager.parse_profiling_data()
+
+    ds = manager.data["exp1"]["component"]
+    assert ds.run.values.tolist() == [0, 3]
+    assert ds[tavg].sel(region="Region 1").pint.dequantify().values.tolist() == [100.0, 600.0]
+
+
+def test_parse_profiling_data_missing_run_log():
+    """If all but one run fail to produce a log, the result has no 'run' dimension."""
+
+    manager = MockProfilingManager(paths=[Path("/fake/work_dir/exp1")])
+    present = mock.MagicMock()
+    present.optional = True
+    present.parse.return_value = make_component_dataset([400.0, 4.0])["component"]
+    missing = mock.MagicMock()
+    missing.optional = True
+    missing.parse.side_effect = FileNotFoundError("Mocked missing file.")
+
+    with mock.patch.object(manager, "profiling_logs", return_value={"component": {0: present, 1: missing}}):
+        manager.parse_profiling_data()
+
+    ds = manager.data["exp1"]["component"]
+    assert "run" not in ds.dims
+    assert ds[tavg].sel(region="Region 1").pint.dequantify().item() == pytest.approx(400.0)
+
+
+def test_select_best_run(run_data):
+    """select_best_run keeps the fastest run, in every component of the experiment."""
+
+    run_data.select_best_run("component", "Region 1", tavg)
+
+    # Run 7 is the fastest on the ranking region, and is selected in both components
+    for ds in run_data.data["exp1"].values():
+        assert "run" not in ds.dims
+        # The run coordinate is dropped too, so a reduced dataset looks exactly like a single-run one
+        assert "run" not in ds.coords
+    assert run_data.data["exp1"]["component"][tavg].sel(region="Region 1").pint.dequantify().item() == 200.0
+    assert run_data.data["exp1"]["other"][tavg].sel(region="Region 1").pint.dequantify().item() == 20.0
+
+
+def test_select_best_run_ignores_other_regions(run_data):
+    """The chosen run is a whole-experiment choice, not the best value of every region."""
+
+    run_data.select_best_run("component", "Region 1", tavg)
+
+    # Run 0 is faster on "Region 2" (1.0 s), but run 7 won on the ranking region so its value is kept
+    assert run_data.data["exp1"]["component"][tavg].sel(region="Region 2").pint.dequantify().item() == 9.0
+
+
+def test_select_best_run_no_run_dim_is_noop(layout_scaling_data):
+    """Data without a 'run' dimension is left untouched."""
+
+    paths, ncpus, datasets = layout_scaling_data
+    manager = MockProfilingManager(paths, ncpus, datasets)
+    before = manager.data["1cpu"]["component"].copy(deep=True)
+
+    manager.select_best_run("component", "Region 1", tavg)
+
+    xr.testing.assert_identical(manager.data["1cpu"]["component"], before)
+
+
+def test_aggregate_runs_min(run_data):
+    """aggregate_runs reduces each region independently, so regions may come from different runs."""
+
+    run_data.aggregate_runs(how="min")
+
+    ds = run_data.data["exp1"]["component"]
+    assert "run" not in ds.dims
+    assert ds[tavg].sel(region="Region 1").pint.dequantify().item() == 200.0  # From run 7
+    assert ds[tavg].sel(region="Region 2").pint.dequantify().item() == 1.0  # From run 0
+
+
+def test_aggregate_runs_mean(run_data):
+    """aggregate_runs computes the mean over the runs, preserving metric keys and units."""
+
+    run_data.aggregate_runs(how="mean")
+
+    ds = run_data.data["exp1"]["component"]
+    assert tavg in ds.data_vars  # Metric objects survive the reduction, unlike aggregate_pe_data
+    assert ds[tavg].pint.units == tavg.units
+    assert ds[tavg].sel(region="Region 1").pint.dequantify().item() == pytest.approx(400.0)
+
+
+def test_aggregate_runs_median(run_data):
+    """aggregate_runs computes the median over the runs."""
+
+    run_data.aggregate_runs(how="median")
+
+    assert run_data.data["exp1"]["component"][tavg].sel(region="Region 1").pint.dequantify().item() == 400.0
+
+
+def test_aggregate_runs_invalid_how(run_data):
+    """An unsupported statistic is rejected."""
+
+    with pytest.raises(ValueError, match="Unknown reduction"):
+        run_data.aggregate_runs(how="bogus")
+
+
+@mock.patch("access.profiling.manager.plot_bar_metrics")
+def test_select_best_run_then_plot(mock_plot, run_data):
+    """Once the runs are reduced, the plotting methods work unchanged."""
+
+    run_data.select_best_run("component", "Region 1", tavg)
+    run_data.plot_bar_chart(components=["component"], regions=[["Region 1"]], metric=tavg, show=False)
+
+    assert mock_plot.call_args.args[0] == {"exp1": pytest.approx([200.0])}
+
+
+def test_select_best_experiments_run_dim_raises_value_error(run_data):
+    """select_best_experiments refuses unreduced data instead of failing obscurely."""
+
+    with pytest.raises(ValueError, match="'run' dimension"):
+        run_data.select_best_experiments("component", "Region 1", tavg)
+
+
+def test_scaling_data_run_dim_raises_value_error(run_data):
+    """plot_scaling_data refuses unreduced data instead of silently plotting it."""
+
+    with pytest.raises(ValueError, match="'run' dimension"):
+        run_data.plot_scaling_data(components=["component"], regions=[["Region 1"]], metric=tavg)
+
+
+def test_bar_chart_run_dim_raises_value_error(run_data):
+    """plot_bar_chart refuses unreduced data instead of failing obscurely."""
+
+    with pytest.raises(ValueError, match="'run' dimension"):
+        run_data.plot_bar_chart(components=["component"], regions=[["Region 1"]], metric=tavg)

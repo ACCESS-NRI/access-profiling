@@ -165,14 +165,15 @@ class CylcRoseManager(ProfilingManager, ABC):
             overwrite=overwrite,
         )
 
-    def profiling_logs(self, path: Path, run_path: Path | None = None) -> dict[str, ProfilingLog]:
+    def profiling_logs(self, path: Path, run_path: Path | None = None) -> dict[str, dict[int, ProfilingLog]]:
         """Returns all profiling logs from the specified path.
 
         Args:
             path (Path): Path to the experiment directory.
             run_path (Path | None): Path to the Cylc run directory.
         Returns:
-            dict[str, ProfilingLog]: Dictionary of profiling logs.
+            dict[str, dict[int, ProfilingLog]]: Dictionary mapping log names to their logs, keyed by run number.
+                Cylc workflows have no concept of repeated runs, so every log is returned as the single run 0.
         """
         if run_path is None:
             raise ValueError("Cylc run_path is required to locate profiling logs.")
@@ -204,4 +205,5 @@ class CylcRoseManager(ProfilingManager, ABC):
             for parser_name, parser in self.known_parsers.items():
                 logs[f"{task}_cycle{cycle}_{parser_name}"] = ProfilingLog(logfile, parser, optional=True)
 
-        return logs
+        # Cylc workflows have no concept of repeated runs, so every log is registered as the single run 0.
+        return {name: {0: log} for name, log in logs.items()}
