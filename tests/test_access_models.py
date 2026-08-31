@@ -8,7 +8,10 @@ from unittest import mock
 import pytest
 from access.config import YAMLParser
 from access.config.parallel_allocation_strategies import FixedAllocation, FreeAllocation, RootAllocation
+from access.config.parallel_component import ComponentLayout
 from access.config.parallel_constraints import SubdomainAspectRatioConstraint
+from access.config.parallel_domain import Domain, DomainDecompositionSpec
+from access.config.parallel_mpi_grid import MPICartesianGrid
 
 from access.profiling.access_models import (
     ESM16_CICE5_NAME,
@@ -144,6 +147,35 @@ def test_esm16_layout_config_changes(esm16, pi_control_layout):
     }
     assert changes["ocean/input.nml"] == {"ocean_model_nml": {"layout": ["14,14"]}}
     assert changes["ice/cice_in.nml"] == {"domain_nml": {"nprocs": ["12"]}}
+
+
+def test_esm16_layout_requires_esm16_layout(esm16):
+    """Test that the ESM1.6 layout methods reject layouts of other models.
+
+    Both methods read the components positionally, in the order of ESM16_COMPONENT.subcomponents, so a layout
+    of any other model simply does not unpack.
+    """
+
+    other_model = ComponentLayout(
+        name="other-model",
+        n_cores=4,
+        n_ranks=4,
+        threads_per_rank=None,
+        decomposition=None,
+        sub_layouts=(
+            ComponentLayout(
+                name="other-component",
+                n_cores=4,
+                n_ranks=4,
+                threads_per_rank=1,
+                decomposition=DomainDecompositionSpec(Domain((8, 8)), MPICartesianGrid((2, 2))),
+            ),
+        ),
+    )
+    with pytest.raises(ValueError):
+        esm16.layout_branch_name(other_model)
+    with pytest.raises(ValueError):
+        esm16.layout_config_changes(other_model)
 
 
 def esm16_scaling_allocations(total_cores: int, core_fraction_tolerance: float = 0.05) -> RootAllocation:

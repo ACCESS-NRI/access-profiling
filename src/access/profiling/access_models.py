@@ -5,14 +5,6 @@ import logging
 from pathlib import Path
 
 from access.config import YAMLParser
-from access.config.esm1p6_parallel_config import (
-    ESM1P6_CICE5_NAME,
-    ESM1P6_CICE5_NBLOCKS,
-    ESM1P6_MOM5_NAME,
-    ESM1P6_UM7_NAME,
-    esm1p6_layout_branch_name,
-    esm1p6_layout_config_changes,
-)
 from access.config.parallel_component import ComponentLayout, ParallelComponent
 from access.config.parallel_constraints import (
     FixedThreadsPerRankConstraint,
@@ -33,12 +25,12 @@ from access.profiling.um_parser import UMProfilingParser, UMTotalRuntimeParser
 logger = logging.getLogger(__name__)
 
 
-# The names and the CICE5 block count are those the layout conventions in access-config-utils expect, so the
-# component tree below must name its subcomponents after them for its layouts to be understood there.
-ESM16_UM7_NAME: str = ESM1P6_UM7_NAME
-ESM16_MOM5_NAME: str = ESM1P6_MOM5_NAME
-ESM16_CICE5_NAME: str = ESM1P6_CICE5_NAME
-ESM16_CICE5_NBLOCKS: int = ESM1P6_CICE5_NBLOCKS
+ESM16_UM7_NAME: str = "UM7"
+ESM16_MOM5_NAME: str = "MOM5"
+ESM16_CICE5_NAME: str = "CICE5"
+# Number of blocks the CICE5 grid is split into in ACCESS-ESM1.6. Executables are only available for an exact
+# number of blocks per rank, so the number of CICE5 ranks in a layout must divide this exactly.
+ESM16_CICE5_NBLOCKS: int = 360
 # Cores each component receives in the released ACCESS-ESM1.6 pre-industrial control configuration. These are not
 # used to build any layout, and are provided as the reference a caller writing an allocation strategy is usually
 # working from.
@@ -139,22 +131,59 @@ class ESM16Profiling(PayuManager):
     def layout_branch_name(self, layout: ComponentLayout) -> str:
         """Returns the name of the branch holding the experiment for a given ACCESS-ESM1.6 layout.
 
+        The name records the process grid of each component, so it is distinct for every distinct layout and the
+        same layout always produces the same name. This is what lets the manager tell whether it already has an
+        experiment for a layout before building one.
+
         Args:
-            layout (ComponentLayout): Layout of the ACCESS-ESM1.6 components.
+            layout (ComponentLayout): Layout of the ACCESS-ESM1.6 components, as returned by the layout search.
         Returns:
             str: Branch name.
+        Raises:
+            ValueError: If the layout is not a layout of ESM16_COMPONENT.
         """
-        return esm1p6_layout_branch_name(layout, self._branch_name_prefix)
+        # Sub-layouts come in the order of ESM16_COMPONENT.subcomponents, so a layout of any other model does
+        # not unpack.
+        um7, mom5, cice5 = layout.sub_layouts
+        atm_nx, atm_ny = um7.decomposition.grid.shape
+        mom_nx, mom_ny = mom5.decomposition.grid.shape
+        return f"{self._branch_name_prefix}_atm_{atm_nx}x{atm_ny}_mom_{mom_nx}x{mom_ny}_ice_{cice5.n_ranks}x1"
 
     def layout_config_changes(self, layout: ComponentLayout) -> dict:
         """Returns the configuration file changes needed to run ACCESS-ESM1.6 with a given layout.
 
         Args:
-            layout (ComponentLayout): Layout of the ACCESS-ESM1.6 components.
+            layout (ComponentLayout): Layout of the ACCESS-ESM1.6 components, as returned by the layout search.
         Returns:
             dict: Changes to apply, keyed by the path of each configuration file relative to the control directory.
+        Raises:
+            ValueError: If the layout is not a layout of ESM16_COMPONENT.
         """
-        return esm1p6_layout_config_changes(layout)
+        um7, mom5, cice5 = layout.sub_layouts
+        atm_nx, atm_ny = um7.decomposition.grid.shape
+        mom_nx, mom_ny = mom5.decomposition.grid.shape
+        ice_nblocks_per_rank = ESM16_CICE5_NBLOCKS // cice5.n_ranks
+        return {
+            "config.yaml": {
+                "submodels": [
+                    [
+                        {"ncpus": um7.n_cores},
+                        {"ncpus": mom5.n_cores},
+                        {
+                            "ncpus": cice5.n_cores,
+                            "exe": [f"cice_access_360x300_{ice_nblocks_per_rank}x300.exe"],
+                        },
+                    ]
+                ]
+            },
+            "atmosphere/um_env.yaml": {
+                "UM_ATM_NPROCX": str(atm_nx),
+                "UM_ATM_NPROCY": str(atm_ny),
+                "UM_NPES": str(um7.n_ranks),
+            },
+            "ocean/input.nml": {"ocean_model_nml": {"layout": [f"{mom_nx},{mom_ny}"]}},
+            "ice/cice_in.nml": {"domain_nml": {"nprocs": [f"{cice5.n_ranks}"]}},
+        }
 
 
 class RAM3Profiling(CylcRoseManager):
