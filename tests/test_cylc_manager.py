@@ -47,11 +47,11 @@ def test_parse_profiling_logs(mock_path_glob, manager):
     logs = manager.profiling_logs(Path("/fake/path"), run_path)
     mock_path_glob.assert_called_once()
     assert "cylc_suite_log" in logs
-    assert isinstance(logs["cylc_suite_log"].parser, CylcProfilingParser)
+    assert isinstance(logs["cylc_suite_log"][0].parser, CylcProfilingParser)
     assert "cylc_tasks" in logs
-    assert isinstance(logs["cylc_tasks"].parser, CylcDBReader)
+    assert isinstance(logs["cylc_tasks"][0].parser, CylcDBReader)
     assert "task1_cyclecycle1_fake-parser" in logs
-    assert isinstance(logs["task1_cyclecycle1_fake-parser"].parser, mock.MagicMock)
+    assert isinstance(logs["task1_cyclecycle1_fake-parser"][0].parser, mock.MagicMock)
 
 
 def test_profiling_logs_requires_run_path(manager):
@@ -72,9 +72,12 @@ def test_profiling_logs_uses_run_path(tmp_path, manager):
 
     logs = manager.profiling_logs(exp_path, run_path)
 
-    assert logs["cylc_suite_log"].filepath == run_path / "log/suite/log"
-    assert logs["cylc_tasks"].filepath == run_path / "cylc-suite.db"
-    assert logs["task1_cyclecycle1_fake-parser"].filepath == job_out
+    assert logs["cylc_suite_log"][0].filepath == run_path / "log/suite/log"
+    assert logs["cylc_tasks"][0].filepath == run_path / "cylc-suite.db"
+    assert logs["task1_cyclecycle1_fake-parser"][0].filepath == job_out
+
+    # Cylc has no concept of repeated runs, so every log is the single run 0
+    assert all(set(runs) == {0} for runs in logs.values())
 
 
 @mock.patch("access.profiling.access_models.Path.is_file")

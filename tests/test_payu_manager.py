@@ -308,12 +308,16 @@ def test_profiling_logs_missing_directories(mock_glob, mock_is_dir, manager):
 
 
 def path_glob_side_effect(pattern):
-    """Side effect function for Path.glob to simulate different directory contents."""
+    """Side effect function for Path.glob to simulate different directory contents.
+
+    Run 10 is deliberately present: Payu does not zero-pad the payu_jobs directory names, so keying runs on a
+    lexical sort of the paths would order it before run 2.
+    """
 
     if pattern == "payu_jobs/*/run/*.json":
-        return [Path("payu_jobs/job1/run/log1.json"), Path("payu_jobs/job2/run/log2.json")]
+        return [Path("payu_jobs/0/run/log.json"), Path("payu_jobs/10/run/log.json")]
     elif pattern == "output*":
-        return [Path("output1"), Path("output2")]
+        return [Path("output000"), Path("output001"), Path("output010")]
     else:
         return []
 
@@ -328,14 +332,55 @@ def test_profiling_logs(mock_glob, mock_is_dir, manager):
         # Check correct path access
         assert mock_is_dir.call_count == 1  # Called to check archive directory
         assert mock_glob.call_count == 2  # Called for payu_jobs and output directories
-        assert mock_get_logs.call_count == 1
-        mock_get_logs.assert_called_with(Path("output1"))
 
-        # Check returned datasets
-        assert "payu" in logs
-        assert isinstance(logs["payu"], ProfilingLog)
-        assert "component" in logs
-        assert isinstance(logs["component"], ProfilingLog)
+        # Every output directory is visited, not just the first one
+        assert mock_get_logs.call_args_list == [
+            mock.call(Path("output000")),
+            mock.call(Path("output001")),
+            mock.call(Path("output010")),
+        ]
+
+        # Check returned logs are keyed by the run numbers found in the paths
+        assert set(logs["payu"]) == {0, 10}
+        assert set(logs["component"]) == {0, 1, 10}
+        assert isinstance(logs["payu"][10], ProfilingLog)
+        assert isinstance(logs["component"][10], ProfilingLog)
+
+
+@mock.patch.object(Path, "is_dir", return_value=True)
+@mock.patch.object(
+    Path,
+    "glob",
+    side_effect=lambda pattern: {
+        "payu_jobs/*/run/*.json": [Path("payu_jobs/7/run/log.json")],
+        "output*": [Path("output007")],
+    }.get(pattern, []),
+)
+def test_profiling_logs_single_run(mock_glob, mock_is_dir, manager):
+    """A single run keeps the run number Payu gave it, rather than being renumbered."""
+
+    logs = manager.profiling_logs(Path("/fake/path"))
+
+    assert set(logs["payu"]) == {7}
+    assert set(logs["component"]) == {7}
+
+
+@mock.patch.object(Path, "is_dir", return_value=True)
+@mock.patch.object(
+    Path,
+    "glob",
+    side_effect=lambda pattern: {
+        "payu_jobs/*/run/*.json": [Path("payu_jobs/0/run/log.json"), Path("payu_jobs/1/run/log.json")],
+        "output*": [Path("output000")],
+    }.get(pattern, []),
+)
+def test_profiling_logs_output_json_mismatch(mock_glob, mock_is_dir, manager):
+    """Payu writes its telemetry log at submission, so a run may have a log but no output directory."""
+
+    logs = manager.profiling_logs(Path("/fake/path"))
+
+    assert set(logs["payu"]) == {0, 1}
+    assert set(logs["component"]) == {0}
 
 
 @mock.patch("access.profiling.payu_manager.ExperimentRunner")

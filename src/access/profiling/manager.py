@@ -16,6 +16,11 @@ from access.profiling.scaling import plot_scaling_metrics
 
 logger = logging.getLogger(__name__)
 
+_RUN_DIM_ERROR = (
+    "Profiling data still has a 'run' dimension. Use select_best_run() to keep the best run of each experiment, "
+    "or aggregate_runs() to reduce over runs."
+)
+
 
 class ProfilingManager(ABC):
     """Abstract base class to handle profiling data and workflows.
@@ -76,7 +81,7 @@ class ProfilingManager(ABC):
         return summary
 
     @abstractmethod
-    def profiling_logs(self, path: Path, run_path: Path | None = None) -> dict[str, ProfilingLog]:
+    def profiling_logs(self, path: Path, run_path: Path | None = None) -> dict[str, dict[int, ProfilingLog]]:
         """Returns all profiling logs from the specified path.
 
         Args:
@@ -84,7 +89,8 @@ class ProfilingManager(ABC):
             run_path (Path | None): Optional path to a separate runs directory.
 
         Returns:
-            dict[str, ProfilingLog]: Dictionary of profiling logs.
+            dict[str, dict[int, ProfilingLog]]: Dictionary mapping log names to their logs, keyed by run number.
+                Configurations with no concept of repeated runs should return a single run, numbered 0.
         """
 
     @abstractmethod
@@ -222,7 +228,14 @@ class ProfilingManager(ABC):
             del self.experiments[name]
 
     def parse_profiling_data(self):
-        """Parses profiling data from the experiments."""
+        """Parses profiling data from the experiments.
+
+        Configurations that can be run several times produce one set of profiling logs per run. In that case the
+        parsed datasets are concatenated along a 'run' dimension, coordinated by the run number reported by the
+        configuration. Experiments with a single run are stored without a 'run' dimension, so that they can be used
+        directly. Use select_best_run() or aggregate_runs() to reduce the 'run' dimension before plotting. Note that
+        if all but one run fail to produce a log, the result has no 'run' dimension.
+        """
         self.data = {}
         for exp_name, exp in self.experiments.items():
             if exp.status == ProfilingExperimentStatus.DONE or exp.status == ProfilingExperimentStatus.ARCHIVED:
@@ -231,17 +244,28 @@ class ProfilingManager(ABC):
                 with exp.directory() as (exp_path, run_path):
                     # Parse all logs
                     logs = self.profiling_logs(exp_path, run_path)
-                    for log_name, log in logs.items():
-                        logger.info(f"Parsing {log_name} profiling log: {log.filepath}. ")
-                        if log.optional:
-                            try:
-                                self.data[exp_name][log_name] = log.parse()
-                            except FileNotFoundError:
-                                logger.info(f"Optional profiling log '{log.filepath}' not found. Skipping.")
-                                continue
-                        else:
-                            self.data[exp_name][log_name] = log.parse()
-                        logger.info(" Done.")
+                    for log_name, run_logs in logs.items():
+                        datasets = {}
+                        for run, log in run_logs.items():
+                            logger.info(f"Parsing {log_name} profiling log for run {run}: {log.filepath}. ")
+                            if log.optional:
+                                try:
+                                    datasets[run] = log.parse()
+                                except FileNotFoundError:
+                                    logger.info(f"Optional profiling log '{log.filepath}' not found. Skipping.")
+                                    continue
+                            else:
+                                datasets[run] = log.parse()
+                            logger.info(" Done.")
+                        # A single run is stored as is; several runs are concatenated along a new 'run' dimension.
+                        if len(datasets) == 1:
+                            self.data[exp_name][log_name] = next(iter(datasets.values()))
+                        elif datasets:
+                            self.data[exp_name][log_name] = xr.concat(
+                                [ds.expand_dims({"run": [run]}) for run, ds in sorted(datasets.items())],
+                                dim="run",
+                                join="outer",
+                            )
             else:
                 logger.warning(
                     f"Experiment '{exp_name}' is not completed (status: {exp.status.name}). Skipping parsing profiling "
@@ -295,12 +319,16 @@ class ProfilingManager(ABC):
         Raises:
             KeyError: If an experiment has no parsed profiling data, or if the component, region or metric is not
                 available in one of them.
+            ValueError: If the profiling data still has a 'run' dimension.
         """
         exp_names = experiments if experiments is not None else list(self.data.keys())
 
         best: dict[int, tuple[str, float]] = {}
         for exp_name in exp_names:
-            value = float(self.data[exp_name][component][metric].sel(region=region).pint.dequantify().values)
+            ds = self.data[exp_name][component]
+            if "run" in ds.dims:
+                raise ValueError(_RUN_DIM_ERROR)
+            value = float(ds[metric].sel(region=region).pint.dequantify().values)
             ncpus = self._ncpus(exp_name)
             incumbent = best.get(ncpus)
             if incumbent is None or value < incumbent[1]:
@@ -313,6 +341,67 @@ class ProfilingManager(ABC):
                 )
 
         return [name for _, (name, _) in sorted(best.items())]
+
+    def select_best_run(self, component: str, region: str, metric: ProfilingMetric) -> None:
+        """Keeps only the best performing run of each experiment, discarding the others.
+
+        Configurations that can be run several times produce profiling data with a 'run' dimension. This method
+        keeps a single run per experiment: the one with the smallest value of the given metric, measured on the
+        given region of the given component. Smaller is always better.
+
+        The chosen run is selected in *every* component of the experiment, so the result always describes a single
+        run that actually took place, and never mixes measurements taken during different runs. Use
+        aggregate_runs() instead to compute statistics over the runs.
+
+        Datasets without a 'run' dimension are left untouched, so this is safe to call on any manager. The reduction
+        is destructive: call parse_profiling_data() again to recover the individual runs.
+
+        Args:
+            component (str): Name of the component holding the region used to rank runs.
+            region (str): Name of the region used to rank runs.
+            metric (ProfilingMetric): Metric used to rank runs. The smallest value wins.
+
+        Raises:
+            KeyError: If the component, region or metric is not available in one of the experiments, or if the
+                chosen run is missing from one of the components of that experiment.
+        """
+        for exp_name, components in self.data.items():
+            ranking = components[component]
+            if "run" not in ranking.dims:
+                continue
+            values = ranking[metric].sel(region=region).pint.dequantify()
+            run = int(values.run.values[int(values.argmin("run"))])
+            logger.info(f"Keeping run {run} of experiment '{exp_name}'.")
+            self.data[exp_name] = {
+                name: ds.sel(run=run, drop=True) if "run" in ds.dims else ds for name, ds in components.items()
+            }
+
+    def aggregate_runs(self, how: str = "min") -> None:
+        """Reduces the 'run' dimension of every experiment with the given statistic.
+
+        Configurations that can be run several times produce profiling data with a 'run' dimension. This method
+        collapses it, computing the requested statistic over the runs.
+
+        Note that each region and each metric is reduced independently, so unlike select_best_run() the result does
+        not correspond to any run that actually took place: with how="min", different regions can come from
+        different runs. Use "min" to estimate the best achievable timings and "mean" or "median" to describe the
+        typical ones. Integer metrics, such as call counts, become floats.
+
+        Datasets without a 'run' dimension are left untouched, so this is safe to call on any manager. The reduction
+        is destructive: call parse_profiling_data() again to recover the individual runs.
+
+        Args:
+            how (str): Statistic to compute over the runs. One of "min", "mean" or "median". Defaults to "min".
+
+        Raises:
+            ValueError: If how is not one of the supported statistics.
+        """
+        if how not in ("min", "mean", "median"):
+            raise ValueError(f"Unknown reduction '{how}'. Use 'min', 'mean' or 'median'.")
+        for exp_name, components in self.data.items():
+            self.data[exp_name] = {
+                name: getattr(ds, how)("run") if "run" in ds.dims else ds for name, ds in components.items()
+            }
 
     def plot_scaling_data(
         self,
@@ -337,8 +426,9 @@ class ProfilingManager(ABC):
 
         Raises:
             ValueError: If no experiments are selected, if a selected experiment has no parsed profiling data, if no
-                profiling data is found for a specified component, if a requested region is missing, or if several
-                of the selected experiments use the same number of CPUs.
+                profiling data is found for a specified component, if a requested region is missing, if the
+                profiling data still has a 'run' dimension, or if several of the selected experiments use the same
+                number of CPUs.
         """
 
         exp_names = experiments if experiments is not None else list(self.data.keys())
@@ -351,6 +441,9 @@ class ProfilingManager(ABC):
                 f"No parsed profiling data found for experiment(s): {missing_experiments}. "
                 f"Available experiments: {list(self.data.keys())}."
             )
+
+        if any("run" in ds.dims for exp_name in exp_names for ds in self.data[exp_name].values()):
+            raise ValueError(_RUN_DIM_ERROR)
 
         # Find number of cpus used for each experiment
         ncpus = {exp_name: self._ncpus(exp_name) for exp_name in exp_names}
@@ -368,7 +461,7 @@ class ProfilingManager(ABC):
         # Gather scaling data for each component
         scaling_data = []
         for component, component_regions in zip(components, regions, strict=True):
-            component_data = None
+            component_data = []
             for exp_name in exp_names:
                 ds = self.data[exp_name].get(component)
                 if ds is None:
@@ -390,15 +483,10 @@ class ProfilingManager(ABC):
                     ds = ds.assign_coords(region=[region_relabel_map.get(n, n) for n in ds.region.values])
 
                 # Add ncpus dimension
-                ds = ds.expand_dims({"ncpus": 1}).assign_coords({"ncpus": [ncpus[exp_name]]})
+                component_data.append(ds.expand_dims({"ncpus": [ncpus[exp_name]]}))
 
-                # Concatenate data along ncpus dimension
-                if component_data is None:
-                    component_data = ds
-                else:
-                    component_data = xr.concat([component_data, ds], dim="ncpus", join="outer").sortby("ncpus")
-
-            scaling_data.append(component_data)
+            # Concatenate data along ncpus dimension
+            scaling_data.append(xr.concat(component_data, dim="ncpus", join="outer").sortby("ncpus"))
 
         return plot_scaling_metrics(scaling_data, metric)
 
@@ -431,7 +519,8 @@ class ProfilingManager(ABC):
             Figure: The Matplotlib figure containing the bar chart.
 
         Raises:
-            ValueError: If no profiling data is found for a specified component in any experiment.
+            ValueError: If no profiling data is found for a specified component in any experiment, or if the
+                profiling data still has a 'run' dimension.
         """
         exp_names = experiments if experiments is not None else list(self.data.keys())
         relabel = region_relabel_map or {}
@@ -451,6 +540,8 @@ class ProfilingManager(ABC):
                 ds = self.data[exp_name].get(component)
                 if ds is None:
                     raise ValueError(f"No profiling data found for component '{component}' in experiment '{exp_name}'.")
+                if "run" in ds.dims:
+                    raise ValueError(_RUN_DIM_ERROR)
                 values.append(float(ds[metric].sel(region=region).pint.dequantify().values))
             bar_data[exp_name] = values
 

@@ -301,34 +301,38 @@ class PayuManager(ProfilingManager, ABC):
         else:
             return payu_config["ncpus"]
 
-    def profiling_logs(self, path: Path, run_path: Path | None = None) -> dict[str, ProfilingLog]:
+    def profiling_logs(self, path: Path, run_path: Path | None = None) -> dict[str, dict[int, ProfilingLog]]:
         """Returns all profiling logs from the specified path.
+
+        Payu can be asked to submit the same experiment several times, in which case each run produces its own
+        output directory and its own telemetry log. Payu numbers both after the same run counter, so the logs of
+        every run are returned, keyed by that number.
+
         Args:
             path (Path): Path to the experiment directory.
             run_path (Path | None): Optional path to a separate runs directory. Unused for Payu experiments.
         Returns:
-            dict[str, ProfilingLog]: Dictionary of profiling logs.
+            dict[str, dict[int, ProfilingLog]]: Dictionary mapping log names to their logs, keyed by run number.
         """
-        logs = {}
+        logs: dict[str, dict[int, ProfilingLog]] = {}
 
         # Check archive directory exists
         archive = path / "archive"
         if not archive.is_dir():
             raise FileNotFoundError(f"Directory {archive} does not exist!")
 
-        # Parse payu json profiling data if available
-        matches = sorted(archive.glob("payu_jobs/*/run/*.json"))
-        if len(matches) > 1:
-            logger.warning(f"Multiple payu json logs found in {path}! Using the first one found.")
-        if len(matches) >= 1:
-            logs["payu"] = ProfilingLog(matches[0], PayuJSONProfilingParser())
+        # Parse payu json profiling data if available. Payu names the directory holding each log after the run number.
+        for json_path in archive.glob("payu_jobs/*/run/*.json"):
+            logs.setdefault("payu", {})[int(json_path.parts[-3])] = ProfilingLog(json_path, PayuJSONProfilingParser())
 
-        # Find how many output directories are available and get logs from each component
-        matches = sorted(archive.glob("output*"))
-        if len(matches) == 0:
+        # Get the logs of each component of every output directory. Payu names these outputNNN, NNN being the run
+        # number, so output003 holds the same run as payu_jobs/3.
+        output_dirs = sorted(archive.glob("output*"))
+        if not output_dirs:
             raise FileNotFoundError(f"No output files found in {path}!")
-        elif len(matches) > 1:
-            logger.warning(f"Multiple output directories found in {path}! Using the first one found.")
-        logs.update(self.get_component_logs(matches[0]))
+        for output_dir in output_dirs:
+            run = int(output_dir.name.removeprefix("output"))
+            for name, log in self.get_component_logs(output_dir).items():
+                logs.setdefault(name, {})[run] = log
 
         return logs
