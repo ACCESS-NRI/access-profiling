@@ -7,7 +7,7 @@ from unittest import mock
 from access.config import YAMLParser
 from access.config.esm1p6_layout_input import LayoutSearchConfig, LayoutTuple
 
-from access.profiling.access_models import ESM16Profiling, RAM3Profiling
+from access.profiling.access_models import AM3Profiling, ESM16Profiling, RAM3Profiling
 from access.profiling.cice5_parser import CICE5ProfilingParser
 from access.profiling.fms_parser import FMSProfilingParser
 from access.profiling.um_parser import UMProfilingParser, UMTotalRuntimeParser
@@ -71,6 +71,23 @@ def test_ram3_config_profiling():
 
     # Instantiate rAM3Profiling
     config_profiling = RAM3Profiling(Path("/fake/path"), Path("/fake/archive_path"), layout_variable="um_layout")
+    assert "UM_regions" in config_profiling.known_parsers, '"UM_regions" key not in known_parsers.'
+    assert isinstance(config_profiling.known_parsers["UM_regions"], UMProfilingParser), (
+        "UM_regions known_parser not UMProfilingParser type."
+    )
+    assert "UM_total" in config_profiling.known_parsers, '"UM_total" key not in known_parsers.'
+    assert isinstance(config_profiling.known_parsers["UM_total"], UMTotalRuntimeParser), (
+        "UM_total known parser not UMTotalRuntimeParser type."
+    )
+
+
+def test_am3_config_profiling():
+    """Test the AM3Profiling class."""
+
+    # Instantiate AM3Profiling with AM3's split PROCX/PROCY layout variables
+    config_profiling = AM3Profiling(
+        Path("/fake/path"), Path("/fake/archive_path"), layout_variable=("MAIN_ATM_PROCX", "MAIN_ATM_PROCY")
+    )
     assert "UM_regions" in config_profiling.known_parsers, '"UM_regions" key not in known_parsers.'
     assert isinstance(config_profiling.known_parsers["UM_regions"], UMProfilingParser), (
         "UM_regions known_parser not UMProfilingParser type."

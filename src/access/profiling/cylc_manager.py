@@ -21,12 +21,16 @@ class CylcRoseManager(ProfilingManager, ABC):
     Args:
         work_dir (Path): Working directory where profiling experiments will be generated and run.
         archive_dir (Path): Directory where completed experiments will be archived.
-        layout_variable (str): Name of the variable in rose-suite-run.conf file that defines the layout.
+        layout_variable (str | tuple[str, str]): Name(s) of the variable(s) in rose-suite-run.conf that define the
+            layout. A single name (e.g. rAM3's "rg01_rs01_m01_nproc") is treated as a comma-separated "x,y" tuple.
+            A pair of names (e.g. AM3's ("MAIN_ATM_PROCX", "MAIN_ATM_PROCY")) is treated as separate x and y
+            variables to multiply together.
     """
 
-    _layout_variable: str  # Name of the variable in rose-suite-run.conf file that defines the layout.
+    # Name(s) of the variable(s) in rose-suite-run.conf file that define the layout.
+    _layout_variable: str | tuple[str, str]
 
-    def __init__(self, work_dir: Path, archive_dir: Path, layout_variable: str):
+    def __init__(self, work_dir: Path, archive_dir: Path, layout_variable: str | tuple[str, str]):
         super().__init__(work_dir, archive_dir)
         self._layout_variable = layout_variable
 
@@ -51,14 +55,29 @@ class CylcRoseManager(ProfilingManager, ABC):
             tried = ", ".join(str(p) for p in config_paths)
             raise FileNotFoundError(f"Could not find suitable config file. Tried: {tried}")
 
+        config = self._parse_rose_conf(config_path)
+
+        if isinstance(self._layout_variable, tuple):
+            x_key, y_key = self._layout_variable
+            missing = [key for key in (x_key, y_key) if key not in config]
+            if missing:
+                raise ValueError(f"Cannot find layout key(s) {missing} in {config_path}.")
+            return int(config[x_key]) * int(config[y_key])
+
+        if self._layout_variable not in config:
+            raise ValueError(f"Cannot find layout key, {self._layout_variable}, in {config_path}.")
+        nx, ny = config[self._layout_variable].split(",")
+        return int(nx.strip()) * int(ny.strip())
+
+    @staticmethod
+    def _parse_rose_conf(config_path: Path) -> dict[str, str]:
+        """Parses a rose-suite.conf-style file into a dict mapping variable name to its raw string value."""
+        config = {}
         for line in config_path.read_text().splitlines():
             if not line.startswith("!!") and "=" in line:
                 key, value = line.split("=", 1)
-                if key.strip() == self._layout_variable:
-                    layout = value.split(",")
-                    return int(layout[0].strip()) * int(layout[1].strip())
-
-        raise ValueError(f"Cannot find layout key, {self._layout_variable}, in {config_path}.")
+                config[key.strip()] = value.strip()
+        return config
 
     def add_rose_experiment(self, rose: str, run_path: Path | None = None) -> None:
         """Adds the given rose as an experiment to this manager.

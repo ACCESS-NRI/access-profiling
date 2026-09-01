@@ -82,3 +82,14 @@ class RAM3Profiling(CylcRoseManager):
             "UM_regions": UMProfilingParser(),
             "UM_total": UMTotalRuntimeParser(),
         }
+
+
+class AM3Profiling(CylcRoseManager):
+    """Handles profiling of ACCESS-AM3 configurations."""
+
+    @property
+    def known_parsers(self):
+        return {
+            "UM_regions": UMProfilingParser(),
+            "UM_total": UMTotalRuntimeParser(),
+        }

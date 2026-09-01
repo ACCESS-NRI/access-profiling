@@ -114,6 +114,33 @@ def test_parse_ncpus_uses_run_path(tmp_path, manager):
     assert manager.parse_ncpus(exp_path, run_path) == 6
 
 
+def test_parse_ncpus_with_split_layout_variable(tmp_path):
+    """AM3-style layouts store x and y as two separate variables rather than one comma-separated tuple."""
+
+    manager = MockCylcManager(
+        tmp_path / "work", tmp_path / "archive", layout_variable=("MAIN_ATM_PROCX", "MAIN_ATM_PROCY")
+    )
+    exp_path = tmp_path / "experiment"
+    exp_path.mkdir()
+    (exp_path / "rose-suite.conf").write_text("MAIN_ATM_PROCX=6\nMAIN_ATM_PROCY=4\n")
+
+    assert manager.parse_ncpus(exp_path) == 24
+
+
+def test_parse_ncpus_with_split_layout_variable_missing_key(tmp_path):
+    """A missing PROCX/PROCY key should raise ValueError rather than a silent wrong answer."""
+
+    manager = MockCylcManager(
+        tmp_path / "work", tmp_path / "archive", layout_variable=("MAIN_ATM_PROCX", "MAIN_ATM_PROCY")
+    )
+    exp_path = tmp_path / "experiment"
+    exp_path.mkdir()
+    (exp_path / "rose-suite.conf").write_text("MAIN_ATM_PROCX=6\n")
+
+    with pytest.raises(ValueError, match="MAIN_ATM_PROCY"):
+        manager.parse_ncpus(exp_path)
+
+
 def test_add_rose_experiment_uses_new_experiment_api(manager):
     """add_rose_experiment should populate ProfilingExperiment.path and run_path."""
 
