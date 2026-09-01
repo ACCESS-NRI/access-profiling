@@ -126,7 +126,7 @@ class UMProfilingParser(ProfilingParser):
         if not header_match:
             logger.debug("Header pattern: %s", header)
             logger.debug("Input string: %s", stream)
-            raise ValueError("No matching header found.")
+            raise ValueError(f"No matching header found in {file_path}.")
         logger.debug("Found header: %s", header_match.group(0))
 
         # This line (and any preceeding whitespace) indicates

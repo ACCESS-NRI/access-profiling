@@ -254,6 +254,14 @@ class ProfilingManager(ABC):
                                 except FileNotFoundError:
                                     logger.info(f"Optional profiling log '{log.filepath}' not found. Skipping.")
                                     continue
+                                except Exception as e:
+                                    # might be useful to make this a warning instead of info to help catch parse
+                                    # failures for logs that should've succeeded.
+                                    logger.info(
+                                        f"Failed to parse optional profiling log '{log.filepath}' with exception:\n"
+                                        f"    {e}\nSkipping."
+                                    )
+                                    continue
                             else:
                                 datasets[run] = log.parse()
                             logger.info(" Done.")
