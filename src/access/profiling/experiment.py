@@ -220,6 +220,9 @@ class ProfilingExperiment:
             FileExistsError: If the archive destination already exists and overwrite is False.
             ValueError: If the experiment status is unknown.
         """
+
+        archive_file = archive_path.parent / (archive_path.name + ".tar.gz")
+
         if self.status == ProfilingExperimentStatus.NEW:
             logger.warning(f"Experiment at {self.path} is not yet started. Skipping archiving.", stacklevel=2)
             return
@@ -227,12 +230,11 @@ class ProfilingExperiment:
             logger.warning(f"Experiment at {self.path} is still running. Skipping archiving.", stacklevel=2)
             return
         elif self.status == ProfilingExperimentStatus.DONE:
-            logger.info(f"Archiving experiment at {self.path} to {archive_path.with_suffix('.tar.gz')}")
+            logger.info(f"Archiving experiment at {self.path} to {archive_file}")
         elif self.status == ProfilingExperimentStatus.ARCHIVED:
             logger.warning(f"Experiment at {self.path} is already archived. Skipping archiving.", stacklevel=2)
             return
 
-        archive_file = archive_path.with_suffix(".tar.gz")
         mode = "w:gz" if overwrite else "x:gz"
         if not overwrite and archive_file.exists():
             raise FileExistsError(f"Archive destination {archive_file} already exists.")

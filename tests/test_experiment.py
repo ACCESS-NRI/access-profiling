@@ -234,6 +234,22 @@ def test_profiling_experiment_archive_file_overwrite(mock_walker, mock_open):
     mock_open.assert_called_with(Path("/fake/archive").with_suffix(".tar.gz"), "w:gz")
 
 
+@mock.patch("access.profiling.experiment.tarfile.open")
+@mock.patch("access.profiling.experiment.experiment_directory_walker", return_value=[])
+def test_profiling_experiment_archive_name_with_dots(mock_walker, mock_open):
+    """Archive names containing dots (e.g. version numbers) must not be truncated."""
+
+    exp = ProfilingExperiment(path=Path("/fake/work_dir/exp1"))
+    exp.status = ProfilingExperimentStatus.DONE
+
+    archive_path = Path("/fake/archive/am3-release-n96e-1.0-24")
+    exp.archive(archive_path)
+
+    expected_archive_file = Path("/fake/archive/am3-release-n96e-1.0-24.tar.gz")
+    mock_open.assert_called_with(expected_archive_file, "x:gz")
+    assert exp.path == expected_archive_file
+
+
 @pytest.fixture()
 def setup_experiment_directory():
     """Fixture to setup a mock experiment directory structure."""
