@@ -89,7 +89,9 @@ def test_ram3_config_profiling():
 
 # Cores of each component in the released ACCESS-ESM1.6 pre-industrial control configuration, which uses the whole
 # of its 4 x 104 core allocation.
-PI_CONTROL_TOTAL_CORES = 416
+PI_CONTROL_NODES = 4.0
+PI_CONTROL_CORES_PER_NODE = 104
+PI_CONTROL_TOTAL_CORES = int(PI_CONTROL_NODES * PI_CONTROL_CORES_PER_NODE)
 PI_CONTROL_ALLOCATIONS = RootAllocation(
     subcomponents={
         ESM16_UM7_NAME: FixedAllocation(208, local_constraints=(SubdomainAspectRatioConstraint(1.5),)),
@@ -247,8 +249,9 @@ def test_esm16_generate_scaling_experiments(mock_experiment_generator, esm16):
 
     esm16.set_control("https://example.com/repo", "commit")
     esm16.generate_scaling_experiments(
-        total_cores_list=[PI_CONTROL_TOTAL_CORES],
+        num_nodes_list=[PI_CONTROL_NODES],
         control_options={},
+        cores_per_node=PI_CONTROL_CORES_PER_NODE,
         walltime=2.0,
         allocations=PI_CONTROL_ALLOCATIONS,
     )

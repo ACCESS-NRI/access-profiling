@@ -93,31 +93,41 @@ class PayuManager(ProfilingManager, ABC):
 
     def generate_scaling_experiments(
         self,
-        total_cores_list: list[int],
+        num_nodes_list: list[float],
         control_options: dict,
-        walltime: float | Callable[[int], float],
-        allocations: RootAllocation | Callable[[int], RootAllocation] | None = None,
+        cores_per_node: int,
+        walltime: float | Callable[[float], float],
+        allocations: RootAllocation | Callable[[float], RootAllocation] | None = None,
         max_layouts: int | None = None,
     ) -> None:
         """Generates scaling experiments, one per valid layout of the model.
 
-        For each requested number of cores, the valid layouts of the model are enumerated and each one becomes a
+        For each requested number of nodes, the valid layouts of the model are enumerated and each one becomes a
         perturbation experiment. Layouts whose branch is already known to this manager are skipped, so the same
-        layout found for two different numbers of cores only generates one experiment.
+        layout found for two different numbers of nodes only generates one experiment.
 
         Args:
-            total_cores_list (list[int]): Numbers of cores to generate experiments for. Note that these are cores
-                and not nodes, so a caller working in nodes multiplies by the number of cores per node first.
+            num_nodes_list (list[float]): Numbers of nodes to generate experiments for. Fractional values are
+                allowed; the number of cores the layouts are searched for is the product with cores_per_node,
+                truncated to an integer.
             control_options (dict): Options of the control experiment, passed to the experiment generator.
-            walltime (float | Callable[[int], float]): Walltime in hours to request for each experiment, either as a
-                fixed value or as a function of the total number of cores.
-            allocations (RootAllocation | Callable[[int], RootAllocation] | None): Allocation strategy deciding how
-                many cores each component may receive, either as a fixed strategy or as a function of the total
-                number of cores. The latter is usually what is needed, as the bounds of an allocation are expressed
-                in cores. None (the default) leaves every component unconstrained.
-            max_layouts (int | None): Maximum number of layouts to enumerate for each number of cores. None (the
+            cores_per_node (int): Number of cores available on each node. Must be a positive integer.
+            walltime (float | Callable[[float], float]): Walltime in hours to request for each experiment, either as
+                a fixed value or as a function of the number of nodes.
+            allocations (RootAllocation | Callable[[float], RootAllocation] | None): Allocation strategy deciding
+                how many cores each component may receive, either as a fixed strategy or as a function of the number
+                of nodes. The latter is usually what is needed; note that the bounds of an allocation are expressed
+                in cores, so such a function typically multiplies by cores_per_node itself. None (the default)
+                leaves every component unconstrained.
+            max_layouts (int | None): Maximum number of layouts to enumerate for each number of nodes. None (the
                 default) enumerates all of them.
+
+        Raises:
+            ValueError: If cores_per_node is not a positive integer, or if any of the node counts is not positive.
         """
+
+        if not isinstance(cores_per_node, int) or cores_per_node <= 0:
+            raise ValueError(f"Cores per node must be a positive integer. Got {cores_per_node} instead")
 
         generator_config = {
             "model_type": self.model_type,
@@ -131,21 +141,25 @@ class PayuManager(ProfilingManager, ABC):
         }
 
         seqnum = 1
-        for total_cores in total_cores_list:
+        for num_nodes in num_nodes_list:
+            if num_nodes <= 0:
+                raise ValueError(f"Number of nodes must be > 0. Got {num_nodes} instead")
+
+            total_cores = int(num_nodes * cores_per_node)
             layouts = self.select_layouts(
                 total_cores,
-                allocations=allocations(total_cores) if callable(allocations) else allocations,
+                allocations=allocations(num_nodes) if callable(allocations) else allocations,
                 max_layouts=max_layouts,
             )
             if not layouts:
                 logger.warning(
-                    f"No layouts found for {total_cores} cores. Check the bounds and the constraints of the "
-                    "allocation strategy."
+                    f"No layouts found for {num_nodes} nodes ({total_cores} cores). Check the bounds and the "
+                    "constraints of the allocation strategy."
                 )
                 continue
-            logger.info(f"Found {len(layouts)} layouts for {total_cores} cores.")
+            logger.info(f"Found {len(layouts)} layouts for {num_nodes} nodes ({total_cores} cores).")
 
-            walltime_hrs = walltime(total_cores) if callable(walltime) else walltime
+            walltime_hrs = walltime(num_nodes) if callable(walltime) else walltime
 
             for layout in layouts:
                 branch = self.layout_branch_name(layout)
