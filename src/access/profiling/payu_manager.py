@@ -115,10 +115,12 @@ class PayuManager(ProfilingManager, ABC):
             walltime (float | Callable[[float], float]): Walltime in hours to request for each experiment, either as
                 a fixed value or as a function of the number of nodes.
             allocations (RootAllocation | Callable[[float], RootAllocation] | None): Allocation strategy deciding
-                how many cores each component may receive, either as a fixed strategy or as a function of the number
-                of nodes. The latter is usually what is needed; note that the bounds of an allocation are expressed
-                in cores, so such a function typically multiplies by cores_per_node itself. None (the default)
-                leaves every component unconstrained.
+                how many cores each component may receive, either as a single strategy or as a function of the
+                number of nodes. A single strategy is usually enough, since the bounds of an allocation may be
+                written as fractions of the total core count, which resolve to a different number of cores at every
+                size in the study. Pass a function only where a bound cannot be expressed that way; note that
+                allocation bounds are in cores, so it typically multiplies by cores_per_node itself. None (the
+                default) leaves every component unconstrained.
             max_layouts (int | None): Maximum number of layouts to enumerate for each number of nodes. None (the
                 default) enumerates all of them.
 

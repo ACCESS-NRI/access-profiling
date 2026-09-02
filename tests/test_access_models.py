@@ -1,7 +1,6 @@
 # Copyright 2025 ACCESS-NRI and contributors. See the top-level COPYRIGHT file for details.
 # SPDX-License-Identifier: Apache-2.0
 
-import math
 from pathlib import Path
 from unittest import mock
 
@@ -180,41 +179,49 @@ def test_esm16_layout_requires_esm16_layout(esm16):
         esm16.layout_config_changes(other_model)
 
 
-def esm16_scaling_allocations(total_cores: int, core_fraction_tolerance: float = 0.05) -> RootAllocation:
+def _esm16_scaling_allocations(atm_ocn_tolerance: float = 0.05, ice_tolerance: float = 0.25) -> RootAllocation:
     """An allocation strategy following the proportions of the ACCESS-ESM1.6 PI control configuration.
 
     This is the kind of strategy a caller supplies to the layout search: it is the study's own choice, not a
     requirement of ACCESS-ESM1.6, which is why it lives here rather than in access.profiling.access_models.
 
-    UM7 and MOM5 are given a range of core counts around their proportional share of total_cores. CICE5 is instead
-    pinned to the core count closest to its own share that divides the number of CICE5 blocks exactly, as required
-    by the available executables. A range would often contain no such value at all, and no layout would be found.
+    Every bound is a fraction of the total, so the strategy this returns is a single object usable at every core
+    count of a scaling study - which is the whole reason the layout search understands fractions.
+
+    CICE5 gets a wider band than the other two. Its executables are only available for an exact number of blocks
+    per rank, so the core counts it admits are the divisors of ESM16_CICE5_NBLOCKS, and they thin out as the count
+    grows: a +/-5% band around its proportional share is [142, 158] at 5200 cores, which contains no divisor of 360
+    at all, and no layout would be found.
     """
     pi_control_cores = sum(ESM16_PI_CONTROL_CORES.values())
 
-    subcomponents: dict = {}
-    for name in (ESM16_UM7_NAME, ESM16_MOM5_NAME):
-        target = ESM16_PI_CONTROL_CORES[name] * total_cores / pi_control_cores
-        min_cores = max(1, math.floor(target * (1.0 - core_fraction_tolerance)))
-        max_cores = max(min_cores, math.ceil(target * (1.0 + core_fraction_tolerance)))
-        subcomponents[name] = FreeAllocation(
-            min_cores=min_cores,
-            max_cores=max_cores,
-            local_constraints=(SubdomainAspectRatioConstraint(max_ratio=1.5),),
+    def band(name: str, tolerance: float, **kwargs) -> FreeAllocation:
+        share = ESM16_PI_CONTROL_CORES[name] / pi_control_cores
+        return FreeAllocation(
+            min_core_fraction=share * (1.0 - tolerance),
+            max_core_fraction=min(1.0, share * (1.0 + tolerance)),
+            **kwargs,
         )
 
-    ice_target = ESM16_PI_CONTROL_CORES[ESM16_CICE5_NAME] * total_cores / pi_control_cores
-    divisors = [n for n in range(1, ESM16_CICE5_NBLOCKS + 1) if ESM16_CICE5_NBLOCKS % n == 0]
-    subcomponents[ESM16_CICE5_NAME] = FixedAllocation(min(divisors, key=lambda n: abs(n - ice_target)))
+    aspect_ratio = (SubdomainAspectRatioConstraint(max_ratio=1.5),)
+    return RootAllocation(
+        subcomponents={
+            ESM16_UM7_NAME: band(ESM16_UM7_NAME, atm_ocn_tolerance, local_constraints=aspect_ratio),
+            ESM16_MOM5_NAME: band(ESM16_MOM5_NAME, atm_ocn_tolerance, local_constraints=aspect_ratio),
+            ESM16_CICE5_NAME: band(ESM16_CICE5_NAME, ice_tolerance),
+        },
+    )
 
-    return RootAllocation(subcomponents=subcomponents)
+
+# One strategy for the whole scaling study, built once and reused at every core count below.
+ESM16_SCALING_ALLOCATIONS = _esm16_scaling_allocations()
 
 
 @pytest.mark.parametrize("total_cores", [PI_CONTROL_TOTAL_CORES, 520, 5200])
 def test_esm16_caller_supplied_allocations(esm16, total_cores):
-    """Test that a caller-supplied allocation strategy generates usable ACCESS-ESM1.6 layouts."""
+    """Test that one fractional allocation strategy generates usable ACCESS-ESM1.6 layouts at every size."""
 
-    layouts = esm16.select_layouts(total_cores, allocations=esm16_scaling_allocations(total_cores))
+    layouts = esm16.select_layouts(total_cores, allocations=ESM16_SCALING_ALLOCATIONS)
     assert layouts, f"No layout found for {total_cores} cores."
 
     for layout in layouts:
