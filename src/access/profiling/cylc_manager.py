@@ -25,14 +25,35 @@ class CylcRoseManager(ProfilingManager, ABC):
             layout. A single name (e.g. rAM3's "rg01_rs01_m01_nproc") is treated as a comma-separated "x,y" tuple.
             A pair of names (e.g. AM3's ("MAIN_ATM_PROCX", "MAIN_ATM_PROCY")) is treated as separate x and y
             variables to multiply together.
+        cpus_per_proc_variable (str | None): Name of the variable in rose-suite-run.conf that defines the number of
+            OpenMP threads per MPI process (e.g. AM3's "MAIN_OMPTHR_ATM"). If given, the layout size is multiplied
+            by this value to give the total number of CPUs. Defaults to None, i.e. one thread per process.
+        io_server_variable (str | None): Name of the variable in rose-suite-run.conf that defines the number of I/O
+            server ranks (e.g. AM3's "MAIN_IOS_NPROC"). If given, these ranks are added to the layout size before
+            applying cpus_per_proc_variable, matching how PBS resources are requested (see the pbs_cpus/pbs_mem
+            Jinja2 macros in site/nci_gadi.rc: cpus(x,y,i,nt) = (x*y+i)*nt). Defaults to None, i.e. no I/O server
+            ranks.
     """
 
     # Name(s) of the variable(s) in rose-suite-run.conf file that define the layout.
     _layout_variable: str | tuple[str, str]
+    # Name of the variable in rose-suite-run.conf that defines the number of OpenMP threads per MPI process.
+    _cpus_per_proc_variable: str | None
+    # Name of the variable in rose-suite-run.conf that defines the number of I/O server ranks.
+    _io_server_variable: str | None
 
-    def __init__(self, work_dir: Path, archive_dir: Path, layout_variable: str | tuple[str, str]):
+    def __init__(
+        self,
+        work_dir: Path,
+        archive_dir: Path,
+        layout_variable: str | tuple[str, str],
+        cpus_per_proc_variable: str | None = None,
+        io_server_variable: str | None = None,
+    ):
         super().__init__(work_dir, archive_dir)
         self._layout_variable = layout_variable
+        self._cpus_per_proc_variable = cpus_per_proc_variable
+        self._io_server_variable = io_server_variable
 
     @property
     @abstractmethod
@@ -62,12 +83,24 @@ class CylcRoseManager(ProfilingManager, ABC):
             missing = [key for key in (x_key, y_key) if key not in config]
             if missing:
                 raise ValueError(f"Cannot find layout key(s) {missing} in {config_path}.")
-            return int(config[x_key]) * int(config[y_key])
+            layout_size = int(config[x_key]) * int(config[y_key])
+        else:
+            if self._layout_variable not in config:
+                raise ValueError(f"Cannot find layout key, {self._layout_variable}, in {config_path}.")
+            nx, ny = config[self._layout_variable].split(",")
+            layout_size = int(nx.strip()) * int(ny.strip())
 
-        if self._layout_variable not in config:
-            raise ValueError(f"Cannot find layout key, {self._layout_variable}, in {config_path}.")
-        nx, ny = config[self._layout_variable].split(",")
-        return int(nx.strip()) * int(ny.strip())
+        if self._io_server_variable is not None:
+            if self._io_server_variable not in config:
+                raise ValueError(f"Cannot find I/O server key, {self._io_server_variable}, in {config_path}.")
+            layout_size += int(config[self._io_server_variable])
+
+        if self._cpus_per_proc_variable is not None:
+            if self._cpus_per_proc_variable not in config:
+                raise ValueError(f"Cannot find cpus-per-process key, {self._cpus_per_proc_variable}, in {config_path}.")
+            layout_size *= int(config[self._cpus_per_proc_variable])
+
+        return layout_size
 
     @staticmethod
     def _parse_rose_conf(config_path: Path) -> dict[str, str]:

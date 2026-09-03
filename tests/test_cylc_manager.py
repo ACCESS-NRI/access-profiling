@@ -141,6 +141,72 @@ def test_parse_ncpus_with_split_layout_variable_missing_key(tmp_path):
         manager.parse_ncpus(exp_path)
 
 
+def test_parse_ncpus_with_cpus_per_proc_variable_and_io_server(tmp_path):
+    """Total CPUs should be (layout + io_server_ranks) * cpus_per_proc, matching site/nci_gadi.rc's pbs_cpus macro."""
+
+    manager = MockCylcManager(
+        tmp_path / "work",
+        tmp_path / "archive",
+        layout_variable=("MAIN_ATM_PROCX", "MAIN_ATM_PROCY"),
+        cpus_per_proc_variable="MAIN_OMPTHR_ATM",
+        io_server_variable="MAIN_IOS_NPROC",
+    )
+    exp_path = tmp_path / "experiment"
+    exp_path.mkdir()
+    (exp_path / "rose-suite.conf").write_text(
+        "MAIN_ATM_PROCX=6\nMAIN_ATM_PROCY=4\nMAIN_IOS_NPROC=48\nMAIN_OMPTHR_ATM=2\n"
+    )
+
+    assert manager.parse_ncpus(exp_path) == (24 + 48) * 2
+
+
+def test_parse_ncpus_defaults_cpus_per_proc_variable_to_none(tmp_path):
+    """cpus_per_proc_variable should default to None, leaving the layout size unchanged."""
+
+    manager = MockCylcManager(
+        tmp_path / "work", tmp_path / "archive", layout_variable=("MAIN_ATM_PROCX", "MAIN_ATM_PROCY")
+    )
+    exp_path = tmp_path / "experiment"
+    exp_path.mkdir()
+    (exp_path / "rose-suite.conf").write_text("MAIN_ATM_PROCX=6\nMAIN_ATM_PROCY=4\n")
+
+    assert manager.parse_ncpus(exp_path) == 24
+
+
+def test_parse_ncpus_with_cpus_per_proc_variable_missing_key(tmp_path):
+    """A missing cpus-per-process key should raise ValueError rather than a silent wrong answer."""
+
+    manager = MockCylcManager(
+        tmp_path / "work",
+        tmp_path / "archive",
+        layout_variable=("MAIN_ATM_PROCX", "MAIN_ATM_PROCY"),
+        cpus_per_proc_variable="MAIN_OMPTHR_ATM",
+    )
+    exp_path = tmp_path / "experiment"
+    exp_path.mkdir()
+    (exp_path / "rose-suite.conf").write_text("MAIN_ATM_PROCX=6\nMAIN_ATM_PROCY=4\n")
+
+    with pytest.raises(ValueError, match="MAIN_OMPTHR_ATM"):
+        manager.parse_ncpus(exp_path)
+
+
+def test_parse_ncpus_with_io_server_variable_missing_key(tmp_path):
+    """A missing I/O server key should raise ValueError rather than a silent wrong answer."""
+
+    manager = MockCylcManager(
+        tmp_path / "work",
+        tmp_path / "archive",
+        layout_variable=("MAIN_ATM_PROCX", "MAIN_ATM_PROCY"),
+        io_server_variable="MAIN_IOS_NPROC",
+    )
+    exp_path = tmp_path / "experiment"
+    exp_path.mkdir()
+    (exp_path / "rose-suite.conf").write_text("MAIN_ATM_PROCX=6\nMAIN_ATM_PROCY=4\n")
+
+    with pytest.raises(ValueError, match="MAIN_IOS_NPROC"):
+        manager.parse_ncpus(exp_path)
+
+
 def test_add_rose_experiment_uses_new_experiment_api(manager):
     """add_rose_experiment should populate ProfilingExperiment.path and run_path."""
 
