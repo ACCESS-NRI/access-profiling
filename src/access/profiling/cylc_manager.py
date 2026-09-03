@@ -102,6 +102,7 @@ class CylcRoseManager(ProfilingManager, ABC):
 
         return layout_size
 
+    # TODO: use "real" parser from access-config-utils once implemented.
     @staticmethod
     def _parse_rose_conf(config_path: Path) -> dict[str, str]:
         """Parses a rose-suite.conf-style file into a dict mapping variable name to its raw string value."""
