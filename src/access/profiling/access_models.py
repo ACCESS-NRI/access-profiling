@@ -181,7 +181,14 @@ class ESM16Profiling(PayuManager):
                 "UM_NPES": str(um7.n_ranks),
             },
             "ocean/input.nml": {"ocean_model_nml": {"layout": [f"{mom_nx},{mom_ny}"]}},
-            "ice/cice_in.nml": {"domain_nml": {"nprocs": [f"{cice5.n_ranks}"]}},
+            "ice/cice_in.nml": {
+                "domain_nml": {
+                    "nprocs": f"{cice5.n_ranks}",
+                    "block_size_x": f"{cice5.n_ranks}",
+                    "block_size_y": "1",
+                    "mxblocks": "1",
+                }
+            },
         }
 
 
