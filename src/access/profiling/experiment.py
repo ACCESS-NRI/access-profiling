@@ -162,7 +162,7 @@ class ProfilingExperiment:
     def __init__(self, path: Path, run_path: Path | None = None) -> None:
         self.path = path
         self.run_path = run_path
-        if self.path.suffixes == [".tar", ".gz"]:
+        if self.path.name.endswith(".tar.gz"):
             self.status = ProfilingExperimentStatus.ARCHIVED
 
     def __repr__(self) -> str:
@@ -181,7 +181,7 @@ class ProfilingExperiment:
         Returns:
             tuple[Path, Path | None]: The experiment directory path and optional runs directory path.
         """
-        if self.path.suffixes == [".tar", ".gz"]:
+        if self.path.name.endswith(".tar.gz"):
             with tempfile.TemporaryDirectory(prefix="access-profiling_", suffix="_data") as tmpdir:
                 with tarfile.open(self.path) as tar:
                     tar.extractall(path=Path(tmpdir), filter="data")
