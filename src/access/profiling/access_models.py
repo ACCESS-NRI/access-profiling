@@ -162,7 +162,6 @@ class ESM16Profiling(PayuManager):
         um7, mom5, cice5 = layout.sub_layouts
         atm_nx, atm_ny = um7.decomposition.grid.shape
         mom_nx, mom_ny = mom5.decomposition.grid.shape
-        ice_nblocks_per_rank = ESM16_CICE5_NBLOCKS // cice5.n_ranks
         return {
             "config.yaml": {
                 "submodels": [
@@ -171,7 +170,7 @@ class ESM16Profiling(PayuManager):
                         {"ncpus": mom5.n_cores},
                         {
                             "ncpus": cice5.n_cores,
-                            "exe": [f"cice_access_360x300_{ice_nblocks_per_rank}x300.exe"],
+                            "exe": ["cice_access.exe"],
                         },
                     ]
                 ]
