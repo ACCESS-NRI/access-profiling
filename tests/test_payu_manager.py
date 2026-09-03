@@ -5,12 +5,26 @@ from pathlib import Path
 from unittest import mock
 
 import pytest
-from access.config.esm1p6_layout_input import LayoutSearchConfig
-from access.config.layout_config import LayoutTuple
+from access.config.parallel_allocation_strategies import FixedAllocation, RootAllocation
+from access.config.parallel_component import ParallelComponent
+from access.config.parallel_constraints import FixedThreadsPerRankConstraint
+from access.config.parallel_domain import Domain
 
 from access.profiling.experiment import ProfilingLog
 from access.profiling.manager import ProfilingManager
-from access.profiling.payu_manager import PayuManager, ProfilingExperimentStatus
+from access.profiling.payu_manager import PayuManager, ProfilingExperiment, ProfilingExperimentStatus
+
+# A model that has nothing to do with any real one, so that the layout machinery of PayuManager is tested without
+# involving the specifics of a particular model. On 4 cores split evenly it has exactly 4 layouts, which differ only
+# in the shape of their process grids.
+MOCK_COMPONENT = ParallelComponent(
+    name="mock-model",
+    subcomponents=(
+        ParallelComponent("atm", domain=Domain((8, 8)), local_constraints=(FixedThreadsPerRankConstraint(1),)),
+        ParallelComponent("ocn", domain=Domain((8, 8)), local_constraints=(FixedThreadsPerRankConstraint(1),)),
+    ),
+)
+MOCK_ALLOCATIONS = RootAllocation(subcomponents={"atm": FixedAllocation(2), "ocn": FixedAllocation(2)})
 
 
 class MockPayuManager(PayuManager):
@@ -23,15 +37,19 @@ class MockPayuManager(PayuManager):
     def get_component_logs(self, path):
         return {"component": ProfilingLog(path, mock.MagicMock())}
 
-    def generate_core_layouts_from_node_count(
-        self, num_nodes: float, cores_per_node: int, layout_search_config: LayoutSearchConfig | None = None
-    ) -> list:
-        """This method is to be mocked in tests that call generate_scaling_experiments."""
-        raise NotImplementedError()
+    @property
+    def parallel_component(self) -> ParallelComponent:
+        return MOCK_COMPONENT
 
-    def generate_perturbation_block(self, layout, branch_name_prefix: str) -> dict:
-        """This method is to be mocked in tests that call generate_scaling_experiments."""
-        raise NotImplementedError()
+    def layout_branch_name(self, layout) -> str:
+        atm, ocn = layout.sub_layouts
+        atm_nx, atm_ny = atm.decomposition.grid.shape
+        ocn_nx, ocn_ny = ocn.decomposition.grid.shape
+        return f"mock_atm_{atm_nx}x{atm_ny}_ocn_{ocn_nx}x{ocn_ny}"
+
+    def layout_config_changes(self, layout) -> dict:
+        atm, ocn = layout.sub_layouts
+        return {"config.yaml": {"submodels": [[{"ncpus": atm.n_cores}, {"ncpus": ocn.n_cores}]]}}
 
 
 @pytest.fixture(scope="function")
@@ -96,136 +114,136 @@ def test_ncpus(mock_read_text, mock_yaml_parser, manager):
     assert ncpus == 5
 
 
-@mock.patch("access.profiling.payu_manager.ExperimentGenerator")
-def test_generate_scaling_experiments_basic(mock_experiment_generator, manager):
-    """Test the generate_scaling_experiments method with basic inputs."""
-    manager.set_control("https://github.com/example/repo.git", "abc123")
+def test_select_layouts(manager):
+    """Test the select_layouts method of PayuManager."""
 
-    with (
-        mock.patch.object(manager, "generate_core_layouts_from_node_count") as mock_layout_generator,
-        mock.patch.object(manager, "generate_perturbation_block") as mock_perturbation_block,
-    ):
-        mock_layout_generator.side_effect = [
-            [LayoutTuple(1, 2, 3, 4, 5), LayoutTuple(6, 7, 8, 9, 10)],
-            [LayoutTuple(11, 12, 13, 14, 15), LayoutTuple(1, 2, 3, 4, 5)],
-        ]
-        mock_perturbation_block.side_effect = [
-            {"branches": ["pert1"], "config.yaml": {}},
-            {"branches": ["pert2"], "config.yaml": {}},
-            {"branches": ["pert3"], "config.yaml": {}},
-            {"branches": ["pert4"], "config.yaml": {}},
-        ]
-        manager.generate_scaling_experiments(
-            num_nodes_list=[2.0, 4.0],
-            control_options={"option1": "value1"},
-            cores_per_node=48,
-            tol_around_ctrl_ratio=0.1,
-            max_wasted_ncores_frac=0.2,
-            walltime=5.0,
-        )
+    layouts = manager.select_layouts(4, allocations=MOCK_ALLOCATIONS)
+    assert len(layouts) == 4
+    assert all(layout.idle_cores == 0 for layout in layouts)
+    assert all(layout.n_cores == 4 for layout in layouts)
 
-    # Verify ExperimentGenerator was called
-    assert mock_experiment_generator.call_count == 1
+    # Sorted by increasing number of idle cores
+    assert [layout.idle_cores for layout in layouts] == sorted(layout.idle_cores for layout in layouts)
 
-    # Verify the configuration passed to ExperimentGenerator
-    call_args = mock_experiment_generator.call_args[0][0]
-    assert call_args["model_type"] == "mock-payu-model"
-    assert call_args["repository_url"] == "https://github.com/example/repo.git"
-    assert call_args["start_point"] == "abc123"
-    assert call_args["test_path"] == "/fake/test_path"
-    assert call_args["repository_directory"] == "config"
-    assert call_args["control_branch_name"] == "ctrl"
-    assert call_args["Control_Experiment"] == {"option1": "value1"}
+    # Enumeration is bounded, and the caller is told about it
+    assert len(manager.select_layouts(4, allocations=MOCK_ALLOCATIONS, max_layouts=2)) == 2
 
-    # Verify experiments were added
-    assert len(manager.experiments) == 3  # 2 layouts × 2 nodes miunus 1 duplicate
+    # An allocation that does not fit the budget yields nothing
+    too_big = RootAllocation(subcomponents={"atm": FixedAllocation(100), "ocn": FixedAllocation(100)})
+    assert manager.select_layouts(4, allocations=too_big) == []
 
 
 @mock.patch("access.profiling.payu_manager.ExperimentGenerator")
-def test_generate_scaling_experiments_callable_parameters(mock_experiment_generator, manager):
-    """Test generate_scaling_experiments with callable walltime and max_wasted_ncores_frac."""
-    manager.set_control("https://github.com/example/repo.git", "abc123")
+def test_generate_scaling_experiments(mock_experiment_generator, manager):
+    """Test the generate_scaling_experiments method of PayuManager."""
 
-    # Callable functions
-    def walltime_func(num_nodes):
-        return num_nodes * 2.5
+    manager.set_control("https://example.com/repo", "commit")
+    manager.generate_scaling_experiments(
+        num_nodes_list=[1.0],
+        control_options={"some": "option"},
+        cores_per_node=4,
+        walltime=2.0,
+        allocations=MOCK_ALLOCATIONS,
+    )
 
-    def max_wasted_func(num_nodes):
-        return 0.1 + (num_nodes * 0.02)
+    mock_experiment_generator.assert_called_once()
+    config = mock_experiment_generator.call_args[0][0]
+    assert config["model_type"] == "mock-payu-model"
+    assert config["repository_url"] == "https://example.com/repo"
+    assert config["start_point"] == "commit"
+    assert config["test_path"] == "/fake/test_path"
+    assert config["repository_directory"] == "config"
+    assert config["control_branch_name"] == "ctrl"
+    assert config["Control_Experiment"] == {"some": "option"}
 
-    with (
-        mock.patch.object(manager, "generate_core_layouts_from_node_count") as mock_layout_generator,
-        mock.patch.object(manager, "generate_perturbation_block") as mock_perturbation_block,
-        mock.patch(
-            "access.profiling.payu_manager.LayoutSearchConfig", wraps=LayoutSearchConfig
-        ) as mock_layout_search_config,
-    ):
-        mock_layout_generator.side_effect = [
-            [LayoutTuple(1, 2, 3, 4, 5)],
-            [LayoutTuple(11, 12, 13, 14, 15)],
-        ]
-        mock_perturbation_block.side_effect = [
-            {"branches": ["pert1"], "config.yaml": {}},
-            {"branches": ["pert2"], "config.yaml": {}},
-        ]
-        manager.generate_scaling_experiments(
-            num_nodes_list=[2.0, 4.0],
-            control_options={},
-            cores_per_node=48,
-            tol_around_ctrl_ratio=0.1,
-            max_wasted_ncores_frac=max_wasted_func,
-            walltime=walltime_func,
-        )
+    # One perturbation experiment per layout, numbered sequentially
+    perturbations = config["Perturbation_Experiment"]
+    assert list(perturbations) == ["Experiment_1", "Experiment_2", "Experiment_3", "Experiment_4"]
 
-    # Verify layout generation called with correct max_wasted_ncores_frac
-    assert mock_layout_search_config.call_count == 2
-    assert mock_layout_search_config.call_args_list[0][1]["max_wasted_ncores_frac"] == max_wasted_func(2.0)
-    assert mock_layout_search_config.call_args_list[1][1]["max_wasted_ncores_frac"] == max_wasted_func(4.0)
+    # Every experiment carries its branch, its walltime and the model's configuration changes
+    branches = []
+    for block in perturbations.values():
+        assert len(block["branches"]) == 1
+        branches.append(block["branches"][0])
+        assert block["config.yaml"]["walltime"] == "2:00:00"
+        assert block["config.yaml"]["submodels"] == [[{"ncpus": 2}, {"ncpus": 2}]]
 
-    # Verify ExperimentGenerator was called
-    assert mock_experiment_generator.call_count == 1
+    # Each branch is distinct and registered as a new experiment
+    assert len(set(branches)) == len(branches)
+    for branch in branches:
+        assert isinstance(manager.experiments[branch], ProfilingExperiment)
+        assert manager.experiments[branch].path == Path("/fake/test_path") / branch / "config"
 
-    # Verify the configuration passed to ExperimentGenerator has correct walltime
-    call_args = mock_experiment_generator.call_args[0][0]
-    assert (
-        call_args["Perturbation_Experiment"]["Experiment_1"]["config.yaml"]["walltime"] == "5:00:00"
-    )  # 2.0 nodes * 2.5 hrs
-    assert (
-        call_args["Perturbation_Experiment"]["Experiment_2"]["config.yaml"]["walltime"] == "10:00:00"
-    )  # 4.0 nodes * 2.5 hrs
+
+@mock.patch("access.profiling.payu_manager.ExperimentGenerator")
+def test_generate_scaling_experiments_callables(mock_experiment_generator, manager):
+    """Test that generate_scaling_experiments evaluates its callable arguments with the number of nodes."""
+
+    manager.set_control("https://example.com/repo", "commit")
+    walltime = mock.MagicMock(return_value=1.5)
+    allocations = mock.MagicMock(return_value=MOCK_ALLOCATIONS)
+
+    manager.generate_scaling_experiments([1.0], {}, 4, walltime, allocations=allocations)
+
+    walltime.assert_called_once_with(1.0)
+    allocations.assert_called_once_with(1.0)
+    config = mock_experiment_generator.call_args[0][0]
+    assert config["Perturbation_Experiment"]["Experiment_1"]["config.yaml"]["walltime"] == "1:30:00"
+
+
+@mock.patch("access.profiling.payu_manager.ExperimentGenerator")
+def test_generate_scaling_experiments_duplicates(mock_experiment_generator, manager):
+    """Test that generate_scaling_experiments skips layouts whose experiment already exists."""
+
+    manager.set_control("https://example.com/repo", "commit")
+    manager.generate_scaling_experiments([1.0], {}, 4, 2.0, allocations=MOCK_ALLOCATIONS)
+    assert len(manager.experiments) == 4
+    mock_experiment_generator.reset_mock()
+
+    # The same layouts are found again, so there is nothing left to generate
+    manager.generate_scaling_experiments([1.0], {}, 4, 2.0, allocations=MOCK_ALLOCATIONS)
+    assert len(manager.experiments) == 4
+    mock_experiment_generator.assert_not_called()
 
 
 @mock.patch("access.profiling.payu_manager.ExperimentGenerator")
 def test_generate_scaling_experiments_no_layouts(mock_experiment_generator, manager):
-    """Test generate_scaling_experiments when no layouts are found for some nodes."""
-    manager.set_control("https://github.com/example/repo.git", "abc123")
+    """Test that generate_scaling_experiments does nothing when no layout can be found."""
 
-    with (
-        mock.patch.object(manager, "generate_core_layouts_from_node_count") as mock_layout_generator,
-        mock.patch.object(manager, "generate_perturbation_block") as mock_perturbation_block,
-    ):
-        mock_layout_generator.side_effect = [
-            [LayoutTuple(1, 2, 3, 4, 5), LayoutTuple(6, 7, 8, 9, 10)],
-            [],
-        ]
-        mock_perturbation_block.side_effect = [
-            {"branches": ["pert1"], "config.yaml": {}},
-            {"branches": ["pert2"], "config.yaml": {}},
-        ]
-        manager.generate_scaling_experiments(
-            num_nodes_list=[2.0, 4.0],
-            control_options={},
-            cores_per_node=48,
-            tol_around_ctrl_ratio=0.1,
-            max_wasted_ncores_frac=0.2,
-            walltime=5.0,
-        )
+    manager.set_control("https://example.com/repo", "commit")
+    too_big = RootAllocation(subcomponents={"atm": FixedAllocation(100), "ocn": FixedAllocation(100)})
 
-    # Verify ExperimentGenerator was called
-    assert mock_experiment_generator.call_count == 1
+    manager.generate_scaling_experiments([1.0], {}, 4, 2.0, allocations=too_big)
 
-    # Verify only experiments for nodes with layouts were added
-    assert len(manager.experiments) == 2
+    assert manager.experiments == {}
+    mock_experiment_generator.assert_not_called()
+
+
+@mock.patch("access.profiling.payu_manager.ExperimentGenerator")
+def test_generate_scaling_experiments_fractional_nodes(mock_experiment_generator, manager):
+    """Test that a fractional node count reaches the layout search as the truncated number of cores."""
+
+    manager.set_control("https://example.com/repo", "commit")
+
+    # Half of an 8 core node is the same 4 core budget as a whole 4 core one
+    manager.generate_scaling_experiments([0.5], {}, 8, 2.0, allocations=MOCK_ALLOCATIONS)
+
+    config = mock_experiment_generator.call_args[0][0]
+    assert len(config["Perturbation_Experiment"]) == 4
+
+
+def test_generate_scaling_experiments_invalid_inputs(manager):
+    """Test that generate_scaling_experiments rejects node counts and node sizes it cannot use."""
+
+    manager.set_control("https://example.com/repo", "commit")
+
+    for cores_per_node in (0, -4, 4.0):
+        with pytest.raises(ValueError):
+            manager.generate_scaling_experiments([1.0], {}, cores_per_node, 2.0, allocations=MOCK_ALLOCATIONS)
+
+    for num_nodes in (0.0, -1.0):
+        with pytest.raises(ValueError):
+            manager.generate_scaling_experiments([num_nodes], {}, 4, 2.0, allocations=MOCK_ALLOCATIONS)
 
 
 @mock.patch("access.profiling.payu_manager.ExperimentRunner")

@@ -8,8 +8,7 @@ from datetime import timedelta
 from pathlib import Path
 
 from access.config import YAMLParser
-from access.config.esm1p6_layout_input import LayoutSearchConfig
-from access.config.layout_config import LayoutTuple
+from access.config.parallel_allocation_strategies import RootAllocation
 from experiment_generator.experiment_generator import ExperimentGenerator
 from experiment_runner.experiment_runner import ExperimentRunner
 
@@ -26,6 +25,8 @@ class PayuManager(ProfilingManager, ABC):
     _repository_directory: str = "config"  # Repository directory name needed by the experiment generator and runner.
     _nruns: int = 1  # Number of repetitions for the Payu experiments.
     _startfrom_restart: str = "cold"  # Restart option for the Payu experiments.
+    _repository: str  # Git repository URL or path of the control experiment. Set by set_control.
+    _control_commit: str  # Git commit of the control experiment. Set by set_control.
 
     @abstractmethod
     def get_component_logs(self, path: Path) -> dict[str, ProfilingLog]:
@@ -41,32 +42,6 @@ class PayuManager(ProfilingManager, ABC):
     @abstractmethod
     def model_type(self) -> str:
         """Returns the model type identifier, as defined in Payu."""
-
-    @abstractmethod
-    def generate_core_layouts_from_node_count(
-        self,
-        num_nodes: float,
-        cores_per_node: int,
-        layout_search_config: LayoutSearchConfig | None = None,
-    ) -> list:
-        """Generates core layouts from the given number of nodes.
-
-        Args:
-            num_nodes (float): Number of nodes.
-            cores_per_node (int): Number of cores per node.
-            layout_search_config (LayoutSearchConfig | None): Configuration for layout search.
-        """
-
-    @abstractmethod
-    def generate_perturbation_block(self, layout: LayoutTuple, branch_name_prefix: str) -> dict:
-        """Generates a perturbation block for the given layout to be passed to the experiment generator.
-
-        Args:
-            layout (LayoutTuple): Core layout tuple.
-            branch_name_prefix (str): Branch name prefix.
-        Returns:
-            dict: Perturbation block configuration.
-        """
 
     @property
     def nruns(self) -> int:
@@ -121,20 +96,40 @@ class PayuManager(ProfilingManager, ABC):
         num_nodes_list: list[float],
         control_options: dict,
         cores_per_node: int,
-        tol_around_ctrl_ratio: float,
-        max_wasted_ncores_frac: float | Callable[[float], float],
         walltime: float | Callable[[float], float],
+        allocations: RootAllocation | Callable[[float], RootAllocation] | None = None,
+        max_layouts: int | None = None,
     ) -> None:
-        """Generates scaling experiments using the ExperimentGenerator.
+        """Generates scaling experiments, one per valid layout of the model.
+
+        For each requested number of nodes, the valid layouts of the model are enumerated and each one becomes a
+        perturbation experiment. Layouts whose branch is already known to this manager are skipped, so the same
+        layout found for two different numbers of nodes only generates one experiment.
 
         Args:
-            num_nodes_list (list[int]): List of number of nodes to generate experiments for.
-            control_options (dict): Options for the control experiment.
-            cores_per_node (int): Number of cores per node.
-            tol_around_ctrl_ratio (float): Tolerance around control core ratio for layout generation.
-            max_wasted_ncores_frac (float | Callable[[float], float]): Maximum fraction of wasted cores allowed.
-            walltime (float | Callable[[float], float]): Walltime in hours for each experiment.
+            num_nodes_list (list[float]): Numbers of nodes to generate experiments for. Fractional values are
+                allowed; the number of cores the layouts are searched for is the product with cores_per_node,
+                truncated to an integer.
+            control_options (dict): Options of the control experiment, passed to the experiment generator.
+            cores_per_node (int): Number of cores available on each node. Must be a positive integer.
+            walltime (float | Callable[[float], float]): Walltime in hours to request for each experiment, either as
+                a fixed value or as a function of the number of nodes.
+            allocations (RootAllocation | Callable[[float], RootAllocation] | None): Allocation strategy deciding
+                how many cores each component may receive, either as a single strategy or as a function of the
+                number of nodes. A single strategy is usually enough, since the bounds of an allocation may be
+                written as fractions of the total core count, which resolve to a different number of cores at every
+                size in the study. Pass a function only where a bound cannot be expressed that way; note that
+                allocation bounds are in cores, so it typically multiplies by cores_per_node itself. None (the
+                default) leaves every component unconstrained.
+            max_layouts (int | None): Maximum number of layouts to enumerate for each number of nodes. None (the
+                default) enumerates all of them.
+
+        Raises:
+            ValueError: If cores_per_node is not a positive integer, or if any of the node counts is not positive.
         """
+
+        if not isinstance(cores_per_node, int) or cores_per_node <= 0:
+            raise ValueError(f"Cores per node must be a positive integer. Got {cores_per_node} instead")
 
         generator_config = {
             "model_type": self.model_type,
@@ -144,40 +139,47 @@ class PayuManager(ProfilingManager, ABC):
             "repository_directory": self._repository_directory,
             "control_branch_name": "ctrl",
             "Control_Experiment": control_options,
+            "Perturbation_Experiment": {},
         }
 
-        seen_layouts = set()
         seqnum = 1
-        generator_config["Perturbation_Experiment"] = {}
         for num_nodes in num_nodes_list:
-            mwf = max_wasted_ncores_frac(num_nodes) if callable(max_wasted_ncores_frac) else max_wasted_ncores_frac
-            layout_config = LayoutSearchConfig(tol_around_ctrl_ratio=tol_around_ctrl_ratio, max_wasted_ncores_frac=mwf)
-            layouts = self.generate_core_layouts_from_node_count(
-                num_nodes,
-                cores_per_node=cores_per_node,
-                layout_search_config=layout_config,
+            if num_nodes <= 0:
+                raise ValueError(f"Number of nodes must be > 0. Got {num_nodes} instead")
+
+            total_cores = int(num_nodes * cores_per_node)
+            layouts = self.select_layouts(
+                total_cores,
+                allocations=allocations(num_nodes) if callable(allocations) else allocations,
+                max_layouts=max_layouts,
             )
             if not layouts:
-                logger.warning(f"No layouts found for {num_nodes} nodes")
+                logger.warning(
+                    f"No layouts found for {num_nodes} nodes ({total_cores} cores). Check the bounds and the "
+                    "constraints of the allocation strategy."
+                )
                 continue
+            logger.info(f"Found {len(layouts)} layouts for {num_nodes} nodes ({total_cores} cores).")
 
-            layouts = [x for x in layouts if x not in seen_layouts]
-            seen_layouts.update(layouts)
-            logger.info(f"Generated {len(layouts)} layouts for {num_nodes} nodes. Layouts: {layouts}")
-
-            # TODO: the branch name needs to be simpler and model agnostic
-            branch_name = f"layout-unused-cores-to-cice-{layout_config.allocate_unused_cores_to_ice}"
             walltime_hrs = walltime(num_nodes) if callable(walltime) else walltime
 
             for layout in layouts:
-                pert_config = self.generate_perturbation_block(layout=layout, branch_name_prefix=branch_name)
-                branch = pert_config["branches"][0]
-                pert_config["config.yaml"]["walltime"] = str(timedelta(hours=walltime_hrs))
+                branch = self.layout_branch_name(layout)
+                if branch in self.experiments:
+                    logger.info(f"Experiment for branch {branch} already exists. Skipping addition.")
+                    continue
+
+                pert_config = {"branches": [branch], **self.layout_config_changes(layout)}
+                pert_config.setdefault("config.yaml", {})["walltime"] = str(timedelta(hours=walltime_hrs))
 
                 generator_config["Perturbation_Experiment"][f"Experiment_{seqnum}"] = pert_config
                 self.experiments[branch] = ProfilingExperiment(path=self.work_dir / branch / self._repository_directory)
 
                 seqnum += 1
+
+        if not generator_config["Perturbation_Experiment"]:
+            logger.warning("No new experiments to generate. Will skip generation.")
+            return
 
         ExperimentGenerator(generator_config).run()
 

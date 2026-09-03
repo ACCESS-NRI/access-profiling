@@ -28,6 +28,23 @@ def manager():
     return MockCylcManager(Path("/fake/test_path"), Path("/fake/archive_path"), layout_variable="um_layout")
 
 
+def test_layout_generation_is_unsupported(manager):
+    """Test that the layout API promoted to ProfilingManager reports itself unsupported here.
+
+    Cylc Rose suites take their layout from rose-suite.conf rather than from a layout search, so a Cylc Rose
+    manager has to remain instantiable while declining the layout API.
+    """
+
+    with pytest.raises(NotImplementedError):
+        _ = manager.parallel_component
+    with pytest.raises(NotImplementedError):
+        manager.layout_branch_name(mock.MagicMock())
+    with pytest.raises(NotImplementedError):
+        manager.layout_config_changes(mock.MagicMock())
+    with pytest.raises(NotImplementedError):
+        manager.select_layouts(4)
+
+
 @mock.patch("access.profiling.cylc_manager.Path.glob")
 def test_parse_profiling_logs(mock_path_glob, manager):
     """Test the parse_profiling_logs method of CylcRoseManager with missing directories."""

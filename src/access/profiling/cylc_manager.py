@@ -7,6 +7,8 @@ import subprocess
 from abc import ABC, abstractmethod
 from pathlib import Path
 
+from access.config.parallel_component import ComponentLayout, ParallelComponent
+
 from access.profiling.cylc_parser import CylcDBReader, CylcProfilingParser
 from access.profiling.experiment import ProfilingExperiment, ProfilingExperimentStatus, ProfilingLog
 from access.profiling.manager import ProfilingManager
@@ -38,6 +40,40 @@ class CylcRoseManager(ProfilingManager, ABC):
         Returns:
             dict[str, ProfilingParser]: a dictionary of known parsers with names as keys.
         """
+
+    # ProfilingManager declares the layout API for every model, but a Cylc Rose suite takes its layout from
+    # rose-suite.conf rather than from a layout search, and no component tree describing one has been written
+    # yet. These overrides state that plainly, and keep Cylc Rose managers instantiable in the meantime.
+    _no_layout_support: str = "Layout generation is not supported for Cylc Rose configurations."
+
+    @property
+    def parallel_component(self) -> ParallelComponent:
+        """Raises NotImplementedError: Cylc Rose configurations have no component tree.
+
+        Raises:
+            NotImplementedError: Always.
+        """
+        raise NotImplementedError(self._no_layout_support)
+
+    def layout_branch_name(self, layout: ComponentLayout) -> str:
+        """Raises NotImplementedError: Cylc Rose configurations do not generate layout experiments.
+
+        Args:
+            layout (ComponentLayout): Unused.
+        Raises:
+            NotImplementedError: Always.
+        """
+        raise NotImplementedError(self._no_layout_support)
+
+    def layout_config_changes(self, layout: ComponentLayout) -> dict:
+        """Raises NotImplementedError: Cylc Rose configurations do not generate layout experiments.
+
+        Args:
+            layout (ComponentLayout): Unused.
+        Raises:
+            NotImplementedError: Always.
+        """
+        raise NotImplementedError(self._no_layout_support)
 
     def parse_ncpus(self, path: Path, run_path: Path | None = None) -> int:
         # both the run and original config will store cpu information
