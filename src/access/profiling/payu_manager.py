@@ -1,6 +1,7 @@
 # Copyright 2025 ACCESS-NRI and contributors. See the top-level COPYRIGHT file for details.
 # SPDX-License-Identifier: Apache-2.0
 
+import json
 import logging
 from abc import ABC, abstractmethod
 from collections.abc import Callable
@@ -18,6 +19,11 @@ from access.profiling.manager import ProfilingExperiment, ProfilingExperimentSta
 from access.profiling.payujson_parser import PayuJSONProfilingParser
 
 logger = logging.getLogger(__name__)
+
+# Payu's own defaults, from payu.subcommands.run_cmd, which _requested_ncpus mirrors. A config that declares
+# neither is submitted on 48 core nodes, so that is what this package has to assume as well.
+_PAYU_DEFAULT_NODE_SIZE = 48
+_PAYU_DEFAULT_NCPUS = 1
 
 
 class PayuManager(ProfilingManager, ABC):
@@ -285,21 +291,103 @@ class PayuManager(ProfilingManager, ABC):
         )
 
     def parse_ncpus(self, path: Path, run_path: Path | None = None) -> int:
-        """Parses the number of CPUs used in a given Payu experiment.
+        """Parses the number of CPUs a given Payu experiment occupied.
+
+        There are two ways to know this, and both are used. What the scheduler recorded is the better answer, so
+        it is tried first; failing that, the request Payu would have made is worked out from the configuration.
+        The two agree whenever both are available, since the first is the result of submitting the second.
 
         Args:
             path (Path): Path to the Payu experiment directory. Must contain a config.yaml file.
             run_path (Path | None): Optional path to a separate runs directory. Unused for Payu experiments.
         Returns:
-            int: Number of CPUs used in the experiment. If multiple submodels are defined, returns the sum of their
-                 ncpus.
+            int: Number of CPUs the experiment occupied, including any left idle to fill whole compute nodes.
         """
+        recorded = self._recorded_ncpus(path)
+        if recorded is not None:
+            return recorded
+
         config_path = path / "config.yaml"
-        payu_config = YAMLParser().parse(config_path.read_text())
-        if "submodels" in payu_config:
-            return sum(submodel["ncpus"] for submodel in payu_config["submodels"])
+        return self._requested_ncpus(YAMLParser().parse(config_path.read_text()))
+
+    @staticmethod
+    def _recorded_ncpus(path: Path) -> int | None:
+        """Returns the number of CPUs the scheduler recorded for the most recent run, if it recorded any.
+
+        Payu writes one job file per run, holding the job information it read back from the scheduler. Under PBS
+        that is the output of ``qstat -f -F json``, whose Resource_List.ncpus is the request the job was charged
+        for - the whole-node figure, not the sum over the submodels.
+
+        Every way of not finding it is a missing answer rather than an error: experiments archived before Payu
+        recorded job information, runs under a scheduler that reports none, and jobs whose scheduler query
+        failed all fall back to reading the configuration instead. The reason is logged at DEBUG level.
+
+        Args:
+            path (Path): Path to the Payu experiment directory.
+
+        Returns:
+            int | None: Recorded number of CPUs, or None if no job file records one.
+        """
+        # Payu names the directory holding each job file after the run number, as in profiling_logs().
+        job_files = sorted(path.glob("archive/payu_jobs/*/run/*.json"), key=lambda p: int(p.parts[-3]))
+        if not job_files:
+            logger.debug(f"No Payu job file found under {path / 'archive/payu_jobs'}.")
+            return None
+
+        # The most recent run: an experiment run several times keeps one job file per run, and they all describe
+        # the same configuration, so the newest is as good as any and is the one that certainly ran.
+        job_file = job_files[-1]
+        try:
+            job_info = json.loads(job_file.read_text())
+        except (OSError, json.JSONDecodeError) as error:
+            logger.debug(f"Could not read the Payu job file {job_file}: {error}.")
+            return None
+
+        if job_info.get("scheduler_type") != "pbs":
+            logger.debug(f"Job file {job_file} records no PBS job information, so it states no CPU count.")
+            return None
+
+        try:
+            job_id = job_info["scheduler_job_id"]
+            return int(job_info["scheduler_job_info"]["Jobs"][job_id]["Resource_List"]["ncpus"])
+        except (KeyError, TypeError, ValueError) as error:
+            logger.debug(f"Job file {job_file} has no usable Resource_List.ncpus: {error}.")
+            return None
+
+    @staticmethod
+    def _requested_ncpus(payu_config: dict) -> int:
+        """Returns the number of CPUs Payu requests from the scheduler for a given configuration.
+
+        This mirrors what Payu itself does in payu.subcommands.run_cmd before submitting: it works out the cores
+        the model needs, then rounds the request up to fill whole compute nodes, warning about the ones that go
+        unused. Reproducing the rule rather than reading the summed submodel counts is what makes the answer
+        agree with the job that was actually submitted, whether or not the configuration names a node size.
+
+        Two details are Payu's rather than this package's, and are kept deliberately. A job fitting within a
+        single node is not rounded up at all, so small runs report exactly what they asked for. And ncpureq
+        overrides everything, including the rounding, since it is Payu's hard override of the request.
+
+        Args:
+            payu_config (dict): Parsed contents of the experiment's config.yaml.
+
+        Returns:
+            int: Number of CPUs the request comes to.
+        """
+        node_size = payu_config.get("platform", {}).get("nodesize", _PAYU_DEFAULT_NODE_SIZE)
+
+        if "ncpureq" in payu_config:
+            # A hard override of the request, which Payu passes to the scheduler untouched.
+            return payu_config["ncpureq"]
+        if "submodels" in payu_config and "ncpus" not in payu_config:
+            n_cpus = sum(submodel.get("ncpus", 0) for submodel in payu_config["submodels"])
         else:
-            return payu_config["ncpus"]
+            # Note the precedence: a top-level ncpus wins over the submodels, as it does in Payu.
+            n_cpus = payu_config.get("ncpus", _PAYU_DEFAULT_NCPUS)
+
+        cpus_per_node = payu_config.get("npernode", node_size)
+        if n_cpus > node_size and (cpus_per_node < node_size or n_cpus % node_size):
+            n_cpus = node_size * (1 + (n_cpus - 1) // cpus_per_node)
+        return n_cpus
 
     def profiling_logs(self, path: Path, run_path: Path | None = None) -> dict[str, dict[int, ProfilingLog]]:
         """Returns all profiling logs from the specified path.
