@@ -91,7 +91,9 @@ def plot_scaling_metrics(
             speedup.loc[region, :].plot.line(x=xcoordinate, ax=ax1, marker="o", label=region)
             efficiency.loc[region, :].plot.line(x=xcoordinate, ax=ax2, marker="o", label=region)
             # find max efficiency for setting efficiency axis
-            max_eff = max(max_eff, efficiency.loc[region, :].max())
+            # pint compares a bare number against a percent Quantity's fractional (base-unit) magnitude rather
+            # than its percent magnitude, so dequantify first or values above 100% get silently dropped.
+            max_eff = max(max_eff, float(efficiency.loc[region, :].max().pint.dequantify()))
 
             tbl.append([region] + [f"{val:.2f}" for val in stat[metric].loc[:, region].pint.dequantify().values])
 

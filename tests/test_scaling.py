@@ -96,3 +96,28 @@ def test_plot_scaling_metrics(mock_plt, simple_scaling_data):
         xcoordinate="ncpus",
     )
     mock_plt.assert_called_once()
+
+
+@mock.patch("matplotlib.pyplot.show", autospec=True)
+def test_plot_scaling_metrics_efficiency_ylim_covers_superlinear_efficiency(mock_plt):
+    """The efficiency ylim must auto-adjust to cover efficiency above 100%, not silently clip it.
+
+    Regression test: comparing a bare int against a pint percent Quantity via max() compares against the
+    Quantity's fractional (base-unit) magnitude rather than its percent magnitude, so values above 100% were
+    previously dropped when computing the default axis limit.
+    """
+    ncpus = [1, 2]
+    datasets = []
+    for n, val in zip(ncpus, [1000, 400], strict=True):  # superlinear: 2 cpus is >2x faster than 1 cpu
+        datasets.append(
+            xr.Dataset(
+                data_vars={tavg: xr.DataArray([[val]], dims=["ncpus", "region"]).pint.quantify("seconds")},
+                coords={"region": ["R1"], "ncpus": [n]},
+            )
+        )
+    stat = xr.concat(datasets, dim="ncpus")
+
+    fig = plot_scaling_metrics(stats=[stat], metric=tavg, xcoordinate="ncpus")
+    ax2 = fig.axes[1]
+
+    assert ax2.get_ylim()[1] >= 1.1 * 125  # true max efficiency is 125%; default ylim must cover it
