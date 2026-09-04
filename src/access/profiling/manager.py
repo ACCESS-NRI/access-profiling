@@ -95,14 +95,22 @@ class ProfilingManager(ABC):
 
     @abstractmethod
     def parse_ncpus(self, path: Path, run_path: Path | None = None) -> int:
-        """Parses the number of CPUs used in a given experiment in the specified path.
+        """Parses the number of CPUs a given experiment occupied.
+
+        This is what the experiment cost, not what it put to work: schedulers hand out whole compute nodes, so
+        a run that gives its components 402 cores on 104 core nodes still occupies, and is charged for, all 416.
+        Two layouts that fill the same nodes are the same size for the purposes of a scaling study, however
+        differently they divide the cores among the components.
+
+        How to find that number is up to each subclass, since it depends on the workflow engine and on what the
+        scheduler recorded.
 
         Args:
             path (Path): Path to the experiment directory.
             run_path (Path | None): Optional path to a separate runs directory.
 
         Returns:
-            int: Number of CPUs used in the experiment.
+            int: Number of CPUs the experiment occupied.
         """
 
     def archive_experiments(
@@ -281,13 +289,13 @@ class ProfilingManager(ABC):
                 )
 
     def _ncpus(self, exp_name: str) -> int:
-        """Returns the number of CPUs used by an experiment, parsing it at most once.
+        """Returns the number of CPUs occupied by an experiment, parsing it at most once.
 
         Args:
             exp_name (str): Name of the experiment.
 
         Returns:
-            int: Number of CPUs used by the experiment.
+            int: Number of CPUs the experiment occupied, as reported by parse_ncpus.
         """
         if exp_name not in self._ncpus_cache:
             with self.experiments[exp_name].directory() as (exp_path, run_path):
@@ -308,6 +316,10 @@ class ProfilingManager(ABC):
         coordinates and meaningless speedup and efficiency curves. This method keeps a single experiment per CPU
         count: the one with the smallest value of the given metric, measured on the given region of the given
         component. Smaller is always better.
+
+        Experiments are grouped by the number of CPUs they occupied, which is what parse_ncpus reports, so two
+        layouts that fill the same compute nodes compete with each other even when they hand different numbers of
+        cores to the model components.
 
         The returned list is meant to be passed to the experiments argument of the plotting methods. If two
         experiments with the same number of CPUs have exactly the same value, the first one is kept and a warning
@@ -456,7 +468,9 @@ class ProfilingManager(ABC):
         # Find number of cpus used for each experiment
         ncpus = {exp_name: self._ncpus(exp_name) for exp_name in exp_names}
 
-        # Speedup and efficiency are ill-defined if several experiments share the same number of cpus
+        # Speedup and efficiency are ill-defined if several experiments share the same number of cpus. The counts
+        # are the occupied ones, so two layouts filling the same nodes collide here even if their component core
+        # counts differ; select_best_experiments() groups them the same way and is the way to resolve this.
         cpu_counts = list(ncpus.values())
         duplicated_ncpus = sorted({n for n in cpu_counts if cpu_counts.count(n) > 1})
         if duplicated_ncpus:

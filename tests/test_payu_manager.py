@@ -1,6 +1,7 @@
 # Copyright 2025 ACCESS-NRI and contributors. See the top-level COPYRIGHT file for details.
 # SPDX-License-Identifier: Apache-2.0
 
+import json
 from pathlib import Path
 from unittest import mock
 
@@ -94,6 +95,149 @@ def test_ncpus(mock_read_text, mock_yaml_parser, manager):
     ncpus = manager.parse_ncpus(Path("/fake/path"))
     assert mock_read_text.call_count == 2
     assert ncpus == 5
+
+
+def write_job_file(path: Path, run: int, job_info: dict) -> Path:
+    """Writes a Payu job file for a run of the experiment at path, and returns it."""
+
+    job_file = path / "archive" / "payu_jobs" / str(run) / "run" / "149764665.gadi-pbs.json"
+    job_file.parent.mkdir(parents=True, exist_ok=True)
+    job_file.write_text(json.dumps(job_info))
+    return job_file
+
+
+def pbs_job_info(ncpus: int, job_id: str = "149764665.gadi-pbs") -> dict:
+    """A Payu job file recording a PBS job of the given size, shaped as `qstat -f -F json` returns it."""
+
+    return {
+        "scheduler_job_id": job_id,
+        "scheduler_type": "pbs",
+        "scheduler_job_info": {"Jobs": {job_id: {"Resource_List": {"ncpus": ncpus, "nodect": 4}}}},
+        "timings": {"payu_total_duration_seconds": 6838.225644},
+    }
+
+
+class TestRequestedNcpus:
+    """The core count Payu asks the scheduler for, mirroring payu.subcommands.run_cmd."""
+
+    def test_the_submodels_are_summed(self):
+        assert PayuManager._requested_ncpus({"submodels": [{"ncpus": 2}, {"ncpus": 3}]}) == 5
+
+    def test_a_top_level_count_wins_over_the_submodels(self):
+        # Payu's own precedence: an explicit ncpus suppresses the sum rather than adding to it.
+        assert PayuManager._requested_ncpus({"ncpus": 8, "submodels": [{"ncpus": 2}, {"ncpus": 3}]}) == 8
+
+    def test_a_submodel_without_a_count_contributes_nothing(self):
+        assert PayuManager._requested_ncpus({"submodels": [{"ncpus": 2}, {"exe": "model.exe"}]}) == 2
+
+    def test_a_configuration_stating_nothing_asks_for_one_core(self):
+        assert PayuManager._requested_ncpus({}) == 1
+
+    def test_ncpureq_overrides_everything_including_the_rounding(self):
+        # A hard override, so the misaligned 100 is passed on as it stands rather than rounded to 104.
+        config = {"ncpureq": 100, "ncpus": 8, "platform": {"nodesize": 52}}
+        assert PayuManager._requested_ncpus(config) == 100
+
+    def test_a_job_within_one_node_is_not_rounded_up(self):
+        # Payu leaves these alone, so a 100 core job on 104 core nodes reports the 100 it asked for.
+        assert PayuManager._requested_ncpus({"ncpus": 100, "platform": {"nodesize": 104}}) == 100
+
+    def test_a_misaligned_request_fills_whole_nodes(self):
+        # The case this whole change is about: 402 cores of work occupy, and cost, four whole nodes.
+        config = {"submodels": [{"ncpus": 200}, {"ncpus": 190}, {"ncpus": 12}], "platform": {"nodesize": 104}}
+        assert PayuManager._requested_ncpus(config) == 416
+
+    def test_a_request_already_filling_whole_nodes_is_left_alone(self):
+        config = {"submodels": [{"ncpus": 208}, {"ncpus": 196}, {"ncpus": 12}], "platform": {"nodesize": 104}}
+        assert PayuManager._requested_ncpus(config) == 416
+
+    def test_npernode_below_the_node_size_spreads_over_more_nodes(self):
+        # 208 cores at 52 per node is four nodes, and four nodes cost 4 x 104 cores whatever runs on them.
+        config = {"ncpus": 208, "npernode": 52, "platform": {"nodesize": 104}}
+        assert PayuManager._requested_ncpus(config) == 416
+
+    def test_the_node_size_defaults_to_payus_own(self):
+        # Nothing declares a node size, so 48 applies and 100 cores become three nodes' worth.
+        assert PayuManager._requested_ncpus({"ncpus": 100}) == 144
+
+
+class TestRecordedNcpus:
+    """The core count the scheduler recorded, read back from the Payu job files."""
+
+    def test_it_reads_the_pbs_request(self, tmp_path):
+        write_job_file(tmp_path, 0, pbs_job_info(416))
+        assert PayuManager._recorded_ncpus(tmp_path) == 416
+
+    def test_the_most_recent_run_is_used(self, tmp_path):
+        # Numerically, not lexicographically: run 10 is the newest, not run 9.
+        write_job_file(tmp_path, 9, pbs_job_info(208))
+        write_job_file(tmp_path, 10, pbs_job_info(416))
+        assert PayuManager._recorded_ncpus(tmp_path) == 416
+
+    def test_no_archive_records_nothing(self, tmp_path):
+        assert PayuManager._recorded_ncpus(tmp_path) is None
+
+    def test_an_archive_without_job_files_records_nothing(self, tmp_path):
+        (tmp_path / "archive" / "output000").mkdir(parents=True)
+        assert PayuManager._recorded_ncpus(tmp_path) is None
+
+    def test_a_job_file_that_is_not_json_records_nothing(self, tmp_path):
+        job_file = write_job_file(tmp_path, 0, pbs_job_info(416))
+        job_file.write_text("not json at all")
+        assert PayuManager._recorded_ncpus(tmp_path) is None
+
+    def test_another_scheduler_records_nothing(self, tmp_path):
+        # Only PBS reports a Resource_List, so there is nothing to read for anything else.
+        job_info = pbs_job_info(416)
+        job_info["scheduler_type"] = "slurm"
+        write_job_file(tmp_path, 0, job_info)
+        assert PayuManager._recorded_ncpus(tmp_path) is None
+
+    def test_a_job_file_without_job_information_records_nothing(self, tmp_path):
+        # Payu writes the timings but omits the scheduler keys when the scheduler query fails.
+        write_job_file(tmp_path, 0, {"timings": {"payu_total_duration_seconds": 1.0}})
+        assert PayuManager._recorded_ncpus(tmp_path) is None
+
+    def test_a_job_file_without_a_core_count_records_nothing(self, tmp_path):
+        job_info = pbs_job_info(416)
+        del job_info["scheduler_job_info"]["Jobs"]["149764665.gadi-pbs"]["Resource_List"]
+        write_job_file(tmp_path, 0, job_info)
+        assert PayuManager._recorded_ncpus(tmp_path) is None
+
+    def test_a_job_file_naming_another_job_records_nothing(self, tmp_path):
+        write_job_file(tmp_path, 0, pbs_job_info(416, job_id="different.gadi-pbs") | {"scheduler_job_id": "149764665"})
+        assert PayuManager._recorded_ncpus(tmp_path) is None
+
+
+class TestParseNcpus:
+    """The two mechanisms together: what the scheduler recorded, else what Payu would request."""
+
+    def test_the_record_is_preferred_over_the_configuration(self, manager, tmp_path):
+        # The two agree in practice, since one is the result of submitting the other. Made to disagree here so
+        # that the answer says which of them was used.
+        (tmp_path / "config.yaml").write_text("ncpus: 8")
+        write_job_file(tmp_path, 0, pbs_job_info(416))
+        assert manager.parse_ncpus(tmp_path) == 416
+
+    def test_the_configuration_is_used_when_nothing_was_recorded(self, manager, tmp_path):
+        (tmp_path / "config.yaml").write_text("ncpus: 100\nplatform:\n  nodesize: 104\n")
+        assert manager.parse_ncpus(tmp_path) == 100
+
+    def test_layouts_filling_the_same_nodes_report_the_same_size(self, manager, tmp_path):
+        """The point of counting occupied cores: these two are the same size, and must compete as one."""
+
+        def experiment(name: str, cores: tuple[int, int, int]) -> Path:
+            path = tmp_path / name
+            path.mkdir()
+            submodels = "".join(f"  - ncpus: {n}\n" for n in cores)
+            (path / "config.yaml").write_text(f"platform:\n  nodesize: 104\nsubmodels:\n{submodels}")
+            return path
+
+        # 416 cores of work and 402 cores of work, both spread over the same four whole nodes.
+        full = experiment("full", (208, 196, 12))
+        wasteful = experiment("wasteful", (200, 190, 12))
+
+        assert manager.parse_ncpus(full) == manager.parse_ncpus(wasteful) == 416
 
 
 @mock.patch("access.profiling.payu_manager.ExperimentGenerator")

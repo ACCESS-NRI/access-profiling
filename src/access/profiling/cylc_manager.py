@@ -65,6 +65,25 @@ class CylcRoseManager(ProfilingManager, ABC):
         """
 
     def parse_ncpus(self, path: Path, run_path: Path | None = None) -> int:
+        """Parses the number of CPUs used in a given Cylc/Rose experiment, from the model layout.
+
+        Unlike the Payu manager, this reports the cores the layout puts to work rather than the ones the job
+        occupied: nothing in a rose configuration states the size of a compute node, so the cores left idle to
+        fill whole nodes cannot be worked out from it. Scaling studies whose sizes are not multiples of the node
+        size will therefore group experiments by a slightly smaller count than they were charged for.
+
+        Args:
+            path (Path): Path to the experiment directory. Must contain a rose-suite.conf file.
+            run_path (Path | None): Optional path to a separate runs directory. Its run configuration is
+                preferred over the one in path when present, since it records what the run actually used.
+
+        Returns:
+            int: Product of the two dimensions of the layout variable.
+
+        Raises:
+            FileNotFoundError: If neither configuration file exists.
+            ValueError: If the layout variable is not set in the configuration file that was found.
+        """
         # both the run and original config will store cpu information
         config_paths = []
         if run_path is not None:
