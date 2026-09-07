@@ -99,6 +99,33 @@ def test_plot_scaling_metrics(mock_plt, simple_scaling_data):
 
 
 @mock.patch("matplotlib.pyplot.show", autospec=True)
+def test_plot_scaling_metrics_default_xlabel(mock_plt, simple_scaling_data):
+    """Without an explicit xlabel, the default label derived from xcoordinate is kept."""
+
+    fig = plot_scaling_metrics(
+        stats=[simple_scaling_data],
+        metric=tavg,
+        xcoordinate="ncpus",
+    )
+    assert fig.axes[0].get_xlabel() == "ncpus"
+    assert fig.axes[1].get_xlabel() == "ncpus"
+
+
+@mock.patch("matplotlib.pyplot.show", autospec=True)
+def test_plot_scaling_metrics_custom_xlabel(mock_plt, simple_scaling_data):
+    """An explicit xlabel overrides the default label on both subplots."""
+
+    fig = plot_scaling_metrics(
+        stats=[simple_scaling_data],
+        metric=tavg,
+        xcoordinate="ncpus",
+        xlabel="Number of CPUs",
+    )
+    assert fig.axes[0].get_xlabel() == "Number of CPUs"
+    assert fig.axes[1].get_xlabel() == "Number of CPUs"
+
+
+@mock.patch("matplotlib.pyplot.show", autospec=True)
 def test_plot_scaling_metrics_efficiency_ylim_covers_superlinear_efficiency(mock_plt):
     """The efficiency ylim must auto-adjust to cover efficiency above 100%, not silently clip it.
 

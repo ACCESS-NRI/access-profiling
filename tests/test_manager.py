@@ -437,8 +437,10 @@ def test_scaling_data(mock_plot, scaling_data):
         metric=tavg,
         region_relabel_map={"Region 1": "Total"},
         experiments=["1cpu", "4cpu"],
+        xlabel="Number of CPUs",
     )
     assert mock_plot.call_count == 1
+    assert mock_plot.call_args.kwargs["xlabel"] == "Number of CPUs"
     scaling_data = mock_plot.call_args.args[0]
     assert isinstance(scaling_data, list)
     assert len(scaling_data) == 1  # One component

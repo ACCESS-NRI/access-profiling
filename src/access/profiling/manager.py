@@ -430,6 +430,7 @@ class ProfilingManager(ABC):
         metric: ProfilingMetric,
         region_relabel_map: dict | None = None,
         experiments: list[str] | None = None,
+        xlabel: str | None = None,
     ) -> Figure:
         """Plots scaling data for the specified components, regions and metric.
 
@@ -440,6 +441,8 @@ class ProfilingManager(ABC):
             region_relabel_map (dict | None): Optional mapping to relabel regions in the plots.
             experiments (list[str] | None): Optional list of experiment names to include. If None, all experiments
                 with parsed profiling data are included.
+            xlabel (str | None): Optional custom label for the x-axis of both subplots. If None, the
+                default label derived from the x-coordinate is kept.
 
         Returns:
             Figure: The Matplotlib figure containing the scaling plots.
@@ -510,7 +513,7 @@ class ProfilingManager(ABC):
             # Concatenate data along ncpus dimension
             scaling_data.append(xr.concat(component_data, dim="ncpus", join="outer").sortby("ncpus"))
 
-        return plot_scaling_metrics(scaling_data, metric)
+        return plot_scaling_metrics(scaling_data, metric, xlabel=xlabel)
 
     def plot_bar_chart(
         self,

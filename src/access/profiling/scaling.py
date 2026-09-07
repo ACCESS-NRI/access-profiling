@@ -52,6 +52,7 @@ def plot_scaling_metrics(
     stats: list[xr.Dataset],
     metric: ProfilingMetric,
     xcoordinate: str = "ncpus",
+    xlabel: str | None = None,
     first_col_fraction: float = 0.4,
     show: bool = True,
 ) -> Figure:
@@ -61,6 +62,8 @@ def plot_scaling_metrics(
         stats (list[xr.Dataset]): The raw times to plot.
         metric (ProfilinMetric): The metric to plot for each stat.
         xcoordinate (str): The x-axis variable e.g. "ncpus".
+        xlabel (str | None): Optional custom label for the x-axis of both subplots. If None, the
+            default label derived from xcoordinate is kept.
         first_col_fraction (float): The fraction of table width to assign to the row labels. Default 0.4.
         show (bool): Whether to show the generated plot. Default: True.
 
@@ -111,6 +114,9 @@ def plot_scaling_metrics(
     ax2.set_ylim((0, 1.1 * max_eff))
     ax1.set_title("Parallel Speedup")
     ax2.set_title("Parallel Efficiency")
+    if xlabel is not None:
+        ax1.set_xlabel(xlabel)
+        ax2.set_xlabel(xlabel)
     ax_tbl.axis("off")
     tbl_chart = ax_tbl.table(
         tbl,
