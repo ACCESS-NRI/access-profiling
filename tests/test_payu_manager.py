@@ -133,10 +133,14 @@ class TestRequestedNcpus:
     def test_a_configuration_stating_nothing_asks_for_one_core(self):
         assert PayuManager._requested_ncpus({}) == 1
 
-    def test_ncpureq_overrides_everything_including_the_rounding(self):
-        # A hard override, so the misaligned 100 is passed on as it stands rather than rounded to 104.
+    def test_ncpureq_overrides_the_count_but_not_the_rounding(self):
+        # Payu overrides the count the model asks for, then rounds it up like any other: 100 cores on 52 core
+        # nodes is two nodes' worth, so the request goes out as 104.
         config = {"ncpureq": 100, "ncpus": 8, "platform": {"nodesize": 52}}
-        assert PayuManager._requested_ncpus(config) == 100
+        assert PayuManager._requested_ncpus(config) == 104
+
+    def test_ncpureq_within_one_node_is_left_alone(self):
+        assert PayuManager._requested_ncpus({"ncpureq": 40, "platform": {"nodesize": 52}}) == 40
 
     def test_a_job_within_one_node_is_not_rounded_up(self):
         # Payu leaves these alone, so a 100 core job on 104 core nodes reports the 100 it asked for.
