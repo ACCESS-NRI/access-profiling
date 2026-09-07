@@ -51,7 +51,6 @@ class MockProfilingManager(ProfilingManager):
 
     def parse_ncpus(self, path, run_path=None):
         """Simulate parsing number of CPUs for a given path."""
-        self._last_parse_ncpus_args = (path, run_path)
         self._parse_ncpus_calls.append((path, run_path))
         return self._mock_ncpus[path.name]
 
@@ -660,6 +659,38 @@ def test_experiment_ncpus_parsed_once(layout_scaling_data):
     manager.select_best_experiments("component", "Region 1", tavg)
 
     assert len(manager._parse_ncpus_calls) == 3  # One per experiment, not one per call
+
+
+def test_experiment_ncpus_is_stored_on_the_experiment(layout_scaling_data):
+    """Test that the parsed number of CPUs is kept on the experiment rather than beside it."""
+
+    paths, ncpus, datasets = layout_scaling_data
+    manager = MockProfilingManager(paths, ncpus, datasets)
+
+    assert manager.experiments["1cpu"].ncpus is None  # Nothing has needed it yet
+    assert manager._ncpus("1cpu") == 1
+    assert manager.experiments["1cpu"].ncpus == 1
+
+
+def test_a_replacement_experiment_does_not_inherit_a_deleted_count(layout_scaling_data):
+    """Test that an experiment added under the name of a deleted one is parsed afresh.
+
+    The count used to be held by the manager, keyed by name, and nothing removed it when an experiment was
+    deleted, so a later experiment reusing that name was handed the deleted one's number of CPUs.
+    """
+
+    paths, ncpus, datasets = layout_scaling_data
+    manager = MockProfilingManager(paths, ncpus, datasets)
+    assert manager._ncpus("1cpu") == 1
+
+    manager.delete_experiment("1cpu")
+
+    # A different experiment that happens to reuse the name, and that ran on more CPUs.
+    manager._mock_ncpus["1cpu"] = 8
+    manager.experiments["1cpu"] = ProfilingExperiment(path=Path("1cpu"))
+    manager.experiments["1cpu"].status = ProfilingExperimentStatus.DONE
+
+    assert manager._ncpus("1cpu") == 8
 
 
 @mock.patch("access.profiling.manager.plot_scaling_metrics")

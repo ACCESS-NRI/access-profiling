@@ -20,8 +20,9 @@ from access.profiling.payujson_parser import PayuJSONProfilingParser
 
 logger = logging.getLogger(__name__)
 
-# Payu's own defaults, from payu.subcommands.run_cmd, which _requested_ncpus mirrors. A config that declares
-# neither is submitted on 48 core nodes, so that is what this package has to assume as well.
+# The defaults Payu applies to platform.nodesize and ncpus in payu.subcommands.run_cmd.runcmd, which
+# _requested_ncpus mirrors. They are copied rather than imported because Payu states them as bare literals in
+# the body of that function, and exposes them nowhere: if Payu ever changes them, these have to follow.
 _PAYU_DEFAULT_NODE_SIZE = 48
 _PAYU_DEFAULT_NCPUS = 1
 
@@ -361,11 +362,16 @@ class PayuManager(ProfilingManager, ABC):
         This mirrors what Payu itself does in payu.subcommands.run_cmd before submitting: it works out the cores
         the model needs, then rounds the request up to fill whole compute nodes, warning about the ones that go
         unused. Reproducing the rule rather than reading the summed submodel counts is what makes the answer
-        agree with the job that was actually submitted, whether or not the configuration names a node size.
+        agree with the job that was actually submitted.
 
         Two details are Payu's rather than this package's, and are kept deliberately. A job fitting within a
         single node is not rounded up at all, so small runs report exactly what they asked for. And ncpureq
-        overrides everything, including the rounding, since it is Payu's hard override of the request.
+        replaces the count the model asks for, but is still rounded up like any other: it overrides the request,
+        not the node arithmetic.
+
+        The answer hinges on the size of a compute node, which only ``platform.nodesize`` states. A
+        configuration that leaves it out is submitted by Payu on nodes of _PAYU_DEFAULT_NODE_SIZE cores, so
+        taking the same default here reproduces the request Payu made rather than guessing at it.
 
         Args:
             payu_config (dict): Parsed contents of the experiment's config.yaml.
@@ -376,9 +382,9 @@ class PayuManager(ProfilingManager, ABC):
         node_size = payu_config.get("platform", {}).get("nodesize", _PAYU_DEFAULT_NODE_SIZE)
 
         if "ncpureq" in payu_config:
-            # A hard override of the request, which Payu passes to the scheduler untouched.
-            return payu_config["ncpureq"]
-        if "submodels" in payu_config and "ncpus" not in payu_config:
+            # A hard override of the count the model asks for; Payu still rounds it up to whole nodes.
+            n_cpus = payu_config["ncpureq"]
+        elif "submodels" in payu_config and "ncpus" not in payu_config:
             n_cpus = sum(submodel.get("ncpus", 0) for submodel in payu_config["submodels"])
         else:
             # Note the precedence: a top-level ncpus wins over the submodels, as it does in Payu.
