@@ -41,7 +41,6 @@ class ProfilingManager(ABC):
     data: dict[
         str, dict[str, xr.Dataset]
     ]  # Dictionary mapping experiments to component names and their profiling datasets.
-    _ncpus_cache: dict[str, int]  # Number of CPUs of each experiment, parsed on demand.
 
     def __init__(self, work_dir: Path, archive_dir: Path):
         super().__init__()
@@ -49,7 +48,6 @@ class ProfilingManager(ABC):
         self.archive_dir = archive_dir
         self.experiments = {}
         self.data = {}
-        self._ncpus_cache = {}
 
         # Discover experiments in the archive directory
         if self.archive_dir.is_dir():
@@ -291,16 +289,22 @@ class ProfilingManager(ABC):
     def _ncpus(self, exp_name: str) -> int:
         """Returns the number of CPUs occupied by an experiment, parsing it at most once.
 
+        The count is kept on the experiment itself, so it lasts exactly as long as the experiment does: an
+        experiment added under a name used by a deleted one is parsed afresh rather than inheriting what the
+        old one used, and an archived experiment keeps the count parsed before it was archived instead of
+        having its tarball extracted again to read the same answer back.
+
         Args:
             exp_name (str): Name of the experiment.
 
         Returns:
             int: Number of CPUs the experiment occupied, as reported by parse_ncpus.
         """
-        if exp_name not in self._ncpus_cache:
-            with self.experiments[exp_name].directory() as (exp_path, run_path):
-                self._ncpus_cache[exp_name] = self.parse_ncpus(exp_path, run_path)
-        return self._ncpus_cache[exp_name]
+        experiment = self.experiments[exp_name]
+        if experiment.ncpus is None:
+            with experiment.directory() as (exp_path, run_path):
+                experiment.ncpus = self.parse_ncpus(exp_path, run_path)
+        return experiment.ncpus
 
     def select_best_experiments(
         self,

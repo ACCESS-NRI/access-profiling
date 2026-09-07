@@ -126,6 +126,12 @@ def test_profiling_experiment():
         "ProfilingExperiment(path=PosixPath('/fake/work_dir'), run_path=PosixPath('/fake/run_dir'), status=NEW)"
     )
 
+    # The number of CPUs is reported only once it is known
+    assert experiment.ncpus is None
+    experiment.ncpus = 416
+    assert repr(experiment) == "ProfilingExperiment(path=PosixPath('/fake/work_dir'), status=NEW, ncpus=416)"
+    experiment.ncpus = None
+
     # Assert path and status
     assert experiment.path == path
     assert experiment.status == ProfilingExperimentStatus.NEW

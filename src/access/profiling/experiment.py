@@ -148,6 +148,12 @@ def experiment_directory_walker(path: Path, arcname: Path, root: Path, follow_sy
 class ProfilingExperiment:
     """Represents a profiling experiment.
 
+    The number of CPUs the experiment occupied is kept here rather than in the manager, so that it lives
+    and dies with the experiment it describes: deleting an experiment takes its count with it, and one
+    added later under the same name starts without one. Only a manager can work the count out, since how
+    to read it depends on the workflow engine, so ncpus is filled in on demand by
+    ProfilingManager._ncpus() rather than at construction.
+
     Args:
         path (Path): Path to the experiment directory.
         run_path (Path | None): Path to a separate runs directory. If None, runs are assumed to be
@@ -158,6 +164,7 @@ class ProfilingExperiment:
     path: Path  # Path to the experiment directory
     run_path: Path | None  # Path to a separate runs directory, or None
     status: ProfilingExperimentStatus = ProfilingExperimentStatus.NEW  # Status of the experiment
+    ncpus: int | None = None  # CPUs the experiment occupied, or None while that is still unknown
 
     def __init__(self, path: Path, run_path: Path | None = None) -> None:
         self.path = path
@@ -166,10 +173,18 @@ class ProfilingExperiment:
             self.status = ProfilingExperimentStatus.ARCHIVED
 
     def __repr__(self) -> str:
-        """Returns a string representation of the ProfilingExperiment."""
+        """Returns a string representation of the ProfilingExperiment.
+
+        The fields that may be unset are reported only once they are set, so that the representation of an
+        experiment states what is known about it and nothing else.
+        """
+        fields = [f"path={self.path!r}"]
         if self.run_path is not None:
-            return f"{type(self).__name__}(path={self.path!r}, run_path={self.run_path!r}, status={self.status.name})"
-        return f"{type(self).__name__}(path={self.path!r}, status={self.status.name})"
+            fields.append(f"run_path={self.run_path!r}")
+        fields.append(f"status={self.status.name}")
+        if self.ncpus is not None:
+            fields.append(f"ncpus={self.ncpus}")
+        return f"{type(self).__name__}({', '.join(fields)})"
 
     @contextmanager
     def directory(self):
