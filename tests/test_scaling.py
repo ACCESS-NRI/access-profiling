@@ -109,6 +109,8 @@ def test_plot_scaling_metrics_default_xlabel(mock_plt, simple_scaling_data):
     )
     assert fig.axes[0].get_xlabel() == "ncpus"
     assert fig.axes[1].get_xlabel() == "ncpus"
+    tbl_chart = fig.axes[2].tables[0]
+    assert tbl_chart.get_celld()[(0, 0)].get_text().get_text() == "ncpus"
 
 
 @mock.patch("matplotlib.pyplot.show", autospec=True)
@@ -123,6 +125,20 @@ def test_plot_scaling_metrics_custom_xlabel(mock_plt, simple_scaling_data):
     )
     assert fig.axes[0].get_xlabel() == "Number of CPUs"
     assert fig.axes[1].get_xlabel() == "Number of CPUs"
+
+
+@mock.patch("matplotlib.pyplot.show", autospec=True)
+def test_plot_scaling_metrics_custom_xlabel_updates_table_header(mock_plt, simple_scaling_data):
+    """The table's header cell must reflect a custom xlabel, not just the subplot axes."""
+
+    fig = plot_scaling_metrics(
+        stats=[simple_scaling_data],
+        metric=tavg,
+        xcoordinate="ncpus",
+        xlabel="Number of CPUs",
+    )
+    tbl_chart = fig.axes[2].tables[0]
+    assert tbl_chart.get_celld()[(0, 0)].get_text().get_text() == "Number of CPUs"
 
 
 @mock.patch("matplotlib.pyplot.show", autospec=True)

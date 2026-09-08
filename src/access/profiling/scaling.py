@@ -82,7 +82,7 @@ def plot_scaling_metrics(
     ax_tbl = fig.add_subplot(gs[1, :])
 
     # add table of raw timings
-    tbl = [[xcoordinate] + list(stats[0][xcoordinate].values)]  # first row
+    tbl = [[xlabel if xlabel is not None else xcoordinate] + list(stats[0][xcoordinate].values)]  # first row
     for stat in stats:
         # calculate efficiency and speedup
         efficiency = parallel_efficiency(stat, metric)
