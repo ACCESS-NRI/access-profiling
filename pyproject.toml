@@ -21,9 +21,9 @@ dependencies = [
     "pint",
     "pint-xarray",
     "matplotlib",
-    "access-config-utils",
+    "access-config-utils>=0.3",
+    "experiment-generator",
     "experiment-runner",
-    "experiment-generator",    
     "payu", # Extra dependency of experiment-runner, not handled correctly in conda
 ]
 

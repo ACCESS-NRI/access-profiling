@@ -5,12 +5,15 @@ import logging
 from pathlib import Path
 
 from access.config import YAMLParser
-from access.config.esm1p6_layout_input import (
-    LayoutSearchConfig,
-    LayoutTuple,
-    generate_esm1p6_core_layouts_from_node_count,
-    generate_esm1p6_perturb_block,
+from access.config.parallel_component import ComponentLayout, ParallelComponent
+from access.config.parallel_constraints import (
+    FixedThreadsPerRankConstraint,
+    MaxWastedCoreFractionConstraint,
+    ProcessGridDimEvenConstraint,
+    SubdomainAspectRatioConstraint,
+    UniformSubdomainConstraint,
 )
+from access.config.parallel_domain import Domain
 
 from access.profiling.cice5_parser import CICE5ProfilingParser
 from access.profiling.cylc_manager import CylcRoseManager
@@ -22,8 +25,69 @@ from access.profiling.um_parser import UMProfilingParser, UMTotalRuntimeParser
 logger = logging.getLogger(__name__)
 
 
+ESM16_UM7_NAME: str = "UM7"
+ESM16_MOM5_NAME: str = "MOM5"
+ESM16_CICE5_NAME: str = "CICE5"
+# The CICE5 global grid in ACCESS-ESM1.6. The layout search splits the x extent over a one-dimensional process
+# grid, and layout_config_changes gives each rank a single block spanning the full y extent, so the number of
+# CICE5 ranks has to divide ESM16_CICE5_NX_GLOBAL exactly. UniformSubdomainConstraint on the tree enforces it.
+ESM16_CICE5_NX_GLOBAL: int = 360
+ESM16_CICE5_NY_GLOBAL: int = 300
+# Cores each component receives in the released ACCESS-ESM1.6 pre-industrial control configuration. These are not
+# used to build any layout, and are provided as the reference a caller writing an allocation strategy is usually
+# working from.
+ESM16_PI_CONTROL_CORES: dict[str, int] = {ESM16_UM7_NAME: 208, ESM16_MOM5_NAME: 196, ESM16_CICE5_NAME: 12}
+
+# Ceilings on what counts as a reasonable ACCESS-ESM1.6 layout at all, rather than the tolerances of any
+# particular study. Constraints are cumulative and a caller can only tighten them, so these are set loosely: a
+# study that wants near-square subdomains or no waste at all says so in its own allocation strategy.
+ESM16_MAX_SUBDOMAIN_ASPECT_RATIO: float = 4.0
+ESM16_MAX_WASTED_CORE_FRACTION: float = 0.1
+
+# Component tree of ACCESS-ESM1.6. It carries only the requirements that hold for every ACCESS-ESM1.6 layout,
+# whatever is being studied. Constraints are cumulative and cannot be relaxed by a caller, so anything that is a
+# choice rather than a requirement belongs in the allocation strategy instead.
+ESM16_COMPONENT: ParallelComponent = ParallelComponent(
+    name="ACCESS-ESM1.6",
+    subcomponents=(
+        ParallelComponent(
+            name=ESM16_UM7_NAME,
+            domain=Domain(shape=(192, 144)),  # N96 atmosphere grid.
+            local_constraints=(
+                ProcessGridDimEvenConstraint(dim=0),  # The UM requires an even number of processes along x.
+                FixedThreadsPerRankConstraint(n_threads=1),  # ACCESS-ESM1.6 is built without OpenMP support.
+                SubdomainAspectRatioConstraint(max_ratio=ESM16_MAX_SUBDOMAIN_ASPECT_RATIO),
+            ),
+        ),
+        ParallelComponent(
+            name=ESM16_MOM5_NAME,
+            domain=Domain(shape=(360, 300)),  # 1 degree tripolar ocean grid.
+            local_constraints=(
+                FixedThreadsPerRankConstraint(n_threads=1),
+                SubdomainAspectRatioConstraint(max_ratio=ESM16_MAX_SUBDOMAIN_ASPECT_RATIO),
+            ),
+        ),
+        ParallelComponent(
+            name=ESM16_CICE5_NAME,
+            domain=Domain(shape=(ESM16_CICE5_NX_GLOBAL,)),  # CICE5 x extent, over a 1-D process grid.
+            local_constraints=(
+                # Each rank is given a single block spanning the full y extent, so the blocks tile the x extent
+                # only if every rank gets the same number of columns: the CICE5 core count has to divide
+                # ESM16_CICE5_NX_GLOBAL. The admissible counts thin out as the total grows, so a strategy giving
+                # CICE5 a narrow band of cores will often find no layout at all.
+                UniformSubdomainConstraint(),
+                FixedThreadsPerRankConstraint(n_threads=1),
+            ),
+        ),
+    ),
+    local_constraints=(MaxWastedCoreFractionConstraint(max_fraction=ESM16_MAX_WASTED_CORE_FRACTION),),
+)
+
+
 class ESM16Profiling(PayuManager):
     """Handles profiling of ACCESS-ESM1.6 configurations."""
+
+    _branch_name_prefix: str = "esm1p6-layout"  # Prefix of the branch names of the generated layout experiments.
 
     @property
     def model_type(self) -> str:
@@ -62,15 +126,75 @@ class ESM16Profiling(PayuManager):
 
         return logs
 
-    def generate_core_layouts_from_node_count(
-        self, num_nodes: float, cores_per_node: int, layout_search_config: LayoutSearchConfig | None = None
-    ) -> list:
-        return generate_esm1p6_core_layouts_from_node_count(
-            num_nodes, cores_per_node, layout_search_config=layout_search_config
-        )
+    @property
+    def parallel_component(self) -> ParallelComponent:
+        return ESM16_COMPONENT
 
-    def generate_perturbation_block(self, layout: LayoutTuple, branch_name_prefix: str) -> dict:
-        return generate_esm1p6_perturb_block(layout, branch_name_prefix)
+    def layout_branch_name(self, layout: ComponentLayout) -> str:
+        """Returns the name of the branch holding the experiment for a given ACCESS-ESM1.6 layout.
+
+        The name records the process grid of each component, so it is distinct for every distinct layout and the
+        same layout always produces the same name. This is what lets the manager tell whether it already has an
+        experiment for a layout before building one.
+
+        Args:
+            layout (ComponentLayout): Layout of the ACCESS-ESM1.6 components, as returned by the layout search.
+        Returns:
+            str: Branch name.
+        Raises:
+            ValueError: If the layout is not a layout of ESM16_COMPONENT.
+        """
+        # Sub-layouts come in the order of ESM16_COMPONENT.subcomponents, so a layout of any other model does
+        # not unpack.
+        um7, mom5, cice5 = layout.sub_layouts
+        atm_nx, atm_ny = um7.decomposition.grid.shape
+        mom_nx, mom_ny = mom5.decomposition.grid.shape
+        return f"{self._branch_name_prefix}_atm_{atm_nx}x{atm_ny}_mom_{mom_nx}x{mom_ny}_ice_{cice5.n_ranks}x1"
+
+    def layout_config_changes(self, layout: ComponentLayout) -> dict:
+        """Returns the configuration file changes needed to run ACCESS-ESM1.6 with a given layout.
+
+        Args:
+            layout (ComponentLayout): Layout of the ACCESS-ESM1.6 components, as returned by the layout search.
+        Returns:
+            dict: Changes to apply, keyed by the path of each configuration file relative to the control directory.
+        Raises:
+            ValueError: If the layout is not a layout of ESM16_COMPONENT.
+        """
+        um7, mom5, cice5 = layout.sub_layouts
+        atm_nx, atm_ny = um7.decomposition.grid.shape
+        mom_nx, mom_ny = mom5.decomposition.grid.shape
+        ice_block_size_x = ESM16_CICE5_NX_GLOBAL // cice5.n_ranks
+        return {
+            "config.yaml": {
+                "submodels": [
+                    [
+                        {"ncpus": um7.n_cores},
+                        {"ncpus": mom5.n_cores},
+                        {
+                            "ncpus": cice5.n_cores,
+                            "exe": ["cice_access.exe"],
+                        },
+                    ]
+                ]
+            },
+            "atmosphere/um_env.yaml": {
+                "UM_ATM_NPROCX": str(atm_nx),
+                "UM_ATM_NPROCY": str(atm_ny),
+                "UM_NPES": str(um7.n_ranks),
+            },
+            "ocean/input.nml": {"ocean_model_nml": {"layout": [f"{mom_nx},{mom_ny}"]}},
+            "ice/cice_in.nml": {
+                "domain_nml": {
+                    "nprocs": f"{cice5.n_ranks}",
+                    "nx_global": str(ESM16_CICE5_NX_GLOBAL),
+                    "ny_global": str(ESM16_CICE5_NY_GLOBAL),
+                    "block_size_x": str(ice_block_size_x),
+                    "block_size_y": str(ESM16_CICE5_NY_GLOBAL),
+                    "max_blocks": "1",
+                }
+            },
+        }
 
 
 class RAM3Profiling(CylcRoseManager):
