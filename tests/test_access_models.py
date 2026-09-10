@@ -296,4 +296,4 @@ def test_esm16_generate_scaling_experiments(mock_experiment_generator, esm16):
     block = config["Perturbation_Experiment"]["Experiment_1"]
     assert block["branches"] == ["esm1p6-layout_atm_16x16_mom_16x15_ice_12x1"]
     assert block["config.yaml"]["walltime"] == "2:00:00"
-    assert "esm1p6-layout_atm_16x13_mom_14x14_ice_12x1" in esm16.experiments
+    assert "esm1p6-layout_atm_16x16_mom_16x15_ice_12x1" in esm16.experiments
