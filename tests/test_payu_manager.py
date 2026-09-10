@@ -289,7 +289,7 @@ def test_generate_scaling_experiments(mock_experiment_generator, manager):
         num_nodes_list=[1.0],
         control_options={"some": "option"},
         cores_per_node=4,
-        walltime=2.0,
+        walltime=2.0, # hrs
         allocations=MOCK_ALLOCATIONS,
     )
 

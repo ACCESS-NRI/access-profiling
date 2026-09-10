@@ -106,13 +106,13 @@ def test_am3_config_profiling():
 
 # Cores of each component in the released ACCESS-ESM1.6 pre-industrial control configuration, which uses the whole
 # of its 4 x 104 core allocation.
-PI_CONTROL_NODES = 4.0
+PI_CONTROL_NODES = 5.0
 PI_CONTROL_CORES_PER_NODE = 104
 PI_CONTROL_TOTAL_CORES = int(PI_CONTROL_NODES * PI_CONTROL_CORES_PER_NODE)
 PI_CONTROL_ALLOCATIONS = RootAllocation(
     subcomponents={
-        ESM16_UM7_NAME: FixedAllocation(208, local_constraints=(SubdomainAspectRatioConstraint(1.5),)),
-        ESM16_MOM5_NAME: FixedAllocation(196, local_constraints=(SubdomainAspectRatioConstraint(1.5),)),
+        ESM16_UM7_NAME: FixedAllocation(256, local_constraints=(SubdomainAspectRatioConstraint(1.5),)),
+        ESM16_MOM5_NAME: FixedAllocation(240, local_constraints=(SubdomainAspectRatioConstraint(1.5),)),
         ESM16_CICE5_NAME: FixedAllocation(12),
     },
 )
@@ -136,16 +136,16 @@ def test_esm16_pi_control_layout(pi_control_layout):
     """Test that the layout search reproduces the released ACCESS-ESM1.6 PI control configuration."""
 
     um7, mom5, cice5 = pi_control_layout.sub_layouts
-    assert um7.decomposition.grid.shape == (16, 13)
-    assert mom5.decomposition.grid.shape == (14, 14)
+    assert um7.decomposition.grid.shape == (16, 16)
+    assert mom5.decomposition.grid.shape == (16, 15)
     assert cice5.n_ranks == 12
-    assert pi_control_layout.idle_cores == 0
+    assert pi_control_layout.idle_cores == 12
 
 
 def test_esm16_layout_branch_name(esm16, pi_control_layout):
     """Test the layout_branch_name method of ESM16Profiling."""
 
-    assert esm16.layout_branch_name(pi_control_layout) == "esm1p6-layout_atm_16x13_mom_14x14_ice_12x1"
+    assert esm16.layout_branch_name(pi_control_layout) == "esm1p6-layout_atm_16x16_mom_16x15_ice_12x1"
 
 
 def test_esm16_layout_config_changes(esm16, pi_control_layout):
@@ -154,15 +154,15 @@ def test_esm16_layout_config_changes(esm16, pi_control_layout):
     changes = esm16.layout_config_changes(pi_control_layout)
     assert changes["config.yaml"]["submodels"] == [
         [
-            {"ncpus": 208},
-            {"ncpus": 196},
+            {"ncpus": 256},
+            {"ncpus": 240},
             {"ncpus": 12, "exe": ["cice_access.exe"]},
         ]
     ]
     assert changes["atmosphere/um_env.yaml"] == {
         "UM_ATM_NPROCX": "16",
-        "UM_ATM_NPROCY": "13",
-        "UM_NPES": "208",
+        "UM_ATM_NPROCY": "16",
+        "UM_NPES": "256",
     }
     assert changes["ocean/input.nml"] == {"ocean_model_nml": {"layout": ["14,14"]}}
     assert changes["ice/cice_in.nml"] == {
@@ -286,7 +286,7 @@ def test_esm16_generate_scaling_experiments(mock_experiment_generator, esm16):
         num_nodes_list=[PI_CONTROL_NODES],
         control_options={},
         cores_per_node=PI_CONTROL_CORES_PER_NODE,
-        walltime=2.0,
+        walltime=2.0, # hrs
         allocations=PI_CONTROL_ALLOCATIONS,
     )
 
@@ -294,6 +294,6 @@ def test_esm16_generate_scaling_experiments(mock_experiment_generator, esm16):
     assert config["model_type"] == "access-esm1.6"
     assert list(config["Perturbation_Experiment"]) == ["Experiment_1"]
     block = config["Perturbation_Experiment"]["Experiment_1"]
-    assert block["branches"] == ["esm1p6-layout_atm_16x13_mom_14x14_ice_12x1"]
+    assert block["branches"] == ["esm1p6-layout_atm_16x16_mom_16x15_ice_12x1"]
     assert block["config.yaml"]["walltime"] == "2:00:00"
     assert "esm1p6-layout_atm_16x13_mom_14x14_ice_12x1" in esm16.experiments
