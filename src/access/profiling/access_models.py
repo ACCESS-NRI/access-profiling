@@ -36,7 +36,7 @@ ESM16_CICE5_NY_GLOBAL: int = 300
 # Cores each component receives in the released ACCESS-ESM1.6 pre-industrial control configuration. These are not
 # used to build any layout, and are provided as the reference a caller writing an allocation strategy is usually
 # working from.
-ESM16_PI_CONTROL_CORES: dict[str, int] = {ESM16_UM7_NAME: 208, ESM16_MOM5_NAME: 196, ESM16_CICE5_NAME: 12}
+ESM16_PI_CONTROL_CORES: dict[str, int] = {ESM16_UM7_NAME: 256, ESM16_MOM5_NAME: 240, ESM16_CICE5_NAME: 12}
 
 # Ceilings on what counts as a reasonable ACCESS-ESM1.6 layout at all, rather than the tolerances of any
 # particular study. Constraints are cumulative and a caller can only tighten them, so these are set loosely: a
