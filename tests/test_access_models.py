@@ -104,11 +104,16 @@ def test_am3_config_profiling():
     )
 
 
-# Cores of each component in the released ACCESS-ESM1.6 pre-industrial control configuration, which uses the whole
-# of its 4 x 104 core allocation.
+# The released ACCESS-ESM1.6 pre-industrial control configuration: 508 of the 5 x 104 cores it is given go to the
+# components, and the remaining 12 are left idle.
 PI_CONTROL_NODES = 5.0
 PI_CONTROL_CORES_PER_NODE = 104
 PI_CONTROL_TOTAL_CORES = int(PI_CONTROL_NODES * PI_CONTROL_CORES_PER_NODE)
+PI_CONTROL_UM7_GRID = (16, 16)
+PI_CONTROL_MOM5_GRID = (16, 15)
+PI_CONTROL_CICE5_RANKS = 12
+PI_CONTROL_IDLE_CORES = 12
+PI_CONTROL_BRANCH = "esm1p6-layout_atm_16x16_mom_16x15_ice_12x1"
 PI_CONTROL_ALLOCATIONS = RootAllocation(
     subcomponents={
         ESM16_UM7_NAME: FixedAllocation(256, local_constraints=(SubdomainAspectRatioConstraint(1.5),)),
@@ -125,27 +130,37 @@ def esm16():
 
 @pytest.fixture(scope="function")
 def pi_control_layout(esm16):
-    """The layout of the released ACCESS-ESM1.6 pre-industrial control configuration."""
+    """The released ACCESS-ESM1.6 PI control layout, picked out of the ones the layout search returns.
+
+    Its core split does not determine the layout on its own: three layouts share it at this size, all leaving
+    the same 12 cores idle. What matters here is that the released one is among them.
+    """
 
     layouts = esm16.select_layouts(PI_CONTROL_TOTAL_CORES, allocations=PI_CONTROL_ALLOCATIONS)
-    assert len(layouts) == 1, "The PI control allocation should determine the layout uniquely."
-    return layouts[0]
+    released = [
+        layout
+        for layout in layouts
+        if (layout.sub_layouts[0].decomposition.grid.shape, layout.sub_layouts[1].decomposition.grid.shape)
+        == (PI_CONTROL_UM7_GRID, PI_CONTROL_MOM5_GRID)
+    ]
+    assert len(released) == 1, "The layout search should find the released PI control layout exactly once."
+    return released[0]
 
 
 def test_esm16_pi_control_layout(pi_control_layout):
     """Test that the layout search reproduces the released ACCESS-ESM1.6 PI control configuration."""
 
     um7, mom5, cice5 = pi_control_layout.sub_layouts
-    assert um7.decomposition.grid.shape == (16, 16)
-    assert mom5.decomposition.grid.shape == (16, 15)
-    assert cice5.n_ranks == 12
-    assert pi_control_layout.idle_cores == 12
+    assert um7.decomposition.grid.shape == PI_CONTROL_UM7_GRID
+    assert mom5.decomposition.grid.shape == PI_CONTROL_MOM5_GRID
+    assert cice5.n_ranks == PI_CONTROL_CICE5_RANKS
+    assert pi_control_layout.idle_cores == PI_CONTROL_IDLE_CORES
 
 
 def test_esm16_layout_branch_name(esm16, pi_control_layout):
     """Test the layout_branch_name method of ESM16Profiling."""
 
-    assert esm16.layout_branch_name(pi_control_layout) == "esm1p6-layout_atm_16x16_mom_16x15_ice_12x1"
+    assert esm16.layout_branch_name(pi_control_layout) == PI_CONTROL_BRANCH
 
 
 def test_esm16_layout_config_changes(esm16, pi_control_layout):
@@ -164,7 +179,7 @@ def test_esm16_layout_config_changes(esm16, pi_control_layout):
         "UM_ATM_NPROCY": "16",
         "UM_NPES": "256",
     }
-    assert changes["ocean/input.nml"] == {"ocean_model_nml": {"layout": ["14,14"]}}
+    assert changes["ocean/input.nml"] == {"ocean_model_nml": {"layout": ["16,15"]}}
     assert changes["ice/cice_in.nml"] == {
         "domain_nml": {
             "nprocs": "12",
@@ -244,7 +259,7 @@ def _esm16_scaling_allocations(atm_ocn_tolerance: float = 0.05, ice_tolerance: f
 ESM16_SCALING_ALLOCATIONS = _esm16_scaling_allocations()
 
 
-@pytest.mark.parametrize("total_cores", [PI_CONTROL_TOTAL_CORES, 520, 5200])
+@pytest.mark.parametrize("total_cores", [PI_CONTROL_TOTAL_CORES, 1040, 5200])
 def test_esm16_caller_supplied_allocations(esm16, total_cores):
     """Test that one fractional allocation strategy generates usable ACCESS-ESM1.6 layouts at every size."""
 
@@ -257,6 +272,9 @@ def test_esm16_caller_supplied_allocations(esm16, total_cores):
         assert ESM16_CICE5_NX_GLOBAL % cice5.n_ranks == 0
         # The UM requires an even number of processes along x
         assert um7.decomposition.grid.shape[0] % 2 == 0
+        # UM_NPES is written from n_ranks and must match the process grid, or the UM hangs at startup
+        atm_nx, atm_ny = um7.decomposition.grid.shape
+        assert um7.n_ranks == atm_nx * atm_ny
 
 
 def test_esm16_component_tree_bounds_layouts_on_its_own(esm16):
@@ -286,14 +304,19 @@ def test_esm16_generate_scaling_experiments(mock_experiment_generator, esm16):
         num_nodes_list=[PI_CONTROL_NODES],
         control_options={},
         cores_per_node=PI_CONTROL_CORES_PER_NODE,
-        walltime=2.0, # hrs
+        walltime=2.0,  # hrs
         allocations=PI_CONTROL_ALLOCATIONS,
     )
 
     config = mock_experiment_generator.call_args[0][0]
     assert config["model_type"] == "access-esm1.6"
-    assert list(config["Perturbation_Experiment"]) == ["Experiment_1"]
-    block = config["Perturbation_Experiment"]["Experiment_1"]
-    assert block["branches"] == ["esm1p6-layout_atm_16x16_mom_16x15_ice_12x1"]
-    assert block["config.yaml"]["walltime"] == "2:00:00"
-    assert "esm1p6-layout_atm_16x16_mom_16x15_ice_12x1" in esm16.experiments
+
+    # One perturbation experiment per layout, numbered sequentially. The released core split leaves the process
+    # grids open, so this is every layout that fits it, not the released one alone.
+    perturbations = config["Perturbation_Experiment"]
+    assert list(perturbations) == [f"Experiment_{n}" for n in range(1, len(perturbations) + 1)]
+
+    released = [block for block in perturbations.values() if block["branches"] == [PI_CONTROL_BRANCH]]
+    assert len(released) == 1, "The released PI control layout should generate exactly one experiment."
+    assert released[0]["config.yaml"]["walltime"] == "2:00:00"
+    assert PI_CONTROL_BRANCH in esm16.experiments

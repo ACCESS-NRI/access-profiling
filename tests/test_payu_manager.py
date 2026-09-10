@@ -289,7 +289,7 @@ def test_generate_scaling_experiments(mock_experiment_generator, manager):
         num_nodes_list=[1.0],
         control_options={"some": "option"},
         cores_per_node=4,
-        walltime=2.0, # hrs
+        walltime=2.0,  # hrs
         allocations=MOCK_ALLOCATIONS,
     )
 
@@ -330,7 +330,9 @@ def test_generate_scaling_experiments_callables(mock_experiment_generator, manag
     walltime = mock.MagicMock(return_value=1.5)
     allocations = mock.MagicMock(return_value=MOCK_ALLOCATIONS)
 
-    manager.generate_scaling_experiments([1.0], {}, 4, walltime, allocations=allocations)
+    manager.generate_scaling_experiments(
+        num_nodes_list=[1.0], control_options={}, cores_per_node=4, walltime=walltime, allocations=allocations
+    )
 
     walltime.assert_called_once_with(1.0)
     allocations.assert_called_once_with(1.0)
@@ -343,14 +345,39 @@ def test_generate_scaling_experiments_duplicates(mock_experiment_generator, mana
     """Test that generate_scaling_experiments skips layouts whose experiment already exists."""
 
     manager.set_control("https://example.com/repo", "commit")
-    manager.generate_scaling_experiments([1.0], {}, 4, 2.0, allocations=MOCK_ALLOCATIONS)
+    manager.generate_scaling_experiments(
+        num_nodes_list=[1.0], control_options={}, cores_per_node=4, walltime=2.0, allocations=MOCK_ALLOCATIONS
+    )
     assert len(manager.experiments) == 4
     mock_experiment_generator.reset_mock()
 
     # The same layouts are found again, so there is nothing left to generate
-    manager.generate_scaling_experiments([1.0], {}, 4, 2.0, allocations=MOCK_ALLOCATIONS)
+    manager.generate_scaling_experiments(
+        num_nodes_list=[1.0], control_options={}, cores_per_node=4, walltime=2.0, allocations=MOCK_ALLOCATIONS
+    )
     assert len(manager.experiments) == 4
     mock_experiment_generator.assert_not_called()
+
+
+@mock.patch("access.profiling.payu_manager.ExperimentGenerator")
+def test_generate_scaling_experiments_duplicates_across_node_counts(mock_experiment_generator, manager):
+    """Test that a layout valid at two different node counts only generates one experiment.
+
+    A layout does not have to grow with the budget, only to stay within whatever waste the component tree
+    tolerates, so the same one can be found at two sizes. The branch name is what says they are the same
+    experiment, since it records the process grids and not the number of nodes asked for.
+    """
+
+    manager.set_control("https://example.com/repo", "commit")
+
+    # The allocation is stated in cores rather than fractions, so both budgets admit the same four-core
+    # layouts; the larger one simply leaves two of its six cores idle.
+    manager.generate_scaling_experiments(
+        num_nodes_list=[1.0, 1.5], control_options={}, cores_per_node=4, walltime=2.0, allocations=MOCK_ALLOCATIONS
+    )
+
+    assert len(manager.experiments) == 4
+    assert len(mock_experiment_generator.call_args[0][0]["Perturbation_Experiment"]) == 4
 
 
 @mock.patch("access.profiling.payu_manager.ExperimentGenerator")
@@ -360,7 +387,9 @@ def test_generate_scaling_experiments_no_layouts(mock_experiment_generator, mana
     manager.set_control("https://example.com/repo", "commit")
     too_big = RootAllocation(subcomponents={"atm": FixedAllocation(100), "ocn": FixedAllocation(100)})
 
-    manager.generate_scaling_experiments([1.0], {}, 4, 2.0, allocations=too_big)
+    manager.generate_scaling_experiments(
+        num_nodes_list=[1.0], control_options={}, cores_per_node=4, walltime=2.0, allocations=too_big
+    )
 
     assert manager.experiments == {}
     mock_experiment_generator.assert_not_called()
@@ -373,7 +402,9 @@ def test_generate_scaling_experiments_fractional_nodes(mock_experiment_generator
     manager.set_control("https://example.com/repo", "commit")
 
     # Half of an 8 core node is the same 4 core budget as a whole 4 core one
-    manager.generate_scaling_experiments([0.5], {}, 8, 2.0, allocations=MOCK_ALLOCATIONS)
+    manager.generate_scaling_experiments(
+        num_nodes_list=[0.5], control_options={}, cores_per_node=8, walltime=2.0, allocations=MOCK_ALLOCATIONS
+    )
 
     config = mock_experiment_generator.call_args[0][0]
     assert len(config["Perturbation_Experiment"]) == 4
@@ -386,11 +417,23 @@ def test_generate_scaling_experiments_invalid_inputs(manager):
 
     for cores_per_node in (0, -4, 4.0):
         with pytest.raises(ValueError):
-            manager.generate_scaling_experiments([1.0], {}, cores_per_node, 2.0, allocations=MOCK_ALLOCATIONS)
+            manager.generate_scaling_experiments(
+                num_nodes_list=[1.0],
+                control_options={},
+                cores_per_node=cores_per_node,
+                walltime=2.0,
+                allocations=MOCK_ALLOCATIONS,
+            )
 
     for num_nodes in (0.0, -1.0):
         with pytest.raises(ValueError):
-            manager.generate_scaling_experiments([num_nodes], {}, 4, 2.0, allocations=MOCK_ALLOCATIONS)
+            manager.generate_scaling_experiments(
+                num_nodes_list=[num_nodes],
+                control_options={},
+                cores_per_node=4,
+                walltime=2.0,
+                allocations=MOCK_ALLOCATIONS,
+            )
 
 
 @mock.patch("access.profiling.payu_manager.ExperimentRunner")

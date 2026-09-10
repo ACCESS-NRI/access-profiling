@@ -144,11 +144,14 @@ class ESM16Profiling(PayuManager):
         Raises:
             ValueError: If the layout is not a layout of ESM16_COMPONENT.
         """
-        # Sub-layouts come in the order of ESM16_COMPONENT.subcomponents, so a layout of any other model does
-        # not unpack.
+        # ComponentLayout.sub_layouts is documented to come in the order of ParallelComponent.subcomponents, so
+        # unpacking positionally is safe here and a layout of any other model simply does not unpack.
         um7, mom5, cice5 = layout.sub_layouts
         atm_nx, atm_ny = um7.decomposition.grid.shape
         mom_nx, mom_ny = mom5.decomposition.grid.shape
+        # The trailing x1 on CICE5 is the same assumption layout_config_changes writes into cice_in.nml: one
+        # block per rank, spanning the full y extent. Were the block distribution ever swept, CICE5 would get a
+        # two-dimensional domain in ESM16_COMPONENT and the name would follow its process grid like the others.
         return f"{self._branch_name_prefix}_atm_{atm_nx}x{atm_ny}_mom_{mom_nx}x{mom_ny}_ice_{cice5.n_ranks}x1"
 
     def layout_config_changes(self, layout: ComponentLayout) -> dict:
@@ -164,6 +167,8 @@ class ESM16Profiling(PayuManager):
         um7, mom5, cice5 = layout.sub_layouts
         atm_nx, atm_ny = um7.decomposition.grid.shape
         mom_nx, mom_ny = mom5.decomposition.grid.shape
+        # One block per rank spanning the full y extent, which is what block_size_y and max_blocks below say and
+        # what the x1 in the branch name records. The distribution itself is left to the control configuration.
         ice_block_size_x = ESM16_CICE5_NX_GLOBAL // cice5.n_ranks
         return {
             "config.yaml": {

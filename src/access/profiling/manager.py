@@ -162,7 +162,10 @@ class ProfilingManager(ABC):
                 quickly with the number of cores.
             max_layouts (int | None): Maximum number of layouts to enumerate. None (the default) enumerates all of
                 them. Note that this bounds the *enumeration*, so the returned layouts are the first ones found and
-                not necessarily those with the fewest idle cores.
+                not necessarily those with the fewest idle cores. Returning the best ones instead would mean
+                ranking the whole result set, which is the cost this argument exists to avoid: the search is lazy
+                and layout counts reach millions at production core counts. Sorting is applied to what was
+                enumerated, so it orders the returned layouts without deciding which ones they are.
         Returns:
             list[ComponentLayout]: The layouts found, sorted by increasing number of idle cores.
         """
@@ -173,7 +176,9 @@ class ProfilingManager(ABC):
         if max_layouts is not None and len(found) > max_layouts:
             logger.warning(
                 f"More than {max_layouts} layouts found for {total_cores} cores. Only the first {max_layouts} "
-                "will be used; they are not necessarily the ones with the fewest idle cores."
+                "enumerated will be used, which are not necessarily the ones with the fewest idle cores: "
+                "finding those would mean enumerating all of them. Tighten the allocation strategy to choose "
+                "which layouts are found rather than how many."
             )
             found = found[:max_layouts]
         return sorted(found, key=lambda layout: layout.idle_cores)

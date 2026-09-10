@@ -113,6 +113,11 @@ class PayuManager(ProfilingManager, ABC):
         perturbation experiment. Layouts whose branch is already known to this manager are skipped, so the same
         layout found for two different numbers of nodes only generates one experiment.
 
+        That happens whenever a layout fits both budgets, which is a matter of how much waste the component tree
+        tolerates: a layout spending 508 cores is valid on 520 and on 546, leaving 2.3% and 7.0% of them idle.
+        Note that it does not arise for an allocation strategy written in fractions of the total, since its
+        bounds move with the budget; it is strategies stated in cores, and callables, that repeat themselves.
+
         Args:
             num_nodes_list (list[float]): Numbers of nodes to generate experiments for. Fractional values are
                 allowed; the number of cores the layouts are searched for is the product with cores_per_node,
