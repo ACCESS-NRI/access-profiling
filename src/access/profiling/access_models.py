@@ -7,11 +7,11 @@ from pathlib import Path
 from access.config import YAMLParser
 from access.config.parallel_component import ComponentLayout, ParallelComponent
 from access.config.parallel_constraints import (
+    DomainDivisibleByRanksConstraint,
     FixedThreadsPerRankConstraint,
     MaxWastedCoreFractionConstraint,
     ProcessGridDimEvenConstraint,
     SubdomainAspectRatioConstraint,
-    UniformSubdomainConstraint,
 )
 from access.config.parallel_domain import Domain
 
@@ -30,7 +30,7 @@ ESM16_MOM5_NAME: str = "MOM5"
 ESM16_CICE5_NAME: str = "CICE5"
 # The CICE5 global grid in ACCESS-ESM1.6. The layout search splits the x extent over a one-dimensional process
 # grid, and layout_config_changes gives each rank a single block spanning the full y extent, so the number of
-# CICE5 ranks has to divide ESM16_CICE5_NX_GLOBAL exactly. UniformSubdomainConstraint on the tree enforces it.
+# CICE5 ranks has to divide ESM16_CICE5_NX_GLOBAL exactly. DomainDivisibleByRanksConstraint on the tree enforces it.
 ESM16_CICE5_NX_GLOBAL: int = 360
 ESM16_CICE5_NY_GLOBAL: int = 300
 # Cores each component receives in the released ACCESS-ESM1.6 pre-industrial control configuration. These are not
@@ -75,7 +75,7 @@ ESM16_COMPONENT: ParallelComponent = ParallelComponent(
                 # only if every rank gets the same number of columns: the CICE5 core count has to divide
                 # ESM16_CICE5_NX_GLOBAL. The admissible counts thin out as the total grows, so a strategy giving
                 # CICE5 a narrow band of cores will often find no layout at all.
-                UniformSubdomainConstraint(),
+                DomainDivisibleByRanksConstraint(),
                 FixedThreadsPerRankConstraint(n_threads=1),
             ),
         ),
