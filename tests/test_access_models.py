@@ -519,6 +519,32 @@ def test_om3_finds_no_layout_for_a_component_running_past_its_range():
     assert _pelayout(manager, layout)["atm_rootpe"] == 12
 
 
+def test_om3_finds_no_layout_for_a_range_its_components_leave_idle():
+    """Test that the search rules out a range with cores no component ever runs on.
+
+    The components sharing a range have to sit on all of it. Offsetting every one of them
+    leaves cores at the front that belong to nobody, and since the range is placed by the
+    running total over its siblings, starting it later is what such a configuration means -
+    so there is no layout rather than one that pays for cores it never uses.
+    """
+
+    def manager_for(offsets: dict) -> OM3Profiling:
+        configuration = OM3Configuration(
+            name="idle",
+            sea_ice=OM3_100KM_GRID,
+            atmosphere=OM3_100KM_GRID,
+            shared_core_offsets=offsets,
+        )
+        return OM3Profiling(Path("/fake/test_path"), Path("/fake/archive_path"), configuration)
+
+    offsets = dict.fromkeys((OM3_MEDIATOR_NAME, OM3_ATMOSPHERE_NAME, OM3_SEA_ICE_NAME), 4)
+    pinned = _om3_pinned(pool_cores=28, cpl=24, atm=24, ice=24)
+    assert manager_for(offsets).select_layouts(28, allocations=pinned) == []
+    # The same components with nothing between them and the start of the range do have one.
+    layout = _om3_layout(manager_for({}), 24, {"cpl": 24, "atm": 24, "ice": 24}, ice=(4, 6))
+    assert layout.sub_layouts[0].idle_cores == 0
+
+
 @pytest.mark.parametrize(
     ("configuration", "total_cores", "cores", "grids", "expected_rootpes"),
     [
