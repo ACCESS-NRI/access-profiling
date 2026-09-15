@@ -9,7 +9,11 @@ import pytest
 from access.config import YAMLParser
 from access.config.parallel_allocation_strategies import FixedAllocation, FreeAllocation, RootAllocation
 from access.config.parallel_component import ComponentLayout
-from access.config.parallel_constraints import DomainDivisibleByRanksConstraint, SubdomainAspectRatioConstraint
+from access.config.parallel_constraints import (
+    DomainDivisibleByRanksConstraint,
+    EqualCoresGroupConstraint,
+    SubdomainAspectRatioConstraint,
+)
 from access.config.parallel_domain import Domain, DomainDecompositionSpec
 from access.config.parallel_mpi_grid import MPICartesianGrid
 
@@ -543,6 +547,43 @@ def test_om3_finds_no_layout_for_a_range_its_components_leave_idle():
     # The same components with nothing between them and the start of the range do have one.
     layout = _om3_layout(manager_for({}), 24, {"cpl": 24, "atm": 24, "ice": 24}, ice=(4, 6))
     assert layout.sub_layouts[0].idle_cores == 0
+
+
+def test_om3_equal_cores_puts_every_shared_component_on_the_whole_range():
+    """Test that requiring equal cores leaves each component on all of the range they share.
+
+    The components sharing a range are enumerated as a product, so leaving them free is expensive and
+    returns a layout for every way of giving them different slices of it. EqualCoresGroupConstraint says
+    in one rule what a FixedAllocation per component otherwise has to say once each, and rewrite for every
+    core count a scaling study visits. Since they must also cover the range between them, matching counts
+    at a common offset put every one of them on all of it.
+    """
+
+    manager = OM3Profiling(Path("/fake/test_path"), Path("/fake/archive_path"), OM3_MC_100KM)
+    realms = OM3_MC_100KM.shared_realms
+
+    def allocations_with(*group_constraints) -> RootAllocation:
+        return RootAllocation(
+            subcomponents={
+                OM3_SHARED_NAME: FixedAllocation(
+                    12,
+                    subcomponents=dict.fromkeys(realms, FreeAllocation()),
+                    group_constraints=group_constraints,
+                ),
+                OM3_OCEAN_NAME: FixedAllocation(12),
+            }
+        )
+
+    layouts = manager.select_layouts(24, allocations=allocations_with(EqualCoresGroupConstraint()))
+    assert layouts
+    for layout in layouts:
+        pool = layout.sub_layouts[0]
+        assert [realm.n_cores for realm in pool.sub_layouts] == [pool.n_cores] * len(realms)
+        assert pool.n_cores == 12
+
+    # Without the rule the same search still offers every uneven division of the range.
+    uneven = manager.select_layouts(24, allocations=allocations_with(), max_layouts=500)
+    assert any(len({realm.n_cores for realm in layout.sub_layouts[0].sub_layouts}) > 1 for layout in uneven)
 
 
 @pytest.mark.parametrize(
