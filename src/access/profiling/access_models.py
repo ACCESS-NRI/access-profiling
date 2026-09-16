@@ -242,19 +242,21 @@ class OM3Configuration:
     happen to put every component on the tripolar ocean grid, but that is a property of those configurations
     rather than of the model.
 
-    Of those grids, the ocean's and the sea ice's reach the component tree and are decomposed by the layout
-    search. They are the two whose decomposition a control directory states as a process grid - MOM6's LAYOUT
-    and CICE6's domain_nml - so they are the two a search can choose and layout_config_changes can write. The
-    mediator, the data components and the waves are handed their meshes by ESMF, which decomposes them over
-    whatever ranks they are given; no configuration file states a process grid for them, so there is nothing
-    for a search to choose. Their grids are recorded because the configuration files state them, and because
-    a grid is how this class says which components a configuration runs.
+    Of those grids, only the ones a control directory states as a process grid reach the component tree and
+    are decomposed by the layout search, since a decomposition nothing reads is not one a search can be said
+    to have chosen. The sea ice's always does, as CICE6's domain_nml. The ocean's does only where the
+    configuration pins MOM6's LAYOUT: MOM6 otherwise works its own decomposition out from the ranks it is
+    given, which is what auto_ocean_layout says and what ACCESS-OM3 does. The mediator, the data components
+    and the waves are handed their meshes by ESMF, which decomposes them over whatever ranks they are given,
+    and state no process grid either. Every grid is recorded whether or not it reaches the tree, because the
+    configuration files state them, and because a grid is how this class says which components a
+    configuration runs.
 
     Args:
         name (str): Identifies the configuration in the names of the experiments generated for it.
         ocean (Domain | None): MOM6's grid, or None if the configuration has no ocean. MOM6 takes a range of
-            cores of its own, and decomposes this grid over them: the search chooses the process grid and
-            layout_config_changes writes it to MOM_input. Must be two-dimensional, as LAYOUT is.
+            cores of its own and decomposes this grid over them; whether the search chooses how is
+            auto_ocean_layout's business. Must be two-dimensional, as LAYOUT is.
         sea_ice (Domain | None): CICE6's grid, or None if the configuration has no sea ice. CICE6 shares its
             cores with the mediator and the data components, and decomposes this grid over them: the search
             chooses the process grid and layout_config_changes turns it into the blocks ice_in states. Must be
@@ -269,6 +271,17 @@ class OM3Configuration:
             counted from the start of that range. A component absent from the mapping starts at the beginning,
             which is what every released configuration does. Keyed by realm, so one of OM3_MEDIATOR_NAME,
             OM3_ATMOSPHERE_NAME, OM3_SEA_ICE_NAME or OM3_RUNOFF_NAME.
+        auto_ocean_layout (bool): Whether MOM6 works its own decomposition out from the ranks it is given,
+            rather than being handed a LAYOUT. True by default, which is how ACCESS-OM3 runs: its MOM_input
+            sets AUTO_MASKTABLE and states no LAYOUT at all. The ocean then carries no grid into the
+            component tree - there is no process grid for the search to choose, so it enumerates none and
+            offers one layout per ocean core count instead of one per factorisation of it - and
+            layout_config_changes writes no MOM_input, leaving the control directory to say how MOM6
+            decomposes. Note that this leaves a control directory that *does* pin a LAYOUT still using it,
+            the way one carrying a MASKTABLE keeps that: a configuration whose ocean layout is really fixed
+            should set this False and have the search choose one. Set False, the ocean carries its grid as
+            the sea ice does, the search picks a process grid subject to MOM6's halo width, and
+            layout_config_changes writes it to MOM_input.
 
     Raises:
         ValueError: If the configuration has no ocean, sea ice or waves; if the ocean's or the sea ice's grid
@@ -283,6 +296,7 @@ class OM3Configuration:
     atmosphere: Domain | None = None
     runoff: Domain | None = None
     shared_core_offsets: Mapping[str, int] = field(default_factory=dict)
+    auto_ocean_layout: bool = True
 
     def __post_init__(self) -> None:
         if self.ocean is None and self.sea_ice is None and self.waves is None:
@@ -331,9 +345,11 @@ class OM3Configuration:
         as their total. The ocean and the waves each take a range of their own, so they are siblings of that
         parent and their cores add to it.
 
-        The ocean and the sea ice carry their grids, so the search decomposes them and layout_config_changes
-        writes the decomposition it chose. The other leaves carry none: ESMF decomposes their meshes over the
-        ranks they are given, and there is no process grid to choose or to write.
+        The sea ice carries its grid, so the search decomposes it and layout_config_changes writes the
+        decomposition it chose, and the ocean does too where the configuration pins MOM6's LAYOUT. The other
+        leaves carry none, and nor does the ocean under auto_ocean_layout: ESMF decomposes the data
+        components' meshes over the ranks they are given and MOM6 works its own decomposition out from them,
+        so in neither case is there a process grid to choose or to write.
         """
         no_threads = (FixedThreadsPerRankConstraint(n_threads=1),)  # ACCESS-OM3 sets *_nthreads = 1 throughout.
         ocean_constraints = no_threads + (MinSubdomainSizeConstraint(min_size=OM3_MOM6_HALO_WIDTH),)
@@ -354,8 +370,16 @@ class OM3Configuration:
             )
         ]
         if self.ocean is not None:
+            # Under auto_ocean_layout MOM6 chooses the decomposition, so the grid stays off the tree and the
+            # search enumerates no process grid for it. MinSubdomainSizeConstraint goes with it rather than
+            # being left to raise: it reads a decomposition, and a sub-domain shape nobody chose here is not
+            # one this can speak for. MOM6 answers for the shape it picks.
             subcomponents.append(
-                ParallelComponent(name=OM3_OCEAN_NAME, domain=self.ocean, local_constraints=ocean_constraints)
+                ParallelComponent(
+                    name=OM3_OCEAN_NAME,
+                    domain=None if self.auto_ocean_layout else self.ocean,
+                    local_constraints=no_threads if self.auto_ocean_layout else ocean_constraints,
+                )
             )
         if self.waves is not None:
             subcomponents.append(ParallelComponent(name=OM3_WAVE_NAME, local_constraints=no_threads))
