@@ -94,8 +94,9 @@ class ProfilingExperimentStatus(Enum):
 
     NEW = 1  # Experiment has been created but not started
     RUNNING = 2  # Experiment is running or is queued
-    DONE = 3  # Experiment has finished
-    ARCHIVED = 4  # Experiment has been archived
+    DONE = 3  # Experiment has finished successfully
+    FAILED = 4  # Experiment ran but did not finish successfully
+    ARCHIVED = 5  # Experiment has been archived
 
 
 def experiment_directory_walker(path: Path, arcname: Path, root: Path, follow_symlinks: bool = False):
@@ -206,6 +207,39 @@ class ProfilingExperiment:
         else:
             yield self.path, self.run_path
 
+    def _ready_to_archive(self, archive_file: Path) -> bool:
+        """Returns whether this experiment may be archived, saying why in the log when it may not.
+
+        Only a finished experiment has anything worth keeping: one still to start or still running has not
+        produced it yet, one that failed has nothing worth keeping, and one already archived has had it kept.
+
+        Args:
+            archive_file (Path): Where the archive would be written, named in the log message.
+
+        Returns:
+            bool: True if archiving should go ahead.
+
+        Raises:
+            ValueError: If the status is not one this knows how to judge.
+        """
+        if self.status == ProfilingExperimentStatus.DONE:
+            logger.info(f"Archiving experiment at {self.path} to {archive_file}")
+            return True
+
+        reasons = {
+            ProfilingExperimentStatus.NEW: "is not yet started",
+            ProfilingExperimentStatus.RUNNING: "is still running",
+            ProfilingExperimentStatus.FAILED: "did not run successfully",
+            ProfilingExperimentStatus.ARCHIVED: "is already archived",
+        }
+        if self.status not in reasons:
+            # Every member of the enum is accounted for above, so this is one added without deciding whether
+            # it may be archived - which would otherwise fall through and archive it.
+            raise ValueError(f"Experiment at {self.path} has an unknown status {self.status}.")
+
+        logger.warning(f"Experiment at {self.path} {reasons[self.status]}. Skipping archiving.", stacklevel=3)
+        return False
+
     def archive(
         self,
         archive_path: Path,
@@ -238,16 +272,7 @@ class ProfilingExperiment:
 
         archive_file = archive_path.parent / (archive_path.name + ".tar.gz")
 
-        if self.status == ProfilingExperimentStatus.NEW:
-            logger.warning(f"Experiment at {self.path} is not yet started. Skipping archiving.", stacklevel=2)
-            return
-        elif self.status == ProfilingExperimentStatus.RUNNING:
-            logger.warning(f"Experiment at {self.path} is still running. Skipping archiving.", stacklevel=2)
-            return
-        elif self.status == ProfilingExperimentStatus.DONE:
-            logger.info(f"Archiving experiment at {self.path} to {archive_file}")
-        elif self.status == ProfilingExperimentStatus.ARCHIVED:
-            logger.warning(f"Experiment at {self.path} is already archived. Skipping archiving.", stacklevel=2)
+        if not self._ready_to_archive(archive_file):
             return
 
         mode = "w:gz" if overwrite else "x:gz"
