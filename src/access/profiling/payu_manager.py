@@ -181,8 +181,17 @@ class PayuManager(ProfilingManager, ABC):
                     logger.info(f"Experiment for branch {branch} already exists. Skipping addition.")
                     continue
 
-                pert_config = {"branches": [branch], **self.layout_config_changes(layout)}
-                pert_config.setdefault("config.yaml", {})["walltime"] = str(timedelta(hours=walltime_hrs))
+                # Everything this experiment changes in the control configuration, keyed by the file each
+                # change applies to.
+                changes_by_file = self.layout_config_changes(layout)
+                if "config.yaml" not in changes_by_file:
+                    # Not every model has something of its own to change in there.
+                    changes_by_file["config.yaml"] = {}
+                changes_by_file["config.yaml"]["walltime"] = str(timedelta(hours=walltime_hrs))
+                changes_by_file["config.yaml"]["experiment"] = branch
+
+                pert_config = {"branches": [branch]}
+                pert_config.update(changes_by_file)
 
                 generator_config["Perturbation_Experiment"][f"Experiment_{seqnum}"] = pert_config
                 self.experiments[branch] = ProfilingExperiment(path=self.work_dir / branch / self._repository_directory)
@@ -198,11 +207,13 @@ class PayuManager(ProfilingManager, ABC):
     def run_experiments(self) -> None:
         """Runs Payu experiments for profiling data generation."""
 
+        # No keep_uuid: it would have every clone reuse one experiment_uuid, so each run's metadata.yaml
+        # would claim to be the same experiment as all the others. Each experiment is named outright in
+        # generate_scaling_experiments, so nothing here depends on the uuid to tell the runs apart.
         runner_config = {
             "test_path": self.work_dir,
             "repository_directory": self._repository_directory,
             "running_branches": [],
-            "keep_uuid": True,
             "nruns": [],
             "startfrom_restart": [],
         }
