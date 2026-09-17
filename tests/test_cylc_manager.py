@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import logging
+import sqlite3
 import subprocess
 from pathlib import Path
 from unittest import mock
@@ -26,6 +27,46 @@ class MockCylcManager(CylcRoseManager):
 @pytest.fixture()
 def manager():
     return MockCylcManager(Path("/fake/test_path"), Path("/fake/archive_path"), layout_variable="um_layout")
+
+
+class TestParseStatus:
+    """The state a suite reached, read back from the run statuses Cylc records per task."""
+
+    @staticmethod
+    def _suite_db(run_path: Path, statuses: list[int | None]) -> None:
+        """Writes a cylc-suite.db recording one task job per given run status."""
+
+        run_path.mkdir(parents=True, exist_ok=True)
+        with sqlite3.connect(run_path / "cylc-suite.db") as connection:
+            connection.execute("CREATE TABLE task_jobs (name TEXT, run_status INTEGER)")
+            connection.executemany(
+                "INSERT INTO task_jobs VALUES (?, ?)",
+                [(f"task{i}", status) for i, status in enumerate(statuses)],
+            )
+
+    def test_every_task_succeeded_is_done(self, manager, tmp_path):
+        self._suite_db(tmp_path, [0, 0, 0])
+        assert manager.parse_status(Path("/fake/expt"), tmp_path) == ProfilingExperimentStatus.DONE
+
+    def test_any_task_failed_is_failed(self, manager, tmp_path):
+        """Even with others still going: one failed task is enough to say the suite did not succeed."""
+
+        self._suite_db(tmp_path, [0, 1, None])
+        assert manager.parse_status(Path("/fake/expt"), tmp_path) == ProfilingExperimentStatus.FAILED
+
+    def test_a_task_with_no_status_yet_is_still_running(self, manager, tmp_path):
+        self._suite_db(tmp_path, [0, None])
+        assert manager.parse_status(Path("/fake/expt"), tmp_path) == ProfilingExperimentStatus.RUNNING
+
+    def test_no_task_recorded_yet_says_nothing(self, manager, tmp_path):
+        self._suite_db(tmp_path, [])
+        assert manager.parse_status(Path("/fake/expt"), tmp_path) is None
+
+    def test_no_database_says_nothing(self, manager, tmp_path):
+        assert manager.parse_status(Path("/fake/expt"), tmp_path) is None
+
+    def test_no_run_directory_says_nothing(self, manager):
+        assert manager.parse_status(Path("/fake/expt"), None) is None
 
 
 def test_layout_generation_is_unsupported(manager):

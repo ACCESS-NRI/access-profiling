@@ -207,6 +207,10 @@ class PayuManager(ProfilingManager, ABC):
     def run_experiments(self) -> None:
         """Runs Payu experiments for profiling data generation."""
 
+        # An experiment is only new as far as this manager knows: a status does not outlive the session, so
+        # one generated and run in an earlier session comes back NEW. Ask before deciding what to submit.
+        self.update_statuses()
+
         # No keep_uuid: it would have every clone reuse one experiment_uuid, so each run's metadata.yaml
         # would claim to be the same experiment as all the others. Each experiment is named outright in
         # generate_scaling_experiments, so nothing here depends on the uuid to tell the runs apart.
@@ -230,12 +234,6 @@ class PayuManager(ProfilingManager, ABC):
             ExperimentRunner(runner_config).run()
         else:
             logger.info("No new experiments to run. Will skip execution.")
-
-        # We are marking all running experiments as done here, but later this should be implemented properly
-        # so that an actual check is performed, probably somewhere else.
-        for exp in self.experiments.values():
-            if exp.status == ProfilingExperimentStatus.RUNNING:
-                exp.status = ProfilingExperimentStatus.DONE
 
     def delete_experiments(
         self,
@@ -347,31 +345,90 @@ class PayuManager(ProfilingManager, ABC):
         Returns:
             int | None: Recorded number of CPUs, or None if no job file records one.
         """
-        # Payu names the directory holding each job file after the run number, as in profiling_logs().
-        job_files = sorted(path.glob("archive/payu_jobs/*/run/*.json"), key=lambda p: int(p.parts[-3]))
-        if not job_files:
-            logger.debug(f"No Payu job file found under {path / 'archive/payu_jobs'}.")
-            return None
-
-        # The most recent run: an experiment run several times keeps one job file per run, and they all describe
-        # the same configuration, so the newest is as good as any and is the one that certainly ran.
-        job_file = job_files[-1]
-        try:
-            job_info = json.loads(job_file.read_text())
-        except (OSError, json.JSONDecodeError) as error:
-            logger.debug(f"Could not read the Payu job file {job_file}: {error}.")
+        job_info = PayuManager._latest_run_job(path)
+        if job_info is None:
             return None
 
         if job_info.get("scheduler_type") != "pbs":
-            logger.debug(f"Job file {job_file} records no PBS job information, so it states no CPU count.")
+            logger.debug(f"The most recent Payu job file for {path} records no PBS job information.")
             return None
 
         try:
             job_id = job_info["scheduler_job_id"]
             return int(job_info["scheduler_job_info"]["Jobs"][job_id]["Resource_List"]["ncpus"])
         except (KeyError, TypeError, ValueError) as error:
-            logger.debug(f"Job file {job_file} has no usable Resource_List.ncpus: {error}.")
+            logger.debug(f"The most recent Payu job file has no usable Resource_List.ncpus: {error}.")
             return None
+
+    @staticmethod
+    def _latest_run_job(path: Path) -> dict | None:
+        """Returns what Payu recorded for the most recent run of an experiment, if it recorded anything.
+
+        Payu writes one job file per run, under a directory named after the run number, and fills it in as the
+        run proceeds: the scheduler's job information, then the model's return code, then its own. The most
+        recent run is the one asked about here - an experiment run several times keeps a file per run, and it
+        is the newest that says where the experiment now stands.
+
+        Every way of not finding it is a missing answer rather than an error, logged at DEBUG: an experiment
+        archived before Payu recorded job information, one that has not run yet, and a file that cannot be
+        read all mean the same thing to a caller, which is that Payu has nothing to say.
+
+        Args:
+            path (Path): Path to the Payu experiment directory.
+
+        Returns:
+            dict | None: The parsed job file of the most recent run, or None if there is none to read.
+        """
+        # Payu names the directory holding each job file after the run number, as in profiling_logs(). Only
+        # *.json: Payu leaves its lock files and, when a lock times out, timestamped .tmp copies beside them.
+        job_files = sorted(path.glob("archive/payu_jobs/*/run/*.json"), key=lambda p: int(p.parts[-3]))
+        if not job_files:
+            logger.debug(f"No Payu job file found under {path / 'archive/payu_jobs'}.")
+            return None
+
+        job_file = job_files[-1]
+        try:
+            return json.loads(job_file.read_text())
+        except (OSError, json.JSONDecodeError) as error:
+            logger.debug(f"Could not read the Payu job file {job_file}: {error}.")
+            return None
+
+    def parse_status(self, path: Path, run_path: Path | None = None) -> ProfilingExperimentStatus | None:
+        """Parses the state the most recent Payu run of an experiment reached.
+
+        Payu records its own verdict on a run as payu_run_status, 0 or 1, and writes it from the finally block
+        of the run command, so it lands whether the run succeeded or raised. Its presence is therefore what
+        says the run is over; the stage a job file reports only says how far it had got when last written, and
+        a run job never reaches the "exited" stage that collate and sync jobs end at.
+
+        A run killed outright - a walltime limit, a node failure - never reaches that finally block, so its
+        job file stays at the stage it died in and this keeps reporting it as running. Telling that apart from
+        a run still going needs the scheduler, which this does not ask.
+
+        Args:
+            path (Path): Path to the Payu experiment directory.
+            run_path (Path | None): Optional path to a separate runs directory. Unused for Payu experiments.
+
+        Returns:
+            ProfilingExperimentStatus | None: The state of the run, or None if Payu recorded nothing readable.
+        """
+        job_info = self._latest_run_job(path)
+        if job_info is None:
+            return None
+
+        run_status = job_info.get("payu_run_status")
+        if run_status is None:
+            # Still under way, as far as anything written down says.
+            return ProfilingExperimentStatus.RUNNING
+
+        if run_status == 0:
+            return ProfilingExperimentStatus.DONE
+
+        # Payu's own status covers the whole run, so a non-zero one is a failure wherever it happened. The
+        # model's return code is reported alongside it to say whether the model itself was what failed.
+        model_status = job_info.get("payu_model_run_status")
+        logger.debug(f"Payu reports run status {run_status} (model run status {model_status}) for {path}.")
+        return ProfilingExperimentStatus.FAILED
 
     @staticmethod
     def _requested_ncpus(payu_config: dict) -> int:

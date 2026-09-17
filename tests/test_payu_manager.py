@@ -183,6 +183,54 @@ class TestRequestedNcpus:
         assert PayuManager._requested_ncpus({"ncpus": 100}) == 144
 
 
+class TestParseStatus:
+    """The state a run reached, read back from what Payu recorded for it."""
+
+    def test_a_zero_run_status_is_done(self, manager, tmp_path):
+        write_job_file(tmp_path, 0, {"stage": "archive", "payu_run_status": 0, "payu_model_run_status": 0})
+        assert manager.parse_status(tmp_path) == ProfilingExperimentStatus.DONE
+
+    @pytest.mark.parametrize("model_status", [1, 0])
+    def test_a_non_zero_run_status_is_failed(self, manager, tmp_path, model_status):
+        """Payu's own status covers the whole run, so it fails whether or not the model was what failed."""
+
+        write_job_file(tmp_path, 0, {"stage": "model-run", "payu_run_status": 1, "payu_model_run_status": model_status})
+        assert manager.parse_status(tmp_path) == ProfilingExperimentStatus.FAILED
+
+    @pytest.mark.parametrize("stage", ["queued", "setup", "model-run", "archive"])
+    def test_no_run_status_yet_is_still_running(self, manager, tmp_path, stage):
+        """Payu writes its status at the end of the run, so until it is there the run is not over.
+
+        Note a run job never reaches the "exited" stage that collate and sync jobs end at, which is why the
+        stage cannot be what decides this.
+        """
+
+        write_job_file(tmp_path, 0, {"stage": stage})
+        assert manager.parse_status(tmp_path) == ProfilingExperimentStatus.RUNNING
+
+    def test_the_most_recent_run_decides(self, manager, tmp_path):
+        # Numerically, not lexicographically: run 10 is the newest, not run 9.
+        write_job_file(tmp_path, 9, {"stage": "archive", "payu_run_status": 0})
+        write_job_file(tmp_path, 10, {"stage": "model-run", "payu_run_status": 1})
+        assert manager.parse_status(tmp_path) == ProfilingExperimentStatus.FAILED
+
+    def test_nothing_recorded_says_nothing(self, manager, tmp_path):
+        assert manager.parse_status(tmp_path) is None
+
+    def test_an_unreadable_job_file_says_nothing(self, manager, tmp_path):
+        job_file = write_job_file(tmp_path, 0, {"stage": "archive", "payu_run_status": 0})
+        job_file.write_text("{ this is not json")
+        assert manager.parse_status(tmp_path) is None
+
+    def test_payus_lock_and_temporary_files_are_ignored(self, manager, tmp_path):
+        """Payu leaves a lock beside each job file, and a timestamped copy when a lock times out."""
+
+        job_file = write_job_file(tmp_path, 0, {"stage": "archive", "payu_run_status": 0})
+        job_file.with_suffix(".json.lock").write_text("")
+        job_file.with_suffix(".json.12-00-00.tmp").write_text("{ not json either")
+        assert manager.parse_status(tmp_path) == ProfilingExperimentStatus.DONE
+
+
 class TestRecordedNcpus:
     """The core count the scheduler recorded, read back from the Payu job files."""
 
@@ -442,6 +490,30 @@ def test_generate_scaling_experiments_invalid_inputs(manager):
             )
 
 
+def _experiment(path: Path, status: ProfilingExperimentStatus) -> ProfilingExperiment:
+    """A real experiment at a path that does not exist, so parse_status reports nothing about it."""
+
+    experiment = ProfilingExperiment(path=path)
+    experiment.status = status
+    return experiment
+
+
+@mock.patch("access.profiling.payu_manager.ExperimentRunner")
+def test_run_experiments_skips_one_already_run_in_an_earlier_session(mock_experiment_runner, manager, tmp_path):
+    """Test that an experiment only new because the session restarted is not submitted again.
+
+    Its status says NEW, because a status does not outlive the session, but Payu's record of the run says it
+    finished. Submitting it again would be pointless work on something already done.
+    """
+
+    write_job_file(tmp_path, 0, {"stage": "archive", "payu_run_status": 0})
+    with mock.patch.dict(manager.experiments, {"branch1": _experiment(tmp_path, ProfilingExperimentStatus.NEW)}):
+        manager.run_experiments()
+
+        assert manager.experiments["branch1"].status == ProfilingExperimentStatus.DONE
+        mock_experiment_runner.assert_not_called()
+
+
 @mock.patch("access.profiling.payu_manager.ExperimentRunner")
 def test_run_experiments(mock_experiment_runner, manager):
     """Test the run_experiments method of PayuManager."""
@@ -449,9 +521,9 @@ def test_run_experiments(mock_experiment_runner, manager):
     with mock.patch.dict(
         manager.experiments,
         {
-            "branch1": mock.MagicMock(status=ProfilingExperimentStatus.NEW, path=Path("branch1")),
-            "branch2": mock.MagicMock(status=ProfilingExperimentStatus.NEW, path=Path("branch2")),
-            "branch3": mock.MagicMock(status=ProfilingExperimentStatus.DONE, path=Path("branch3")),
+            "branch1": _experiment(Path("branch1"), ProfilingExperimentStatus.NEW),
+            "branch2": _experiment(Path("branch2"), ProfilingExperimentStatus.NEW),
+            "branch3": _experiment(Path("branch3"), ProfilingExperimentStatus.DONE),
         },
     ):
         manager.run_experiments()
@@ -468,9 +540,9 @@ def test_run_experiments(mock_experiment_runner, manager):
     with mock.patch.dict(
         manager.experiments,
         {
-            "branch1": mock.MagicMock(status=ProfilingExperimentStatus.DONE, path=Path("branch1")),
-            "branch2": mock.MagicMock(status=ProfilingExperimentStatus.DONE, path=Path("branch2")),
-            "branch3": mock.MagicMock(status=ProfilingExperimentStatus.RUNNING, path=Path("branch3")),
+            "branch1": _experiment(Path("branch1"), ProfilingExperimentStatus.DONE),
+            "branch2": _experiment(Path("branch2"), ProfilingExperimentStatus.DONE),
+            "branch3": _experiment(Path("branch3"), ProfilingExperimentStatus.RUNNING),
         },
     ):
         mock_experiment_runner.reset_mock()

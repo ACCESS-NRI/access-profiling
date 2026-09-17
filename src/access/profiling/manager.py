@@ -115,6 +115,26 @@ class ProfilingManager(ABC):
             int: Number of CPUs the experiment occupied.
         """
 
+    @abstractmethod
+    def parse_status(self, path: Path, run_path: Path | None = None) -> ProfilingExperimentStatus | None:
+        """Parses the state a given experiment's run actually reached.
+
+        Submitting a run says nothing about how it ended, so this reads what the workflow engine recorded and
+        reports DONE, FAILED or RUNNING accordingly. How to find that out is up to each subclass, since it
+        depends on the engine and on what it writes.
+
+        Returning None means the state could not be determined - no record written yet, or one that cannot be
+        read - and leaves the experiment's status as it stands. That is a missing answer rather than an error,
+        so a subclass should log the reason at DEBUG and return None rather than raise.
+
+        Args:
+            path (Path): Path to the experiment directory.
+            run_path (Path | None): Optional path to a separate runs directory.
+
+        Returns:
+            ProfilingExperimentStatus | None: The state the run reached, or None if it cannot be determined.
+        """
+
     @property
     @abstractmethod
     def parallel_component(self) -> ParallelComponent:
@@ -202,6 +222,10 @@ class ProfilingManager(ABC):
             follow_symlinks (bool): Whether to follow symlinks when archiving experiments. Defaults to False.
             overwrite (bool): Whether to overwrite existing archives. Defaults to False.
         """
+        # Only DONE experiments are archived, so a run that finished since the last look should be counted
+        # among them rather than skipped as still running.
+        self.update_statuses()
+
         self.archive_dir.mkdir(parents=True, exist_ok=True)
         for branch, exp in self.experiments.items():
             exp.archive(
@@ -314,6 +338,10 @@ class ProfilingManager(ABC):
         directly. Use select_best_run() or aggregate_runs() to reduce the 'run' dimension before plotting. Note that
         if all but one run fail to produce a log, the result has no 'run' dimension.
         """
+        # A run that finished since the last look is one whose data is wanted now, so ask before deciding
+        # which experiments have any.
+        self.update_statuses()
+
         self.data = {}
         for exp_name, exp in self.experiments.items():
             if exp.status == ProfilingExperimentStatus.DONE or exp.status == ProfilingExperimentStatus.ARCHIVED:
@@ -377,6 +405,37 @@ class ProfilingManager(ABC):
             with experiment.directory() as (exp_path, run_path):
                 experiment.ncpus = self.parse_ncpus(exp_path, run_path)
         return experiment.ncpus
+
+    def update_statuses(self) -> None:
+        """Brings the status of every experiment up to date with the state its run actually reached.
+
+        Every experiment is consulted but the archived ones, and each of the others for its own reason. A
+        status lives in memory and so does not outlive the session, which means NEW says only that this
+        manager has not submitted the experiment, not that it has never run. A failed experiment may have been
+        fixed and run again by hand. A finished one may have been run again deliberately - parse_status reads
+        the newest run, so a run under way reads back as running, which is what keeps parse_profiling_data off
+        its half-written output and archive_experiments from tarring it mid-run.
+
+        Only an archived experiment is settled: its tarball does not change, the directory it was made from
+        may be gone, and asking would mean extracting the archive to be told what is already known.
+
+        The answer is never cached, unlike the CPU count in _ncpus - a count does not change once a run is
+        over, whereas the whole point of a status is that it does.
+
+        An experiment whose state cannot be determined is left as it stands, so an experiment not yet run and
+        one whose records cannot be read both simply keep the status they had.
+        """
+        for name, experiment in self.experiments.items():
+            if experiment.status == ProfilingExperimentStatus.ARCHIVED:
+                continue
+            with experiment.directory() as (exp_path, run_path):
+                status = self.parse_status(exp_path, run_path)
+            if status is None:
+                logger.debug(f"Could not determine the state of the run of experiment '{name}'. Leaving it be.")
+                continue
+            if status != experiment.status:
+                logger.info(f"Experiment '{name}' is now {status.name}.")
+                experiment.status = status
 
     def select_best_experiments(
         self,

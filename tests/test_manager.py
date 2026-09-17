@@ -45,6 +45,10 @@ class MockProfilingManager(ProfilingManager):
             self._mock_ncpus = {}
         self._parse_ncpus_calls = []
         self._deleted_experiments = []
+        # What parse_status reports, keyed by experiment name; anything absent reports None, meaning the state
+        # could not be determined. Only consulted for experiments this manager thinks are running.
+        self._mock_status: dict[str, ProfilingExperimentStatus] = {}
+        self._parse_status_calls: list[Path] = []
 
         if datasets is not None:
             self.data = dict(zip([path.name for path in paths], datasets, strict=True))
@@ -60,6 +64,10 @@ class MockProfilingManager(ProfilingManager):
 
     def layout_config_changes(self, layout):
         raise NotImplementedError
+
+    def parse_status(self, path, run_path=None):
+        self._parse_status_calls.append(path)
+        return self._mock_status.get(path.name)
 
     def parse_ncpus(self, path, run_path=None):
         """Simulate parsing number of CPUs for a given path."""
@@ -204,6 +212,124 @@ def test_archive_discovery(mock_experiment, mock_is_file, mock_glob, mock_is_dir
     assert mock_experiment.call_count == 2
     mock_experiment.assert_any_call(path=Path("/fake/archive_dir/exp1.tar.gz"))
     mock_experiment.assert_any_call(path=Path("/fake/archive_dir/exp2.tar.gz"))
+
+
+class TestUpdateStatuses:
+    """Bringing statuses up to date with the state the runs actually reached."""
+
+    def test_only_archived_experiments_are_left_alone(self):
+        """Every other state can still move, so every other state is asked about."""
+
+        paths = [Path("/a/new"), Path("/a/running"), Path("/a/done"), Path("/a/failed"), Path("/a/archived")]
+        manager = MockProfilingManager(paths)
+        for name in manager.experiments:
+            manager.experiments[name].status = ProfilingExperimentStatus[name.upper()]
+        manager._mock_status = dict.fromkeys(manager.experiments, ProfilingExperimentStatus.RUNNING)
+
+        manager.update_statuses()
+
+        assert sorted(path.name for path in manager._parse_status_calls) == ["done", "failed", "new", "running"]
+        assert manager.experiments["archived"].status == ProfilingExperimentStatus.ARCHIVED, (
+            "an archive does not change, and asking would mean extracting it to be told so"
+        )
+
+    def test_a_new_experiment_run_in_an_earlier_session_is_recognised(self):
+        """The case this is all for: a status does not outlive the session, but the run's record does."""
+
+        manager = MockProfilingManager([Path("/a/expt")])
+        manager.experiments["expt"].status = ProfilingExperimentStatus.NEW
+        manager._mock_status = {"expt": ProfilingExperimentStatus.DONE}
+
+        manager.update_statuses()
+
+        assert manager.experiments["expt"].status == ProfilingExperimentStatus.DONE
+
+    def test_a_failed_experiment_rerun_by_hand_is_recognised(self):
+        manager = MockProfilingManager([Path("/a/expt")])
+        manager.experiments["expt"].status = ProfilingExperimentStatus.FAILED
+        manager._mock_status = {"expt": ProfilingExperimentStatus.DONE}
+
+        manager.update_statuses()
+
+        assert manager.experiments["expt"].status == ProfilingExperimentStatus.DONE
+
+    def test_a_done_experiment_being_rerun_goes_back_to_running(self):
+        """Which is what keeps its half-written output from being parsed or archived mid-run."""
+
+        manager = MockProfilingManager([Path("/a/expt")])
+        manager.experiments["expt"].status = ProfilingExperimentStatus.DONE
+        manager._mock_status = {"expt": ProfilingExperimentStatus.RUNNING}
+
+        manager.update_statuses()
+
+        assert manager.experiments["expt"].status == ProfilingExperimentStatus.RUNNING
+
+    def test_an_undetermined_state_leaves_the_status_alone(self):
+        manager = MockProfilingManager([Path("/a/expt")])
+        manager.experiments["expt"].status = ProfilingExperimentStatus.RUNNING
+        manager._mock_status = {}  # parse_status returns None
+
+        manager.update_statuses()
+
+        assert manager.experiments["expt"].status == ProfilingExperimentStatus.RUNNING
+
+    def test_it_is_asked_again_each_time(self):
+        """A status changes while a run is queued, so unlike the CPU count it must not be cached."""
+
+        manager = MockProfilingManager([Path("/a/expt")])
+        manager.experiments["expt"].status = ProfilingExperimentStatus.RUNNING
+
+        manager.update_statuses()
+        manager.update_statuses()
+
+        assert len(manager._parse_status_calls) == 2
+
+
+def test_archive_experiments_picks_up_a_run_that_has_since_finished(tmp_path):
+    """Test that archiving asks the run how it went rather than trusting a stale status.
+
+    Without this the experiment is still RUNNING as far as the manager knows, and archive() skips it.
+    """
+
+    manager = MockProfilingManager([tmp_path / "expt"])
+    manager.archive_dir = tmp_path / "archive_dir"
+    manager.experiments["expt"].status = ProfilingExperimentStatus.RUNNING
+    manager._mock_status = {"expt": ProfilingExperimentStatus.DONE}
+
+    with mock.patch.object(ProfilingExperiment, "archive") as mock_archive:
+        manager.archive_experiments()
+
+    assert manager.experiments["expt"].status == ProfilingExperimentStatus.DONE
+    mock_archive.assert_called_once()
+
+
+def test_parse_profiling_data_picks_up_a_run_that_has_since_finished():
+    """Test that parsing asks the run how it went, so freshly finished data is not skipped."""
+
+    manager = MockProfilingManager([Path("/a/expt")])
+    manager.experiments["expt"].status = ProfilingExperimentStatus.RUNNING
+    manager._mock_status = {"expt": ProfilingExperimentStatus.DONE}
+
+    with mock.patch.object(MockProfilingManager, "profiling_logs", return_value={}):
+        manager.parse_profiling_data()
+
+    assert manager.experiments["expt"].status == ProfilingExperimentStatus.DONE
+    assert "expt" in manager.data, "so its data is parsed rather than passed over as still running"
+
+
+def test_parse_profiling_data_skips_a_run_that_failed(caplog):
+    """Test that a crashed run is reported as FAILED rather than left looking like it is still going."""
+
+    manager = MockProfilingManager([Path("/a/expt")])
+    manager.experiments["expt"].status = ProfilingExperimentStatus.RUNNING
+    manager._mock_status = {"expt": ProfilingExperimentStatus.FAILED}
+
+    with caplog.at_level(logging.WARNING):
+        manager.parse_profiling_data()
+
+    assert manager.experiments["expt"].status == ProfilingExperimentStatus.FAILED
+    assert "expt" not in manager.data
+    assert "FAILED" in caplog.text
 
 
 @mock.patch("access.profiling.manager.Path.mkdir")
