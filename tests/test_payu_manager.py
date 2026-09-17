@@ -314,12 +314,40 @@ def test_generate_scaling_experiments(mock_experiment_generator, manager):
         branches.append(block["branches"][0])
         assert block["config.yaml"]["walltime"] == "2:00:00"
         assert block["config.yaml"]["submodels"] == [[{"ncpus": 2}, {"ncpus": 2}]]
+        # Payu names the laboratory's work and archive sub-directories after this. Left to work the name
+        # out itself it would give every experiment the control directory's name, which is the same string
+        # for all of them, and the runs would share one directory.
+        assert block["config.yaml"]["experiment"] == block["branches"][0]
 
     # Each branch is distinct and registered as a new experiment
     assert len(set(branches)) == len(branches)
+    experiment_names = [block["config.yaml"]["experiment"] for block in perturbations.values()]
+    assert len(set(experiment_names)) == len(experiment_names), "so no two runs share a work or archive dir"
     for branch in branches:
         assert isinstance(manager.experiments[branch], ProfilingExperiment)
         assert manager.experiments[branch].path == Path("/fake/test_path") / branch / "config"
+
+
+@mock.patch("access.profiling.payu_manager.ExperimentGenerator")
+def test_generate_scaling_experiments_for_a_model_changing_nothing_in_config_yaml(mock_experiment_generator, manager):
+    """Not every model has something of its own to change there, but the walltime and the name still go in."""
+
+    manager.set_control("https://example.com/repo", "commit")
+    # A fresh dictionary per layout, since the changes of one experiment are not those of another.
+    with mock.patch.object(manager, "layout_config_changes", side_effect=lambda layout: {"MOM_input": {"DT": 1800.0}}):
+        manager.generate_scaling_experiments(
+            num_nodes_list=[1.0],
+            control_options={},
+            cores_per_node=4,
+            walltime=2.0,  # hrs
+            allocations=MOCK_ALLOCATIONS,
+        )
+
+    perturbations = mock_experiment_generator.call_args[0][0]["Perturbation_Experiment"]
+    assert perturbations
+    for block in perturbations.values():
+        assert block["MOM_input"] == {"DT": 1800.0}
+        assert block["config.yaml"] == {"walltime": "2:00:00", "experiment": block["branches"][0]}
 
 
 @mock.patch("access.profiling.payu_manager.ExperimentGenerator")
@@ -453,7 +481,6 @@ def test_run_experiments(mock_experiment_runner, manager):
             "test_path": Path("/fake/test_path"),
             "repository_directory": "config",
             "running_branches": ["branch1", "branch2"],
-            "keep_uuid": True,
             "nruns": [1, 1],
             "startfrom_restart": ["cold", "cold"],
         }
