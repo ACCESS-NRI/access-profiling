@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import logging
-import math
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -445,14 +444,9 @@ def _om3_cice6_domain_nml(decomposition: DomainDecompositionSpec) -> dict[str, s
     """
     extents = decomposition.domain.shape
     block_sizes = tuple(extent // ranks for extent, ranks in zip(extents, decomposition.grid, strict=True))
-    n_blocks = math.prod(math.ceil(extent / size) for extent, size in zip(extents, block_sizes, strict=True))
     return {
-        "nprocs": str(decomposition.n_ranks),
-        "nx_global": str(extents[0]),
-        "ny_global": str(extents[1]),
         "block_size_x": str(block_sizes[0]),
         "block_size_y": str(block_sizes[1]),
-        "max_blocks": str(math.ceil(n_blocks / decomposition.n_ranks)),
     }
 
 
