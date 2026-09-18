@@ -5,7 +5,6 @@ import json
 import logging
 from abc import ABC, abstractmethod
 from collections.abc import Callable
-from datetime import timedelta
 from pathlib import Path
 
 from access.config import YAMLParser
@@ -24,6 +23,25 @@ logger = logging.getLogger(__name__)
 # the body of that function, and exposes them nowhere: if Payu ever changes them, these have to follow.
 _PAYU_DEFAULT_NODE_SIZE = 48
 _PAYU_DEFAULT_NCPUS = 1
+
+
+def _walltime_string(hours: float) -> str:
+    """Returns a walltime in hours as the HH:MM:SS string a Payu configuration states it in.
+
+    The seconds are rounded rather than truncated, and the hours are left to run past 24 rather than becoming
+    a count of days. Formatting a timedelta gets both wrong: an hour count whose seconds are not whole leaves
+    a fraction behind, so 0.12345 hours reads as "0:07:24.420000", and a day or more is written out as
+    "1 day, 1:00:00". A scheduler reads neither.
+
+    Args:
+        hours (float): Walltime to request, in hours.
+
+    Returns:
+        str: The walltime as HH:MM:SS, the hours unpadded and counting past 24.
+    """
+    hours_part, remainder = divmod(round(hours * 3600), 3600)
+    minutes, seconds = divmod(remainder, 60)
+    return f"{hours_part}:{minutes:02d}:{seconds:02d}"
 
 
 class PayuManager(ProfilingManager, ABC):
@@ -187,7 +205,7 @@ class PayuManager(ProfilingManager, ABC):
                 if "config.yaml" not in changes_by_file:
                     # Not every model has something of its own to change in there.
                     changes_by_file["config.yaml"] = {}
-                changes_by_file["config.yaml"]["walltime"] = str(timedelta(hours=walltime_hrs))
+                changes_by_file["config.yaml"]["walltime"] = _walltime_string(walltime_hrs)
                 changes_by_file["config.yaml"]["experiment"] = branch
 
                 pert_config = {"branches": [branch]}
