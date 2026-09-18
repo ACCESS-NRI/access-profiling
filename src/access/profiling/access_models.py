@@ -429,8 +429,13 @@ def _om3_cice6_domain_nml(decomposition: DomainDecompositionSpec) -> dict[str, s
     over its ranks, so the grid the search chose has to be turned into blocks. Each rank holds one block of
     ``shape[i] // grid[i]`` points, rounded *down*: rounding up can leave fewer blocks than there are ranks -
     1440 points over 275 ranks gives blocks of 6 and only 240 of them - and a rank with no block to work on
-    aborts the run. Rounding down always leaves at least as many blocks as ranks, and leaves exactly one each,
-    with max_blocks of 1, when the process grid tiles the extents.
+    aborts the run. Rounding down always leaves at least as many blocks as ranks, and leaves exactly one each
+    when the process grid tiles the extents.
+
+    Only the block size is written. How many blocks there are and how many a rank may hold follow from it,
+    and the grid extents are a property of the configuration rather than of the layout, so CICE6 and the
+    control configuration settle those between them: writing a stale nprocs or max_blocks beside a new block
+    size is what this used to get wrong.
 
     The distribution itself is left to the control configuration, as it is for ACCESS-ESM1.6's CICE5. Note
     that a configuration distributing its blocks with distribution_type = "cartesian" needs them to tile the

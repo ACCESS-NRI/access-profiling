@@ -730,17 +730,9 @@ def test_om3_writes_the_chosen_decomposition():
 
     changes = manager.layout_config_changes(layout)
     assert changes["MOM_input"] == {"LAYOUT": "18, 12"}
-    # A 4x6 process grid tiles the 360x324 grid exactly, so every rank holds one 90x54 block.
-    assert changes["ice_in"] == {
-        "domain_nml": {
-            "nprocs": "24",
-            "nx_global": "360",
-            "ny_global": "324",
-            "block_size_x": "90",
-            "block_size_y": "54",
-            "max_blocks": "1",
-        }
-    }
+    # A 4x6 process grid tiles the 360x324 grid exactly, so every rank holds one 90x54 block. Only the block
+    # size is written: CICE6 and the control configuration settle the rest between them.
+    assert changes["ice_in"] == {"domain_nml": {"block_size_x": "90", "block_size_y": "54"}}
 
 
 def test_om3_blocks_cover_the_grid_when_it_does_not_tile(om3):
@@ -753,7 +745,6 @@ def test_om3_blocks_cover_the_grid_when_it_does_not_tile(om3):
     assert (domain_nml["block_size_x"], domain_nml["block_size_y"]) == ("57", "104")
     n_blocks = math.ceil(1440 / 57) * math.ceil(1152 / 104)
     assert n_blocks >= 275, "the blocks covering the grid are at least as many as the ranks"
-    assert domain_nml["max_blocks"] == str(math.ceil(n_blocks / 275))
 
     # Rounding down is what keeps that true. This is the grid it matters on: blocks of ceil(1440 / 275) = 6
     # would cover the x extent with 240 of them, leaving 35 of the 275 ranks nothing to work on.
@@ -795,7 +786,8 @@ def test_om3_caller_can_require_blocks_that_tile():
         nx_ranks, ny_ranks = _om3_grids(layout)[OM3_SEA_ICE_NAME]
         assert (nx_global % nx_ranks, ny_global % ny_ranks) == (0, 0)
         domain_nml = manager.layout_config_changes(layout)["ice_in"]["domain_nml"]
-        assert domain_nml["max_blocks"] == "1", "blocks that tile the grid are one per rank"
+        assert int(domain_nml["block_size_x"]) * nx_ranks == nx_global, "so the blocks tile the grid exactly"
+        assert int(domain_nml["block_size_y"]) * ny_ranks == ny_global
 
 
 def test_om3_configuration_needs_something_to_profile():
