@@ -312,11 +312,13 @@ class OM3Configuration:
 
     Of those grids, only the ones a control directory states as a process grid reach the component tree and
     are decomposed by the layout search, since a decomposition nothing reads is not one a search can be said
-    to have chosen. The sea ice's always does, as CICE6's domain_nml. The ocean's does only where the
-    configuration pins MOM6's LAYOUT: MOM6 otherwise works its own decomposition out from the ranks it is
-    given, which is what auto_ocean_layout says and what ACCESS-OM3 does. The mediator, the data components
-    and the waves are handed their meshes by ESMF, which decomposes them over whatever ranks they are given,
-    and state no process grid either. Every grid is recorded whether or not it reaches the tree, because the
+    to have chosen. The sea ice's does where it is CICE6, as the blocks of ice_in's domain_nml; a
+    configuration running CDEPS's data sea ice instead says so with data_sea_ice, and then it does not. The
+    ocean's does only where the configuration pins MOM6's LAYOUT: MOM6 otherwise works its own decomposition
+    out from the ranks it is given, which is what auto_ocean_layout says and what ACCESS-OM3 does. The
+    mediator, the data components - the data sea ice among them when there is one - and the waves are handed
+    their meshes by ESMF, which decomposes them over whatever ranks they are given, and state no process grid
+    either. Every grid is recorded whether or not it reaches the tree, because the
     configuration files state them, and because a grid is how this class says which components a
     configuration runs.
 
@@ -350,6 +352,12 @@ class OM3Configuration:
             should set this False and have the search choose one. Set False, the ocean carries its grid as
             the sea ice does, the search picks a process grid subject to MOM6's halo width, and
             layout_config_changes writes it to MOM_input.
+        data_sea_ice (bool): Whether the sea ice is CDEPS's data component rather than CICE6. False by
+            default, which is CICE6. Set True and the sea ice is treated as the data atmosphere and the data
+            runoff are: it still takes its turn on the shared range and still receives cores, but ESMF
+            decomposes its mesh over whatever ranks it is given, so it carries no grid into the component
+            tree, the search chooses no process grid for it, and layout_config_changes writes no ice_in. Its
+            grid is still recorded in sea_ice, which is also what says the configuration has a sea ice at all.
 
     Raises:
         ValueError: If the configuration has no ocean, sea ice or waves; if the ocean's or the sea ice's grid
@@ -365,6 +373,7 @@ class OM3Configuration:
     runoff: Domain | None = None
     shared_core_offsets: Mapping[str, int] = field(default_factory=dict)
     auto_ocean_layout: bool = True
+    data_sea_ice: bool = False
 
     def __post_init__(self) -> None:
         if self.ocean is None and self.sea_ice is None and self.waves is None:
@@ -429,8 +438,10 @@ class OM3Configuration:
                 subcomponents=tuple(
                     ParallelComponent(
                         name=realm,
-                        domain=self.sea_ice if realm == OM3_SEA_ICE_NAME else None,
-                        local_constraints=ice_constraints if realm == OM3_SEA_ICE_NAME else no_threads,
+                        domain=self.sea_ice if realm == OM3_SEA_ICE_NAME and not self.data_sea_ice else None,
+                        local_constraints=(
+                            ice_constraints if realm == OM3_SEA_ICE_NAME and not self.data_sea_ice else no_threads
+                        ),
                         core_offset=self.shared_core_offsets.get(realm, 0),
                     )
                     for realm in self.shared_realms

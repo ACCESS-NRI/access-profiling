@@ -882,6 +882,31 @@ def test_om3_caller_can_require_blocks_that_tile():
         assert int(domain_nml["block_size_y"]) * ny_ranks == ny_global
 
 
+def test_om3_data_sea_ice_is_not_decomposed():
+    """Test that a configuration running CDEPS's data sea ice leaves its decomposition to ESMF.
+
+    It still takes its turn on the shared range and still receives cores, but no configuration file states a
+    process grid for it, so the search chooses none and writes no ice_in - as for the data atmosphere and the
+    data runoff. Its grid is still recorded, which is what says the configuration has a sea ice at all.
+    """
+
+    configuration = dataclasses.replace(OM3_MC_100KM, name="MD-100km", data_sea_ice=True)
+    manager = OM3Profiling(Path("/fake/test_path"), Path("/fake/archive_path"), configuration)
+    cores = {"cpl": 24, "atm": 24, "ice": 24, "rof": 24, "ocn": 216}
+
+    layouts = manager.select_layouts(240, allocations=_om3_pinned(**cores))
+    (layout,) = layouts  # with no process grid to choose, one set of core counts is one layout
+
+    assert OM3_SEA_ICE_NAME not in _om3_grids(layout), "ESMF decomposes its mesh over the ranks it is given"
+    assert OM3_SEA_ICE_NAME in configuration.shared_realms, "but it still takes its turn on the shared range"
+    assert configuration.sea_ice is not None, "and the configuration still records its grid"
+
+    changes = manager.layout_config_changes(layout)
+    assert "ice_in" not in changes, "and there is no CICE6 namelist to write"
+    assert _pelayout(manager, layout)["ice_ntasks"] == 24, "though it still receives its cores"
+    assert "ice_24" in manager.layout_branch_name(layout), "so the name records them, not a grid"
+
+
 def test_om3_configuration_needs_something_to_profile():
     """Test that a configuration of nothing but the mediator and the data components is rejected."""
 
