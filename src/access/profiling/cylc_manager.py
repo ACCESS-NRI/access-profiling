@@ -3,6 +3,7 @@
 
 import logging
 import shutil
+import sqlite3
 import subprocess
 from abc import ABC, abstractmethod
 from pathlib import Path
@@ -196,6 +197,10 @@ class CylcRoseManager(ProfilingManager, ABC):
     def run_experiments(self) -> None:
         """Runs Rose Cylc experiments via `rose suite-run` for profiling data generation."""
 
+        # An experiment is only new as far as this manager knows: a status does not outlive the session, so
+        # one generated and run in an earlier session comes back NEW. Ask before deciding what to submit.
+        self.update_statuses()
+
         to_run = {name: exp for name, exp in self.experiments.items() if exp.status == ProfilingExperimentStatus.NEW}
 
         if not to_run:
@@ -217,11 +222,6 @@ class CylcRoseManager(ProfilingManager, ABC):
             for line in result.stderr.splitlines():
                 logger.warning(f"[{name}] {line}")
             exp.status = ProfilingExperimentStatus.RUNNING
-
-        # TODO: properly detect when running experiments have completed rather than marking them done immediately.
-        for exp_name in self.experiments:
-            if self.experiments[exp_name].status == ProfilingExperimentStatus.RUNNING:
-                self.experiments[exp_name].status = ProfilingExperimentStatus.DONE
 
     def _delete_experiment(self, name: str, dry_run: bool) -> None:
         """Deletes the experiment and run directories of a single Rose Cylc experiment.
@@ -275,6 +275,47 @@ class CylcRoseManager(ProfilingManager, ABC):
             follow_symlinks=follow_symlinks,
             overwrite=overwrite,
         )
+
+    def parse_status(self, path: Path, run_path: Path | None = None) -> ProfilingExperimentStatus | None:
+        """Parses the state the tasks of a Rose Cylc suite reached.
+
+        Cylc records a run status per task attempt in the task_jobs table of the suite database: 0 where the
+        task succeeded, non-zero where it failed, and nothing at all while it is still going. A suite is done
+        once every task it has recorded has succeeded, and failed as soon as any of them has not.
+
+        Args:
+            path (Path): Path to the experiment directory. Unused: the database lives with the run.
+            run_path (Path | None): Path to the runs directory, which holds cylc-suite.db.
+
+        Returns:
+            ProfilingExperimentStatus | None: The state of the suite, or None if the database says nothing
+                readable - no run directory, no database yet, or no task recorded in it.
+        """
+        if run_path is None:
+            logger.debug("No Cylc run directory, so there is no suite database to read a status from.")
+            return None
+
+        cylcdb = run_path / "cylc-suite.db"
+        if not cylcdb.is_file():
+            logger.debug(f"No Cylc suite database at {cylcdb}.")
+            return None
+
+        try:
+            with sqlite3.connect(f"file:{cylcdb}?mode=ro", uri=True) as connection:
+                statuses = [row[0] for row in connection.execute("SELECT run_status FROM task_jobs")]
+        except sqlite3.Error as error:
+            logger.debug(f"Could not read task statuses from {cylcdb}: {error}.")
+            return None
+
+        if not statuses:
+            logger.debug(f"The Cylc suite database at {cylcdb} records no task yet.")
+            return None
+
+        if any(status is not None and status != 0 for status in statuses):
+            return ProfilingExperimentStatus.FAILED
+        if any(status is None for status in statuses):
+            return ProfilingExperimentStatus.RUNNING
+        return ProfilingExperimentStatus.DONE
 
     def profiling_logs(self, path: Path, run_path: Path | None = None) -> dict[str, dict[int, ProfilingLog]]:
         """Returns all profiling logs from the specified path.
