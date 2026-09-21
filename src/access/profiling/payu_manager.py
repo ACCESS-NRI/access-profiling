@@ -116,6 +116,28 @@ class PayuManager(ProfilingManager, ABC):
         self._repository = repository
         self._control_commit = commit
 
+    @staticmethod
+    def _validate_sizing(num_nodes_list: list[float], cores_per_node: int) -> None:
+        """Rejects the sizes no layout search could be made for.
+
+        Everything is checked before the first search, so that a bad value late in the list costs nothing and
+        generate_scaling_experiments either generates all the experiments it was asked for or none of them.
+
+        Args:
+            num_nodes_list (list[float]): Numbers of nodes to generate experiments for.
+            cores_per_node (int): Number of cores available on each node.
+
+        Raises:
+            ValueError: If cores_per_node is not a positive integer, or if any of the node counts is not
+                positive.
+        """
+        if not isinstance(cores_per_node, int) or cores_per_node <= 0:
+            raise ValueError(f"Cores per node must be a positive integer. Got {cores_per_node} instead")
+
+        for num_nodes in num_nodes_list:
+            if num_nodes <= 0:
+                raise ValueError(f"Number of nodes must be > 0. Got {num_nodes} instead")
+
     def generate_scaling_experiments(
         self,
         num_nodes_list: list[float],
@@ -128,13 +150,20 @@ class PayuManager(ProfilingManager, ABC):
         """Generates scaling experiments, one per valid layout of the model.
 
         For each requested number of nodes, the valid layouts of the model are enumerated and each one becomes a
-        perturbation experiment. Layouts whose branch is already known to this manager are skipped, so the same
-        layout found for two different numbers of nodes only generates one experiment.
+        perturbation experiment. Layouts whose branch is already known to this manager, or was already found
+        earlier in the same call, are skipped, so the same layout found for two different numbers of nodes only
+        generates one experiment.
 
         That happens whenever a layout fits both budgets, which is a matter of how much waste the component tree
         tolerates: a layout spending 508 cores is valid on 520 and on 546, leaving 2.3% and 7.0% of them idle.
         Note that it does not arise for an allocation strategy written in fractions of the total, since its
         bounds move with the budget; it is strategies stated in cores, and callables, that repeat themselves.
+
+        Experiments become known to this manager only once the generator has returned, since an experiment it
+        holds is one that can be run, archived and deleted. A generation that fails therefore registers
+        nothing, not even the branches the generator managed to create before failing, and it is the whole
+        call that is abandoned: correcting the cause and calling this method again generates the rest, the
+        generator leaving the branches that already exist alone.
 
         Args:
             num_nodes_list (list[float]): Numbers of nodes to generate experiments for. Fractional values are
@@ -156,10 +185,11 @@ class PayuManager(ProfilingManager, ABC):
 
         Raises:
             ValueError: If cores_per_node is not a positive integer, or if any of the node counts is not positive.
+            Exception: Whatever the experiment generator raises, unchanged. No experiment is registered when it
+                does.
         """
 
-        if not isinstance(cores_per_node, int) or cores_per_node <= 0:
-            raise ValueError(f"Cores per node must be a positive integer. Got {cores_per_node} instead")
+        self._validate_sizing(num_nodes_list, cores_per_node)
 
         generator_config = {
             "model_type": self.model_type,
@@ -173,10 +203,10 @@ class PayuManager(ProfilingManager, ABC):
         }
 
         seqnum = 1
+        # Nothing reaches the manager until the generator has returned. An entry in self.experiments is a
+        # claim that a branch exists to be run, archived and deleted, and until then none of them do.
+        new_experiments: dict[str, ProfilingExperiment] = {}
         for num_nodes in num_nodes_list:
-            if num_nodes <= 0:
-                raise ValueError(f"Number of nodes must be > 0. Got {num_nodes} instead")
-
             total_cores = int(num_nodes * cores_per_node)
             layouts = self.select_layouts(
                 total_cores,
@@ -195,7 +225,10 @@ class PayuManager(ProfilingManager, ABC):
 
             for layout in layouts:
                 branch = self.layout_branch_name(layout)
-                if branch in self.experiments:
+                # Against what this call has found as well as what the manager already holds: with the
+                # registration deferred, self.experiments on its own no longer says whether a layout has
+                # been seen, and the same layout is regularly valid at two different node counts.
+                if branch in self.experiments or branch in new_experiments:
                     logger.info(f"Experiment for branch {branch} already exists. Skipping addition.")
                     continue
 
@@ -212,7 +245,7 @@ class PayuManager(ProfilingManager, ABC):
                 pert_config.update(changes_by_file)
 
                 generator_config["Perturbation_Experiment"][f"Experiment_{seqnum}"] = pert_config
-                self.experiments[branch] = ProfilingExperiment(path=self.work_dir / branch / self._repository_directory)
+                new_experiments[branch] = ProfilingExperiment(path=self.work_dir / branch / self._repository_directory)
 
                 seqnum += 1
 
@@ -220,10 +253,35 @@ class PayuManager(ProfilingManager, ABC):
             logger.warning("No new experiments to generate. Will skip generation.")
             return
 
-        ExperimentGenerator(generator_config).run()
+        try:
+            ExperimentGenerator(generator_config).run()
+        except Exception:
+            # The generator sets up one branch at a time and says nothing about how far it got, so which
+            # branches survive a failure is unknown. None of them are registered: an experiment this manager
+            # has never heard of is simply generated again on the next call, and the generator leaves
+            # branches that already exist alone, whereas one registered without its branch would be
+            # submitted by run_experiments() and would never be generated, the check above having claimed it.
+            logger.warning(
+                f"Experiment generation failed, so none of {sorted(new_experiments)} were added to this "
+                "manager. Some of their branches may already exist in the control clone; correcting the "
+                "cause and calling this method again generates the rest and leaves those alone."
+            )
+            raise
+
+        self.experiments.update(new_experiments)
 
     def run_experiments(self) -> None:
-        """Runs Payu experiments for profiling data generation."""
+        """Runs Payu experiments for profiling data generation.
+
+        Every experiment this manager holds as NEW is submitted, and only those that the runner returned
+        from having submitted are marked RUNNING. A submission that fails therefore leaves them all NEW,
+        which is what lets this method be called again to submit them: the runner leaves a branch it has
+        already cloned alone, refuses to submit an experiment whose job is still live, and tops each one up
+        to nruns rather than starting it afresh.
+
+        Raises:
+            Exception: Whatever the experiment runner raises, unchanged. No status is advanced when it does.
+        """
 
         # An experiment is only new as far as this manager knows: a status does not outlive the session, so
         # one generated and run in an earlier session comes back NEW. Ask before deciding what to submit.
@@ -240,18 +298,26 @@ class PayuManager(ProfilingManager, ABC):
             "startfrom_restart": [],
         }
 
-        for path, exp in self.experiments.items():
+        for branch, exp in self.experiments.items():
             if exp.status == ProfilingExperimentStatus.NEW:
-                runner_config["running_branches"].append(path)
+                runner_config["running_branches"].append(branch)
                 runner_config["nruns"].append(self.nruns)
                 runner_config["startfrom_restart"].append(self.startfrom_restart)
-                exp.status = ProfilingExperimentStatus.RUNNING
 
-        # Run the experiment runner
-        if runner_config["running_branches"]:
-            ExperimentRunner(runner_config).run()
-        else:
+        if not runner_config["running_branches"]:
             logger.info("No new experiments to run. Will skip execution.")
+            return
+
+        ExperimentRunner(runner_config).run()
+
+        # Only a runner that returned has submitted anything. An experiment left NEW by a failed submission
+        # is one this method offers the runner again, which is safe: the runner leaves a branch it has
+        # already cloned alone, its PBS job manager refuses to submit an experiment that already has a job
+        # neither finished nor suspended, and it only tops the run count up to nruns. RUNNING, by contrast,
+        # sticks - parse_status reports nothing about an experiment that never ran, so update_statuses
+        # leaves it be and this method would never offer it again.
+        for branch in runner_config["running_branches"]:
+            self.experiments[branch].status = ProfilingExperimentStatus.RUNNING
 
     def delete_experiments(
         self,
