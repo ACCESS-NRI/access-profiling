@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+import logging
 from pathlib import Path
 from unittest import mock
 
@@ -497,6 +498,110 @@ def test_generate_scaling_experiments_duplicates_across_node_counts(mock_experim
 
 
 @mock.patch("access.profiling.payu_manager.ExperimentGenerator")
+def test_generate_scaling_experiments_registers_nothing_when_generation_fails(
+    mock_experiment_generator, manager, caplog
+):
+    """Test that a failed generation leaves the manager holding no experiments.
+
+    An experiment this manager holds is one that can be run, archived and deleted, so registering one whose
+    branch was never created would have run_experiments() submit it and parse_profiling_data() go looking for
+    a directory that is not there.
+    """
+
+    manager.set_control("https://example.com/repo", "commit")
+    mock_experiment_generator.return_value.run.side_effect = RuntimeError("the generator gave up")
+
+    with caplog.at_level(logging.WARNING), pytest.raises(RuntimeError, match="the generator gave up"):
+        manager.generate_scaling_experiments(
+            num_nodes_list=[1.0], control_options={}, cores_per_node=4, walltime=2.0, allocations=MOCK_ALLOCATIONS
+        )
+
+    assert manager.experiments == {}
+
+    # The whole configuration was built and handed over, so the emptiness is the deferred registration rather
+    # than a layout search that found nothing to generate.
+    assert len(mock_experiment_generator.call_args[0][0]["Perturbation_Experiment"]) == 4
+
+    assert len(caplog.records) == 1
+    assert caplog.records[0].levelname == "WARNING"
+
+
+@mock.patch("access.profiling.payu_manager.ExperimentGenerator")
+def test_generate_scaling_experiments_registers_nothing_when_a_later_node_count_is_invalid(
+    mock_experiment_generator, manager
+):
+    """Test that a bad node count late in the list generates nothing at all.
+
+    The sizes are all checked before the first layout search, so the node counts before it are not generated
+    and then abandoned.
+    """
+
+    manager.set_control("https://example.com/repo", "commit")
+
+    with pytest.raises(ValueError, match="Number of nodes must be > 0"):
+        manager.generate_scaling_experiments(
+            num_nodes_list=[1.0, -1.0],
+            control_options={},
+            cores_per_node=4,
+            walltime=2.0,
+            allocations=MOCK_ALLOCATIONS,
+        )
+
+    assert manager.experiments == {}
+    mock_experiment_generator.assert_not_called()
+
+
+@mock.patch("access.profiling.payu_manager.ExperimentGenerator")
+def test_generate_scaling_experiments_retries_after_a_failed_generation(mock_experiment_generator, manager):
+    """Test that the experiments of a failed generation are offered to the generator again.
+
+    Nothing was registered, so the duplicate check has no reason to skip them. That is what makes a generation
+    that failed for a fixable reason recoverable by calling the method a second time.
+    """
+
+    manager.set_control("https://example.com/repo", "commit")
+    mock_experiment_generator.return_value.run.side_effect = RuntimeError("the generator gave up")
+    with pytest.raises(RuntimeError):
+        manager.generate_scaling_experiments(
+            num_nodes_list=[1.0], control_options={}, cores_per_node=4, walltime=2.0, allocations=MOCK_ALLOCATIONS
+        )
+
+    mock_experiment_generator.return_value.run.side_effect = None
+    mock_experiment_generator.reset_mock()
+
+    manager.generate_scaling_experiments(
+        num_nodes_list=[1.0], control_options={}, cores_per_node=4, walltime=2.0, allocations=MOCK_ALLOCATIONS
+    )
+
+    perturbations = mock_experiment_generator.call_args[0][0]["Perturbation_Experiment"]
+    assert len(perturbations) == 4
+    assert len(manager.experiments) == 4
+    for block in perturbations.values():
+        branch = block["branches"][0]
+        assert manager.experiments[branch].path == Path("/fake/test_path") / branch / "config"
+
+
+@mock.patch("access.profiling.payu_manager.ExperimentGenerator")
+def test_generate_scaling_experiments_registers_only_after_generation(mock_experiment_generator, manager):
+    """Test that nothing is registered while the generator is still working."""
+
+    manager.set_control("https://example.com/repo", "commit")
+    seen = {}
+
+    def record_what_the_manager_holds():
+        seen["experiments"] = dict(manager.experiments)
+
+    mock_experiment_generator.return_value.run.side_effect = record_what_the_manager_holds
+
+    manager.generate_scaling_experiments(
+        num_nodes_list=[1.0], control_options={}, cores_per_node=4, walltime=2.0, allocations=MOCK_ALLOCATIONS
+    )
+
+    assert seen["experiments"] == {}, "the experiments are registered only once the generator has returned"
+    assert len(manager.experiments) == 4
+
+
+@mock.patch("access.profiling.payu_manager.ExperimentGenerator")
 def test_generate_scaling_experiments_no_layouts(mock_experiment_generator, manager):
     """Test that generate_scaling_experiments does nothing when no layout can be found."""
 
@@ -610,6 +715,93 @@ def test_run_experiments(mock_experiment_runner, manager):
         mock_experiment_runner.reset_mock()
         manager.run_experiments()
         mock_experiment_runner.assert_not_called()
+
+
+@mock.patch("access.profiling.payu_manager.ExperimentRunner")
+def test_run_experiments_marks_the_submitted_experiments_running(mock_experiment_runner, manager):
+    """Test that the experiments handed to the runner are the ones whose status advances."""
+
+    experiments = {
+        "branch1": _experiment(Path("branch1"), ProfilingExperimentStatus.NEW),
+        "branch2": _experiment(Path("branch2"), ProfilingExperimentStatus.NEW),
+        "branch3": _experiment(Path("branch3"), ProfilingExperimentStatus.DONE),
+    }
+    with mock.patch.dict(manager.experiments, experiments):
+        manager.run_experiments()
+
+        assert manager.experiments["branch1"].status == ProfilingExperimentStatus.RUNNING
+        assert manager.experiments["branch2"].status == ProfilingExperimentStatus.RUNNING
+        assert manager.experiments["branch3"].status == ProfilingExperimentStatus.DONE
+
+
+@mock.patch("access.profiling.payu_manager.ExperimentRunner")
+def test_run_experiments_leaves_experiments_new_when_submission_fails(mock_experiment_runner, manager):
+    """Test that a failed submission advances no status.
+
+    RUNNING would stick: parse_status reports nothing about an experiment that never ran, so update_statuses
+    would leave it be and run_experiments would never offer it to the runner again.
+    """
+
+    mock_experiment_runner.return_value.run.side_effect = RuntimeError("the runner gave up")
+    experiments = {
+        "branch1": _experiment(Path("branch1"), ProfilingExperimentStatus.NEW),
+        "branch2": _experiment(Path("branch2"), ProfilingExperimentStatus.NEW),
+    }
+    with (
+        mock.patch.dict(manager.experiments, experiments),
+        pytest.raises(RuntimeError, match="the runner gave up"),
+    ):
+        manager.run_experiments()
+
+    assert experiments["branch1"].status == ProfilingExperimentStatus.NEW
+    assert experiments["branch2"].status == ProfilingExperimentStatus.NEW
+
+
+@mock.patch("access.profiling.payu_manager.ExperimentRunner")
+def test_run_experiments_retries_after_a_failed_submission(mock_experiment_runner, manager):
+    """Test that experiments a failed submission left behind are offered to the runner again.
+
+    Submitting them a second time is safe, which is why they are left NEW: the runner leaves a branch it has
+    already cloned alone, refuses to submit an experiment whose job is still live, and tops each one up to
+    nruns rather than starting it afresh.
+    """
+
+    mock_experiment_runner.return_value.run.side_effect = RuntimeError("the runner gave up")
+    experiments = {
+        "branch1": _experiment(Path("branch1"), ProfilingExperimentStatus.NEW),
+        "branch2": _experiment(Path("branch2"), ProfilingExperimentStatus.NEW),
+    }
+    with mock.patch.dict(manager.experiments, experiments):
+        with pytest.raises(RuntimeError):
+            manager.run_experiments()
+
+        mock_experiment_runner.return_value.run.side_effect = None
+        mock_experiment_runner.reset_mock()
+
+        manager.run_experiments()
+
+        assert mock_experiment_runner.call_args[0][0]["running_branches"] == ["branch1", "branch2"]
+        assert manager.experiments["branch1"].status == ProfilingExperimentStatus.RUNNING
+        assert manager.experiments["branch2"].status == ProfilingExperimentStatus.RUNNING
+
+
+@mock.patch("access.profiling.payu_manager.ExperimentRunner")
+def test_run_experiments_marks_them_running_only_after_the_runner_returns(mock_experiment_runner, manager):
+    """Test that nothing is marked RUNNING while the runner is still submitting."""
+
+    seen = {}
+
+    def record_the_statuses():
+        seen["statuses"] = {name: exp.status for name, exp in manager.experiments.items()}
+
+    mock_experiment_runner.return_value.run.side_effect = record_the_statuses
+
+    experiments = {"branch1": _experiment(Path("branch1"), ProfilingExperimentStatus.NEW)}
+    with mock.patch.dict(manager.experiments, experiments):
+        manager.run_experiments()
+
+        assert seen["statuses"] == {"branch1": ProfilingExperimentStatus.NEW}
+        assert manager.experiments["branch1"].status == ProfilingExperimentStatus.RUNNING
 
 
 @mock.patch.object(ProfilingManager, "archive_experiments")
