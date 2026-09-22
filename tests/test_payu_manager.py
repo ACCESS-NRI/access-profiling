@@ -13,7 +13,12 @@ from access.config.parallel_domain import Domain
 
 from access.profiling.experiment import ProfilingLog
 from access.profiling.manager import ProfilingManager
-from access.profiling.payu_manager import PayuManager, ProfilingExperiment, ProfilingExperimentStatus
+from access.profiling.payu_manager import (
+    PayuManager,
+    ProfilingExperiment,
+    ProfilingExperimentStatus,
+    _walltime_string,
+)
 
 # A model that has nothing to do with any real one, so that the layout machinery of PayuManager is tested without
 # involving the specifics of a particular model. On 4 cores split evenly it has exactly 4 layouts, which differ only
@@ -181,6 +186,41 @@ class TestRequestedNcpus:
     def test_the_node_size_defaults_to_payus_own(self):
         # Nothing declares a node size, so 48 applies and 100 cores become three nodes' worth.
         assert PayuManager._requested_ncpus({"ncpus": 100}) == 144
+
+
+class TestWalltimeString:
+    """The HH:MM:SS string a walltime in hours is written to config.yaml as."""
+
+    @pytest.mark.parametrize(
+        ("hours", "expected"),
+        [
+            (2.0, "2:00:00"),
+            (1.5, "1:30:00"),
+            (0.25, "0:15:00"),
+            (0.0, "0:00:00"),
+        ],
+    )
+    def test_whole_seconds(self, hours, expected):
+        assert _walltime_string(hours) == expected
+
+    @pytest.mark.parametrize(
+        ("hours", "expected"),
+        [
+            (0.12345, "0:07:24"),  # 444.42 seconds, down to the nearest second
+            (2 / 7, "0:17:09"),  # 1028.57 seconds, up to the nearest second
+            (1.0001, "1:00:00"),  # 3600.36 seconds
+        ],
+    )
+    def test_an_hour_count_with_a_fraction_of_a_second_is_rounded(self, hours, expected):
+        """A timedelta would keep the fraction, leaving something no scheduler reads."""
+
+        assert _walltime_string(hours) == expected
+
+    @pytest.mark.parametrize(("hours", "expected"), [(24.0, "24:00:00"), (25.0, "25:00:00"), (48.5, "48:30:00")])
+    def test_a_day_or_more_stays_in_hours(self, hours, expected):
+        """A timedelta would write "1 day, 1:00:00" here, which no scheduler reads either."""
+
+        assert _walltime_string(hours) == expected
 
 
 class TestRecordedNcpus:
