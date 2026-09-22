@@ -199,6 +199,19 @@ def test_profiling_experiment_archived_with_runs(mock_tarfile_open):
         assert run_dir.parent == experiment_dir.parent
 
 
+def test_profiling_experiment_archive_unknown_status():
+    """Test that a status archive() cannot judge is refused rather than archived.
+
+    Every member of the enum is accounted for, so this guards a member added later without deciding
+    whether it may be archived - which would otherwise fall through and archive it.
+    """
+
+    exp = ProfilingExperiment(path=Path("/fake/path"))
+    exp.status = "not a status"  # pyright: ignore[reportAttributeAccessIssue]
+    with pytest.raises(ValueError, match="unknown status"):
+        exp.archive(Path("/fake/archive"))
+
+
 @mock.patch("access.profiling.experiment.tarfile.open")
 def test_profiling_experiment_archive_not_done(mock_open, caplog):
     """Test the archive method of ProfilingExperiment for non-DONE statuses."""
