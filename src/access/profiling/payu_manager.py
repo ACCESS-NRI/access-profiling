@@ -563,13 +563,63 @@ class PayuManager(ProfilingManager, ABC):
             return None
 
     @staticmethod
+    def _attempt_order(job_file: Path) -> tuple[int, float]:
+        """Orders the attempts at one run of an experiment, the earliest first.
+
+        Payu names each job file after the scheduler job that produced it, as in "149764665.gadi-pbs", or
+        after the time the run started where there was no scheduler to name it, as in "20260924120000".
+        Both count up with every attempt, so the number each name starts with is what tells them apart.
+
+        A name that starts with no number at all is ordered by when the file was last written, and after
+        every name that does, since there is nothing in it to order by and no reason to prefer it. A file
+        that has gone by the time it is asked about sorts first: Payu removes the job file of a queued job
+        it finds has already exited, so a listing can outlive what it lists.
+
+        Args:
+            job_file (Path): Path to a Payu job file.
+
+        Returns:
+            tuple[int, float]: Sort key placing the latest attempt last.
+        """
+        leading = job_file.name.split(".")[0]
+        if leading.isdigit():
+            return (int(leading), 0.0)
+
+        try:
+            return (-1, job_file.stat().st_mtime)
+        except OSError:
+            return (-1, 0.0)
+
+    @staticmethod
+    def _run_job_files(path: Path) -> dict[int, Path]:
+        """Returns the job file of the latest attempt at each run of an experiment, keyed by run number.
+
+        Payu writes one job file per attempt, under a directory named after the run number. A run that
+        failed archives no output, so the number it was does not move on and submitting it again writes a
+        second file beside the first rather than replacing it - the new job having a new name. Only the
+        latest attempt says where the experiment now stands, and the earlier ones are what it was told
+        before, so they are passed over here rather than left to the order a directory happens to be read in.
+
+        Args:
+            path (Path): Path to the Payu experiment directory.
+
+        Returns:
+            dict[int, Path]: The latest attempt at each run, keyed by the run number.
+        """
+        # Only *.json: Payu leaves its lock files and, when a lock times out, timestamped .tmp copies beside
+        # them. Earliest first, so that the last file recorded for a run is the one left standing.
+        latest: dict[int, Path] = {}
+        for job_file in sorted(path.glob("archive/payu_jobs/*/run/*.json"), key=PayuManager._attempt_order):
+            latest[int(job_file.parts[-3])] = job_file
+        return latest
+
+    @staticmethod
     def _latest_run_job(path: Path) -> dict | None:
         """Returns what Payu recorded for the most recent run of an experiment, if it recorded anything.
 
-        Payu writes one job file per run, under a directory named after the run number, and fills it in as the
-        run proceeds: the scheduler's job information, then the model's return code, then its own. The most
-        recent run is the one asked about here - an experiment run several times keeps a file per run, and it
-        is the newest that says where the experiment now stands.
+        Payu fills each job file in as the run proceeds: the scheduler's job information, then the model's
+        return code, then its own. The most recent run is the one asked about here - an experiment run
+        several times keeps a file for each - and, of the attempts at that run, the most recent of those.
 
         Every way of not finding it is a missing answer rather than an error, logged at DEBUG: an experiment
         archived before Payu recorded job information, one that has not run yet, and a file that cannot be
@@ -581,14 +631,12 @@ class PayuManager(ProfilingManager, ABC):
         Returns:
             dict | None: The parsed job file of the most recent run, or None if there is none to read.
         """
-        # Payu names the directory holding each job file after the run number, as in profiling_logs(). Only
-        # *.json: Payu leaves its lock files and, when a lock times out, timestamped .tmp copies beside them.
-        job_files = sorted(path.glob("archive/payu_jobs/*/run/*.json"), key=lambda p: int(p.parts[-3]))
+        job_files = PayuManager._run_job_files(path)
         if not job_files:
             logger.debug(f"No Payu job file found under {path / 'archive/payu_jobs'}.")
             return None
 
-        job_file = job_files[-1]
+        job_file = job_files[max(job_files)]
         try:
             return json.loads(job_file.read_text())
         except (OSError, json.JSONDecodeError) as error:
@@ -692,9 +740,10 @@ class PayuManager(ProfilingManager, ABC):
         if not archive.is_dir():
             raise FileNotFoundError(f"Directory {archive} does not exist!")
 
-        # Parse payu json profiling data if available. Payu names the directory holding each log after the run number.
-        for json_path in archive.glob("payu_jobs/*/run/*.json"):
-            logs.setdefault("payu", {})[int(json_path.parts[-3])] = ProfilingLog(json_path, PayuJSONProfilingParser())
+        # Parse payu json profiling data if available. Payu names the directory holding each log after the run
+        # number, and keeps one log per attempt at it; the latest attempt is the one that ran.
+        for run, json_path in self._run_job_files(path).items():
+            logs.setdefault("payu", {})[run] = ProfilingLog(json_path, PayuJSONProfilingParser())
 
         # Get the logs of each component of every output directory. Payu names these outputNNN, NNN being the run
         # number, so output003 holds the same run as payu_jobs/3.
