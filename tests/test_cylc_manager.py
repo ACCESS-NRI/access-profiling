@@ -446,6 +446,34 @@ def test_run_experiments_only_runs_new_experiments(mock_subprocess, manager):
 
 
 @mock.patch("access.profiling.cylc_manager.subprocess.run")
+def test_run_experiments_retries_failed_when_asked(mock_subprocess, manager):
+    """A suite whose run failed is offered again where retry_failed asks for it."""
+
+    manager.experiments["failed"] = ProfilingExperiment(path=Path("/fake/failed"))
+    manager.experiments["failed"].status = ProfilingExperimentStatus.FAILED
+    manager.experiments["done"] = ProfilingExperiment(path=Path("/fake/done"))
+    manager.experiments["done"].status = ProfilingExperimentStatus.DONE
+
+    manager.run_experiments(retry_failed=True)
+
+    mock_subprocess.assert_called_once_with(
+        ["rose", "suite-run"], cwd=Path("/fake/failed"), check=True, capture_output=True, text=True
+    )
+    assert manager.experiments["failed"].status == ProfilingExperimentStatus.RUNNING
+
+
+@mock.patch("access.profiling.cylc_manager.subprocess.run")
+def test_run_experiments_leaves_failed_alone_by_default(mock_subprocess, manager):
+    manager.experiments["failed"] = ProfilingExperiment(path=Path("/fake/failed"))
+    manager.experiments["failed"].status = ProfilingExperimentStatus.FAILED
+
+    manager.run_experiments()
+
+    mock_subprocess.assert_not_called()
+    assert manager.experiments["failed"].status == ProfilingExperimentStatus.FAILED
+
+
+@mock.patch("access.profiling.cylc_manager.subprocess.run")
 def test_run_experiments_forwards_output_with_prefix(mock_subprocess, caplog, manager):
     """stdout and stderr lines should be logged with the experiment name as prefix."""
 

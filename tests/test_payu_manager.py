@@ -3,6 +3,7 @@
 
 import json
 import logging
+import subprocess
 from pathlib import Path
 from unittest import mock
 
@@ -476,6 +477,137 @@ def test_generate_scaling_experiments_duplicates(mock_experiment_generator, mana
     mock_experiment_generator.assert_not_called()
 
 
+class TestRegenerateFailed:
+    """Generating an experiment again after its run failed, so that a correction reaches its branch."""
+
+    @staticmethod
+    def _generate(manager, walltime=2.0, **kwargs) -> None:
+        manager.generate_scaling_experiments(
+            num_nodes_list=[1.0],
+            control_options={},
+            cores_per_node=4,
+            walltime=walltime,
+            allocations=MOCK_ALLOCATIONS,
+            **kwargs,
+        )
+
+    @staticmethod
+    def _fail(manager, branch: str) -> None:
+        """Marks one experiment failed, at a path parse_status can say nothing about."""
+
+        manager.experiments[branch] = _experiment(Path("/fake/failed"), ProfilingExperimentStatus.FAILED)
+
+    @mock.patch("access.profiling.payu_manager.ExperimentGenerator")
+    def test_a_failed_experiment_is_generated_again(self, mock_experiment_generator, manager):
+        manager.set_control("https://example.com/repo", "commit")
+        self._generate(manager)
+        branch = sorted(manager.experiments)[0]
+        self._fail(manager, branch)
+        mock_experiment_generator.reset_mock()
+
+        self._generate(manager, regenerate_failed=True)
+
+        perturbations = mock_experiment_generator.call_args[0][0]["Perturbation_Experiment"]
+        assert [block["branches"] for block in perturbations.values()] == [[branch]]
+
+    @mock.patch("access.profiling.payu_manager.ExperimentGenerator")
+    def test_it_carries_the_arguments_of_this_call(self, mock_experiment_generator, manager):
+        """The point of regenerating: the block is worked out afresh, so a correction is what lands."""
+
+        manager.set_control("https://example.com/repo", "commit")
+        self._generate(manager, walltime=2.0)
+        branch = sorted(manager.experiments)[0]
+        self._fail(manager, branch)
+
+        self._generate(manager, walltime=3.5, regenerate_failed=True)
+
+        (block,) = mock_experiment_generator.call_args[0][0]["Perturbation_Experiment"].values()
+        assert block["config.yaml"]["walltime"] == "3:30:00"
+
+    @mock.patch("access.profiling.payu_manager.ExperimentGenerator")
+    def test_it_is_not_generated_again_without_being_asked(self, mock_experiment_generator, manager):
+        manager.set_control("https://example.com/repo", "commit")
+        self._generate(manager)
+        self._fail(manager, sorted(manager.experiments)[0])
+        mock_experiment_generator.reset_mock()
+
+        self._generate(manager)
+
+        mock_experiment_generator.assert_not_called()
+
+    @mock.patch("access.profiling.payu_manager.ExperimentGenerator")
+    @pytest.mark.parametrize(
+        "status",
+        [ProfilingExperimentStatus.NEW, ProfilingExperimentStatus.RUNNING, ProfilingExperimentStatus.DONE],
+    )
+    def test_only_a_failed_experiment_is_generated_again(self, mock_experiment_generator, manager, status):
+        """A running one would have its branch rewritten under a live job, a finished one under its results."""
+
+        manager.set_control("https://example.com/repo", "commit")
+        self._generate(manager)
+        branch = sorted(manager.experiments)[0]
+        manager.experiments[branch] = _experiment(Path("/fake/other"), status)
+        mock_experiment_generator.reset_mock()
+
+        self._generate(manager, regenerate_failed=True)
+
+        mock_experiment_generator.assert_not_called()
+
+    @mock.patch("access.profiling.payu_manager.ExperimentGenerator")
+    def test_it_keeps_the_experiment_it_already_held(self, mock_experiment_generator, manager):
+        """Status included: the record of the failed run is still on disk, so a reset would not survive."""
+
+        manager.set_control("https://example.com/repo", "commit")
+        self._generate(manager)
+        branch = sorted(manager.experiments)[0]
+        self._fail(manager, branch)
+        failed = manager.experiments[branch]
+
+        self._generate(manager, regenerate_failed=True)
+
+        assert manager.experiments[branch] is failed
+        assert failed.status == ProfilingExperimentStatus.FAILED
+        assert len(manager.experiments) == 4
+
+    @mock.patch("access.profiling.payu_manager.ExperimentGenerator")
+    def test_it_is_generated_once_across_node_counts(self, mock_experiment_generator, manager):
+        """The same layout is regularly valid at two sizes, and regenerating it twice would be a double edit."""
+
+        manager.set_control("https://example.com/repo", "commit")
+        self._generate(manager)
+        branch = sorted(manager.experiments)[0]
+        self._fail(manager, branch)
+        mock_experiment_generator.reset_mock()
+
+        manager.generate_scaling_experiments(
+            num_nodes_list=[1.0, 1.0],
+            control_options={},
+            cores_per_node=4,
+            walltime=2.0,
+            allocations=MOCK_ALLOCATIONS,
+            regenerate_failed=True,
+        )
+
+        perturbations = mock_experiment_generator.call_args[0][0]["Perturbation_Experiment"]
+        assert [block["branches"] for block in perturbations.values()] == [[branch]]
+
+    @mock.patch("access.profiling.payu_manager.ExperimentGenerator")
+    def test_a_regenerated_experiment_survives_a_failed_generation(self, mock_experiment_generator, manager, caplog):
+        """It was already held, so there is nothing to withhold - only how far the generator got is unknown."""
+
+        manager.set_control("https://example.com/repo", "commit")
+        self._generate(manager)
+        branch = sorted(manager.experiments)[0]
+        self._fail(manager, branch)
+        mock_experiment_generator.return_value.run.side_effect = RuntimeError("generation failed")
+
+        with caplog.at_level(logging.WARNING), pytest.raises(RuntimeError, match="generation failed"):
+            self._generate(manager, regenerate_failed=True)
+
+        assert branch in manager.experiments
+        assert branch in caplog.text
+
+
 @mock.patch("access.profiling.payu_manager.ExperimentGenerator")
 def test_generate_scaling_experiments_duplicates_across_node_counts(mock_experiment_generator, manager):
     """Test that a layout valid at two different node counts only generates one experiment.
@@ -714,6 +846,104 @@ def test_run_experiments(mock_experiment_runner, manager):
     ):
         mock_experiment_runner.reset_mock()
         manager.run_experiments()
+        mock_experiment_runner.assert_not_called()
+
+
+class TestRetryFailed:
+    """Running an experiment again after its run failed."""
+
+    @staticmethod
+    def _archived(tmp_path: Path, branch: str, outputs: int = 0) -> ProfilingExperiment:
+        """A failed experiment on disk, with as many archived output directories as asked for."""
+
+        path = tmp_path / branch
+        for run in range(outputs):
+            (path / "archive" / f"output{run:03d}").mkdir(parents=True)
+        path.mkdir(parents=True, exist_ok=True)
+        return _experiment(path, ProfilingExperimentStatus.FAILED)
+
+    @mock.patch("access.profiling.payu_manager.ExperimentRunner")
+    def test_a_failed_experiment_is_submitted_when_asked(self, mock_experiment_runner, manager):
+        experiments = {
+            "branch1": _experiment(Path("branch1"), ProfilingExperimentStatus.FAILED),
+            "branch2": _experiment(Path("branch2"), ProfilingExperimentStatus.NEW),
+            "branch3": _experiment(Path("branch3"), ProfilingExperimentStatus.DONE),
+        }
+        with mock.patch.dict(manager.experiments, experiments):
+            manager.run_experiments(retry_failed=True)
+
+        assert mock_experiment_runner.call_args[0][0]["running_branches"] == ["branch1", "branch2"]
+
+    @mock.patch("access.profiling.payu_manager.ExperimentRunner")
+    def test_it_is_not_submitted_without_being_asked(self, mock_experiment_runner, manager):
+        experiments = {"branch1": _experiment(Path("branch1"), ProfilingExperimentStatus.FAILED)}
+        with mock.patch.dict(manager.experiments, experiments):
+            manager.run_experiments()
+
+        mock_experiment_runner.assert_not_called()
+
+    @mock.patch("access.profiling.payu_manager.ExperimentRunner")
+    def test_a_retried_experiment_is_marked_running(self, mock_experiment_runner, manager):
+        experiments = {"branch1": _experiment(Path("branch1"), ProfilingExperimentStatus.FAILED)}
+        with mock.patch.dict(manager.experiments, experiments):
+            manager.run_experiments(retry_failed=True)
+            assert experiments["branch1"].status == ProfilingExperimentStatus.RUNNING
+
+    @mock.patch("access.profiling.payu_manager.subprocess.run")
+    @mock.patch("access.profiling.payu_manager.ExperimentRunner")
+    def test_one_that_archived_output_is_swept_first(self, mock_experiment_runner, mock_run, manager, tmp_path):
+        """The runner counts what is archived against the runs wanted, so it would submit nothing."""
+
+        experiments = {"branch1": self._archived(tmp_path, "branch1", outputs=1)}
+        with mock.patch.dict(manager.experiments, experiments):
+            manager.run_experiments(retry_failed=True)
+
+        mock_run.assert_called_once_with(
+            ["payu", "sweep", "--hard"],
+            cwd=tmp_path / "branch1",
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        mock_experiment_runner.assert_called_once()
+
+    @mock.patch("access.profiling.payu_manager.subprocess.run")
+    @mock.patch("access.profiling.payu_manager.ExperimentRunner")
+    def test_one_that_archived_nothing_is_left_alone(self, mock_experiment_runner, mock_run, manager, tmp_path):
+        """There is nothing for the runner to count, so it submits the experiment as it stands."""
+
+        experiments = {"branch1": self._archived(tmp_path, "branch1", outputs=0)}
+        with mock.patch.dict(manager.experiments, experiments):
+            manager.run_experiments(retry_failed=True)
+
+        mock_run.assert_not_called()
+        assert mock_experiment_runner.call_args[0][0]["running_branches"] == ["branch1"]
+
+    @mock.patch("access.profiling.payu_manager.subprocess.run")
+    @mock.patch("access.profiling.payu_manager.ExperimentRunner")
+    def test_a_new_experiment_is_never_swept(self, mock_experiment_runner, mock_run, manager, tmp_path):
+        """Whatever is archived beside it belongs to something else; it has not run."""
+
+        path = tmp_path / "branch1"
+        (path / "archive" / "output000").mkdir(parents=True)
+        experiments = {"branch1": _experiment(path, ProfilingExperimentStatus.NEW)}
+        with mock.patch.dict(manager.experiments, experiments):
+            manager.run_experiments(retry_failed=True)
+
+        mock_run.assert_not_called()
+
+    @mock.patch("access.profiling.payu_manager.subprocess.run")
+    @mock.patch("access.profiling.payu_manager.ExperimentRunner")
+    def test_a_sweep_that_fails_submits_nothing(self, mock_experiment_runner, mock_run, manager, tmp_path):
+        """Better to stop than to call an experiment running when the runner was never reached."""
+
+        mock_run.side_effect = subprocess.CalledProcessError(1, ["payu", "sweep", "--hard"])
+        experiments = {"branch1": self._archived(tmp_path, "branch1", outputs=1)}
+        with mock.patch.dict(manager.experiments, experiments):
+            with pytest.raises(subprocess.CalledProcessError):
+                manager.run_experiments(retry_failed=True)
+            assert experiments["branch1"].status == ProfilingExperimentStatus.FAILED
+
         mock_experiment_runner.assert_not_called()
 
 
