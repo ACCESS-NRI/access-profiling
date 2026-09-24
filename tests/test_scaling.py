@@ -6,9 +6,15 @@ from unittest import mock
 import pint
 import pytest
 import xarray as xr
+from matplotlib.figure import Figure
 
 from access.profiling.metrics import count, tavg
-from access.profiling.scaling import parallel_efficiency, parallel_speedup, plot_scaling_metrics
+from access.profiling.scaling import (
+    parallel_efficiency,
+    parallel_speedup,
+    plot_component_scaling,
+    plot_scaling_metrics,
+)
 
 
 @pytest.fixture()
@@ -164,3 +170,94 @@ def test_plot_scaling_metrics_efficiency_ylim_covers_superlinear_efficiency(mock
     ax2 = fig.axes[1]
 
     assert ax2.get_ylim()[1] >= 1.1 * 125  # true max efficiency is 125%; default ylim must cover it
+
+
+@pytest.fixture()
+def component_scaling_data():
+    """Two components, each with its own core counts, as the manager hands them over.
+
+    The ocean is given 60, 120 and 240 cores and the sea ice 30, 60 and 120, so the two sit at different
+    points of one axis - which is the whole difference between this plot and plot_scaling_metrics.
+    """
+    stats = []
+    for component, cores, regions in [
+        ("MOM6", [60, 120, 240], ["Ocean dynamics", "Ocean"]),
+        ("CICE6", [30, 60, 120], ["Total"]),
+    ]:
+        datasets = [
+            xr.Dataset(
+                data_vars={
+                    tavg: xr.DataArray([[600.0 * 60 / n for _ in regions]], dims=["ncpus", "region"]).pint.quantify(
+                        "seconds"
+                    )
+                },
+                coords={"region": regions, "ncpus": [n]},
+            )
+            for n in cores
+        ]
+        stats.append((component, xr.concat(datasets, dim="ncpus")))
+    return stats
+
+
+class TestPlotComponentScaling:
+    """The walltime of a component's regions against the cores that component was given."""
+
+    def test_one_line_per_region_of_every_component(self, component_scaling_data):
+        fig = plot_component_scaling(component_scaling_data, tavg, show=False)
+        assert isinstance(fig, Figure)
+        assert len(fig.axes[0].lines) == 3
+
+    def test_the_lines_name_the_component_and_the_region(self, component_scaling_data):
+        """Region names are only unique within one log, so the component has to be said as well."""
+
+        fig = plot_component_scaling(component_scaling_data, tavg, show=False)
+        labels = [line.get_label() for line in fig.axes[0].lines]
+        assert labels == ["MOM6: Ocean dynamics", "MOM6: Ocean", "CICE6: Total"]
+
+    def test_each_component_carries_its_own_cores(self, component_scaling_data):
+        fig = plot_component_scaling(component_scaling_data, tavg, show=False)
+        by_label = {line.get_label(): list(line.get_xdata()) for line in fig.axes[0].lines}
+        assert by_label["MOM6: Ocean"] == [60, 120, 240]
+        assert by_label["CICE6: Total"] == [30, 60, 120]
+
+    def test_the_axes_are_labelled_from_the_metric(self, component_scaling_data):
+        fig = plot_component_scaling(component_scaling_data, tavg, show=False)
+        ax = fig.axes[0]
+        assert tavg.name in ax.get_ylabel()
+        assert str(tavg.units) in ax.get_ylabel()
+        assert ax.get_title() == tavg.description
+
+    def test_the_default_x_label_says_whose_cores_they_are(self, component_scaling_data):
+        """ "ncpus" on its own would read as the whole job's, which is the other plot's question."""
+
+        fig = plot_component_scaling(component_scaling_data, tavg, show=False)
+        assert fig.axes[0].get_xlabel() == "Cores assigned to the component"
+
+    def test_a_custom_x_label(self, component_scaling_data):
+        fig = plot_component_scaling(component_scaling_data, tavg, xlabel="Ocean cores", show=False)
+        assert fig.axes[0].get_xlabel() == "Ocean cores"
+
+    @mock.patch("matplotlib.pyplot.show", autospec=True)
+    def test_it_is_shown_when_asked(self, mock_show, component_scaling_data):
+        plot_component_scaling(component_scaling_data, tavg)
+        mock_show.assert_called_once()
+
+    @mock.patch("matplotlib.pyplot.show", autospec=True)
+    def test_it_is_not_shown_otherwise(self, mock_show, component_scaling_data):
+        plot_component_scaling(component_scaling_data, tavg, show=False)
+        mock_show.assert_not_called()
+
+    def test_one_log_read_twice_keeps_both(self, component_scaling_data):
+        """A log holding two components' regions is read once per component, and neither is dropped."""
+
+        (mom6, ocean), _ = component_scaling_data
+        repeated = [(mom6, ocean), (mom6, ocean.isel(region=[0]))]
+
+        fig = plot_component_scaling(repeated, tavg, show=False)
+
+        assert len(fig.axes[0].lines) == 3, "two regions from the first, one from the second"
+        assert [line.get_label() for line in fig.axes[0].lines] == [
+            "MOM6: Ocean dynamics",
+            "MOM6: Ocean",
+            "MOM6: Ocean dynamics",
+        ]

@@ -320,3 +320,88 @@ def test_esm16_generate_scaling_experiments(mock_experiment_generator, esm16):
     assert len(released) == 1, "The released PI control layout should generate exactly one experiment."
     assert released[0]["config.yaml"]["walltime"] == "2:00:00"
     assert PI_CONTROL_BRANCH in esm16.experiments
+
+
+def _config_text(submodels: list[dict]) -> str:
+    """A Payu configuration declaring the given submodels."""
+
+    lines = ["model: access", "submodels:"]
+    for submodel in submodels:
+        lines.append(f"  - name: {submodel['name']}")
+        if "ncpus" in submodel:
+            lines.append(f"    ncpus: {submodel['ncpus']}")
+    return "\n".join(lines) + "\n"
+
+
+class TestESM16ParseLayout:
+    """Reading back what an ACCESS-ESM1.6 experiment gave each of its components."""
+
+    @staticmethod
+    def _config(tmp_path: Path, submodels: list[dict]) -> Path:
+        """Writes a Payu configuration declaring the given submodels, and returns its directory."""
+
+        lines = ["model: access", "submodels:"]
+        for submodel in submodels:
+            lines.append(f"  - name: {submodel['name']}")
+            if "ncpus" in submodel:
+                lines.append(f"    ncpus: {submodel['ncpus']}")
+        (tmp_path / "config.yaml").write_text("\n".join(lines) + "\n")
+        return tmp_path
+
+    def test_it_reads_every_component(self, esm16, tmp_path):
+        path = self._config(
+            tmp_path,
+            [
+                {"name": "atmosphere", "ncpus": 256},
+                {"name": "ocean", "ncpus": 240},
+                {"name": "ice", "ncpus": 12},
+            ],
+        )
+
+        layout = esm16.parse_layout(path)
+
+        cores = {sub.name: sub.n_cores for sub in layout.sub_layouts}
+        assert cores == {ESM16_UM7_NAME: 256, ESM16_MOM5_NAME: 240, ESM16_CICE5_NAME: 12}
+        # One thread per rank throughout this model, and the root spends what its components spend.
+        assert all(sub.threads_per_rank == 1 and sub.n_ranks == sub.n_cores for sub in layout.sub_layouts)
+        assert layout.n_cores == 508
+        assert layout.idle_cores == 0
+
+    def test_the_cores_agree_with_what_generation_wrote(self, esm16, pi_control_layout):
+        """The round trip that matters: what layout_config_changes writes is what this reads back."""
+
+        changes = esm16.layout_config_changes(pi_control_layout)
+        (submodels,) = changes["config.yaml"]["submodels"]
+        names = ["atmosphere", "ocean", "ice"]
+        written = [{"name": name, **submodel} for name, submodel in zip(names, submodels, strict=True)]
+
+        with mock.patch.object(Path, "read_text", return_value=_config_text(written)):
+            layout = esm16.parse_layout(Path("/fake/expt"))
+
+        assert {sub.name: sub.n_cores for sub in layout.sub_layouts} == {
+            sub.name: sub.n_cores for sub in pi_control_layout.sub_layouts
+        }
+
+    def test_a_submodel_it_does_not_know_is_left_out(self, esm16, tmp_path):
+        path = self._config(tmp_path, [{"name": "atmosphere", "ncpus": 256}, {"name": "something-else", "ncpus": 8}])
+
+        layout = esm16.parse_layout(path)
+
+        assert [sub.name for sub in layout.sub_layouts] == [ESM16_UM7_NAME]
+
+    def test_a_submodel_stating_no_cores_is_left_out(self, esm16, tmp_path):
+        path = self._config(tmp_path, [{"name": "atmosphere", "ncpus": 256}, {"name": "ice"}])
+
+        layout = esm16.parse_layout(path)
+
+        assert [sub.name for sub in layout.sub_layouts] == [ESM16_UM7_NAME]
+
+    def test_a_configuration_naming_no_component_at_all(self, esm16, tmp_path):
+        """Nothing to say rather than a layout with nothing in it, which would not be constructible."""
+
+        path = self._config(tmp_path, [{"name": "something-else", "ncpus": 8}])
+        assert esm16.parse_layout(path) is None
+
+    def test_a_configuration_with_no_submodels(self, esm16, tmp_path):
+        (tmp_path / "config.yaml").write_text("model: access\n")
+        assert esm16.parse_layout(tmp_path) is None

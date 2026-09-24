@@ -9,6 +9,7 @@ from enum import Enum
 from pathlib import Path
 
 import xarray as xr
+from access.config.parallel_component import ComponentLayout
 
 from access.profiling.parser import ProfilingParser, flatten_hierarchical
 
@@ -155,21 +156,31 @@ class ProfilingExperiment:
     to read it depends on the workflow engine, so ncpus is filled in on demand by
     ProfilingManager._ncpus() rather than at construction.
 
+    The layout is kept here for the same reason, and arrives one of two ways. An experiment generated
+    from a layout search is given the layout it was generated from, which is the whole of it, grids
+    included. One this manager did not generate - archived, or added from a directory - is read back from
+    its configuration on demand by ProfilingManager._layout(), which recovers what each component was
+    given rather than how it divided its domain.
+
     Args:
         path (Path): Path to the experiment directory.
         run_path (Path | None): Path to a separate runs directory. If None, runs are assumed to be
             inside path. When provided, the runs directory is also traversed during archival.
             path contents are stored under experiment/ and run_path contents under runs/.
+        layout (ComponentLayout | None): Layout the experiment runs, where it is known at construction.
+            None (the default) leaves it to be read back from the configuration when it is asked for.
     """
 
     path: Path  # Path to the experiment directory
     run_path: Path | None  # Path to a separate runs directory, or None
     status: ProfilingExperimentStatus = ProfilingExperimentStatus.NEW  # Status of the experiment
     ncpus: int | None = None  # CPUs the experiment occupied, or None while that is still unknown
+    layout: ComponentLayout | None = None  # Layout the experiment runs, or None while that is unknown
 
-    def __init__(self, path: Path, run_path: Path | None = None) -> None:
+    def __init__(self, path: Path, run_path: Path | None = None, layout: ComponentLayout | None = None) -> None:
         self.path = path
         self.run_path = run_path
+        self.layout = layout
         if self.path.name.endswith(".tar.gz"):
             self.status = ProfilingExperimentStatus.ARCHIVED
 
@@ -177,7 +188,9 @@ class ProfilingExperiment:
         """Returns a string representation of the ProfilingExperiment.
 
         The fields that may be unset are reported only once they are set, so that the representation of an
-        experiment states what is known about it and nothing else.
+        experiment states what is known about it and nothing else. The layout is left out altogether: a
+        whole component tree on this line would bury everything else on it, and what is wanted here is
+        what an experiment is, not how it divides its cores.
         """
         fields = [f"path={self.path!r}"]
         if self.run_path is not None:
