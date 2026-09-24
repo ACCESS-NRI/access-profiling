@@ -7,8 +7,16 @@ from unittest import mock
 
 import pytest
 import xarray as xr
+from access.config.parallel_component import ComponentLayout
 
-from access.profiling.manager import ProfilingExperiment, ProfilingExperimentStatus, ProfilingLog, ProfilingManager
+from access.profiling.manager import (
+    ProfilingExperiment,
+    ProfilingExperimentStatus,
+    ProfilingLog,
+    ProfilingManager,
+    RegionGroup,
+    find_component,
+)
 from access.profiling.metrics import count, tavg
 
 
@@ -49,6 +57,10 @@ class MockProfilingManager(ProfilingManager):
         # could not be determined. Only consulted for experiments this manager thinks are running.
         self._mock_status: dict[str, ProfilingExperimentStatus] = {}
         self._parse_status_calls: list[Path] = []
+        # What parse_layout reports, keyed by experiment name; anything absent reports None, meaning the
+        # layout could not be told.
+        self._mock_layout: dict[str, ComponentLayout] = {}
+        self._parse_layout_calls: list[tuple[Path, Path | None]] = []
 
         if datasets is not None:
             self.data = dict(zip([path.name for path in paths], datasets, strict=True))
@@ -73,6 +85,11 @@ class MockProfilingManager(ProfilingManager):
         """Simulate parsing number of CPUs for a given path."""
         self._parse_ncpus_calls.append((path, run_path))
         return self._mock_ncpus[path.name]
+
+    def parse_layout(self, path, run_path=None):
+        """Simulate reading the layout back off a given path."""
+        self._parse_layout_calls.append((path, run_path))
+        return self._mock_layout.get(path.name)
 
     def profiling_logs(self, path, run_path=None):  # pyright: ignore[reportIncompatibleMethodOverride]
         """Simulate parsing profiling data for a given path."""
@@ -1066,3 +1083,270 @@ def test_bar_chart_run_dim_raises_value_error(run_data):
 
     with pytest.raises(ValueError, match="'run' dimension"):
         run_data.plot_bar_chart(components=["component"], regions=[["Region 1"]], metric=tavg)
+
+
+def _leaf(name: str, n_cores: int) -> ComponentLayout:
+    """A single component of a layout, one thread per rank as the ACCESS models have it."""
+
+    return ComponentLayout(name=name, n_cores=n_cores, n_ranks=n_cores, threads_per_rank=1, decomposition=None)
+
+
+def _layout(**cores: int) -> ComponentLayout:
+    """A layout whose components run side by side, given as name=cores."""
+
+    sub_layouts = tuple(_leaf(name, n) for name, n in cores.items())
+    total = sum(sub_layout.n_cores for sub_layout in sub_layouts)
+    return ComponentLayout(
+        name="model",
+        n_cores=total,
+        n_ranks=total,
+        threads_per_rank=None,
+        decomposition=None,
+        sub_layouts=sub_layouts,
+    )
+
+
+class TestFindComponent:
+    """Looking a component up in a layout, which access.config offers no way to do."""
+
+    def test_it_finds_a_component_beside_the_others(self):
+        layout = _layout(ocn=240, ice=120)
+        assert find_component(layout, "ice").n_cores == 120
+
+    def test_it_finds_the_layout_itself(self):
+        layout = _layout(ocn=240)
+        assert find_component(layout, "model") is layout
+
+    def test_it_looks_at_any_depth(self):
+        """A tree groups components as the model runs them, not as a reader asks about them."""
+
+        shared = ComponentLayout(
+            name="shared",
+            n_cores=120,
+            n_ranks=120,
+            threads_per_rank=None,
+            decomposition=None,
+            sub_layouts=(_leaf("ice", 120),),
+        )
+        layout = ComponentLayout(
+            name="model",
+            n_cores=360,
+            n_ranks=360,
+            threads_per_rank=None,
+            decomposition=None,
+            sub_layouts=(shared, _leaf("ocn", 240)),
+        )
+        assert find_component(layout, "ice").n_cores == 120
+
+    def test_a_component_that_is_not_there(self):
+        assert find_component(_layout(ocn=240), "atm") is None
+
+
+@pytest.fixture()
+def component_scaling_data():
+    """Parsed data for three experiments whose components were given different numbers of cores.
+
+    The log is named "component", as make_component_dataset has it, and is looked for in the layout under
+    that name since no mapping says otherwise. The layout holds a second component, "other", given half as
+    many cores, so that a group read against one is telling apart from a group read against the other.
+    """
+    paths = [Path("small"), Path("large"), Path("medium")]
+    cores = [60, 240, 120]  # Unordered, so that the plot has to sort them
+    datasets = [make_component_dataset([100.0 * 60 / n, 10.0]) for n in cores]
+    manager = MockProfilingManager(paths, ncpus=[n * 2 for n in cores], datasets=datasets)
+    for path, n in zip(paths, cores, strict=True):
+        manager.experiments[path.name].layout = _layout(component=n, other=n // 2)
+    return manager, cores
+
+
+class TestPlotComponentScalingData:
+    """Plotting a metric against the cores the component itself was given."""
+
+    @staticmethod
+    def _plotted(mock_plot) -> dict[str, list]:
+        """The x values of each group handed to the plot, keyed by the label it carries."""
+
+        return {label: list(stat["ncpus"].values) for label, stat in mock_plot.call_args.args[0]}
+
+    @mock.patch("access.profiling.manager.plot_component_scaling")
+    def test_the_x_axis_is_the_components_cores(self, mock_plot, component_scaling_data):
+        """Not the whole job's: the manager is holding twice as many CPUs for every experiment."""
+
+        manager, cores = component_scaling_data
+        manager.plot_component_scaling_data([RegionGroup("component", ["Region 1"])], tavg)
+
+        assert self._plotted(mock_plot) == {"component": sorted(cores)}
+
+    @mock.patch("access.profiling.manager.plot_component_scaling")
+    def test_every_region_asked_for_is_plotted(self, mock_plot, component_scaling_data):
+        manager, _ = component_scaling_data
+        manager.plot_component_scaling_data([RegionGroup("component", ["Region 1", "Region 2"])], tavg)
+
+        ((_, stat),) = mock_plot.call_args.args[0]
+        assert list(stat["region"].values) == ["Region 1", "Region 2"]
+
+    @mock.patch("access.profiling.manager.plot_component_scaling")
+    def test_regions_can_be_relabelled(self, mock_plot, component_scaling_data):
+        manager, _ = component_scaling_data
+        manager.plot_component_scaling_data(
+            [RegionGroup("component", ["Region 1"])], tavg, region_relabel_map={"Region 1": "Dynamics"}
+        )
+
+        ((_, stat),) = mock_plot.call_args.args[0]
+        assert list(stat["region"].values) == ["Dynamics"]
+
+    @mock.patch("access.profiling.manager.plot_component_scaling")
+    def test_one_log_holding_several_components(self, mock_plot, component_scaling_data):
+        """The ACCESS-OM3 ESMF summary, in miniature: one log, and each group read against its own cores."""
+
+        manager, _ = component_scaling_data
+        manager.plot_component_scaling_data(
+            [
+                RegionGroup("component", ["Region 1"], component="component"),
+                RegionGroup("component", ["Region 2"], component="other"),
+            ],
+            tavg,
+        )
+
+        groups = mock_plot.call_args.args[0]
+        assert [label for label, _ in groups] == ["component", "component"], "both survive, keyed or not"
+        assert list(groups[0][1]["ncpus"].values) == [60, 120, 240]
+        assert list(groups[1][1]["ncpus"].values) == [30, 60, 120], "the other component's cores"
+
+    @mock.patch("access.profiling.manager.plot_component_scaling")
+    def test_one_component_spread_over_several_logs(self, mock_plot, component_scaling_data):
+        """As the ACCESS-ESM1.6 atmosphere is over its two logs: same cores, different regions."""
+
+        manager, cores = component_scaling_data
+        for exp_name in manager.data:
+            manager.data[exp_name]["another_log"] = manager.data[exp_name]["component"]
+
+        manager.plot_component_scaling_data(
+            [
+                RegionGroup("component", ["Region 1"], component="component"),
+                RegionGroup("another_log", ["Region 2"], component="component"),
+            ],
+            tavg,
+        )
+
+        groups = mock_plot.call_args.args[0]
+        assert [label for label, _ in groups] == ["component", "another_log"]
+        assert all(list(stat["ncpus"].values) == sorted(cores) for _, stat in groups), "one component, one axis"
+
+    @mock.patch("access.profiling.manager.plot_component_scaling")
+    def test_a_group_naming_no_component_falls_back(self, mock_plot, component_scaling_data):
+        """First to what the manager associates with the log, and failing that to the log's own name."""
+
+        manager, cores = component_scaling_data
+        manager._layout_component_names = {"a_log": "other"}
+        for exp_name in manager.data:
+            manager.data[exp_name]["a_log"] = manager.data[exp_name]["component"]
+
+        manager.plot_component_scaling_data(
+            [RegionGroup("a_log", ["Region 1"]), RegionGroup("component", ["Region 1"])], tavg
+        )
+
+        groups = mock_plot.call_args.args[0]
+        assert list(groups[0][1]["ncpus"].values) == [30, 60, 120], "the mapping named 'other'"
+        assert list(groups[1][1]["ncpus"].values) == sorted(cores), "nothing named it, so the log's own name"
+
+    @mock.patch("access.profiling.manager.plot_component_scaling")
+    def test_the_layout_a_generated_experiment_carries_is_used_as_it_stands(self, mock_plot, component_scaling_data):
+        """It is the whole of it, so there is nothing on disk worth reading back."""
+
+        manager, _ = component_scaling_data
+        manager.plot_component_scaling_data([RegionGroup("component", ["Region 1"])], tavg)
+        assert manager._parse_layout_calls == []
+
+    def test_an_experiment_whose_layout_cannot_be_told(self, component_scaling_data):
+        manager, _ = component_scaling_data
+        manager.experiments["small"].layout = None
+
+        with pytest.raises(ValueError, match="layout of experiment 'small' could not be read"):
+            manager.plot_component_scaling_data([RegionGroup("component", ["Region 1"])], tavg)
+
+    def test_a_layout_naming_no_such_component(self, component_scaling_data):
+        manager, _ = component_scaling_data
+
+        with pytest.raises(ValueError, match="holds no component 'absent'"):
+            manager.plot_component_scaling_data([RegionGroup("component", ["Region 1"], component="absent")], tavg)
+
+    def test_two_experiments_giving_the_component_the_same_cores(self, component_scaling_data):
+        """They would share a point on the x-axis, and both are named so that either can be dropped."""
+
+        manager, _ = component_scaling_data
+        manager.experiments["large"].layout = _layout(component=60, other=240)
+
+        with pytest.raises(ValueError, match="60 cores: \\['large', 'small'\\]"):
+            manager.plot_component_scaling_data([RegionGroup("component", ["Region 1"])], tavg)
+
+    @mock.patch("access.profiling.manager.plot_component_scaling")
+    def test_a_colliding_experiment_can_be_left_out(self, mock_plot, component_scaling_data):
+        manager, _ = component_scaling_data
+        manager.experiments["large"].layout = _layout(component=60, other=240)
+
+        manager.plot_component_scaling_data(
+            [RegionGroup("component", ["Region 1"])], tavg, experiments=["small", "medium"]
+        )
+        assert self._plotted(mock_plot) == {"component": [60, 120]}
+
+    def test_no_experiments_selected(self, component_scaling_data):
+        manager, _ = component_scaling_data
+        with pytest.raises(ValueError, match="No experiments selected"):
+            manager.plot_component_scaling_data([RegionGroup("component", ["Region 1"])], tavg, experiments=[])
+
+    def test_an_experiment_with_no_parsed_data(self, component_scaling_data):
+        manager, _ = component_scaling_data
+        with pytest.raises(ValueError, match="No parsed profiling data"):
+            manager.plot_component_scaling_data([RegionGroup("component", ["Region 1"])], tavg, experiments=["nothing"])
+
+    def test_a_log_with_no_parsed_data(self, component_scaling_data):
+        manager, _ = component_scaling_data
+        with pytest.raises(ValueError, match="No profiling data found for 'absent'"):
+            manager.plot_component_scaling_data([RegionGroup("absent", ["Region 1"])], tavg)
+
+    def test_a_region_that_is_not_there(self, component_scaling_data):
+        manager, _ = component_scaling_data
+        with pytest.raises(ValueError, match="Regions \\['Region 3'\\] not found"):
+            manager.plot_component_scaling_data([RegionGroup("component", ["Region 3"])], tavg)
+
+    def test_data_still_holding_several_runs(self, component_scaling_data):
+        manager, _ = component_scaling_data
+        manager.data["small"]["component"] = manager.data["small"]["component"].expand_dims({"run": [1]})
+
+        with pytest.raises(ValueError, match="'run' dimension"):
+            manager.plot_component_scaling_data([RegionGroup("component", ["Region 1"])], tavg)
+
+
+class TestRegionGroup:
+    """What a caller says when a log and a component are not the same thing."""
+
+    def test_regions_are_kept_as_given(self):
+        assert RegionGroup("MOM6", ["Ocean dynamics", "Ocean"]).regions == ("Ocean dynamics", "Ocean")
+
+    def test_a_list_becomes_a_tuple(self):
+        """So that a group given one is still the frozen thing it claims to be."""
+
+        assert hash(RegionGroup("MOM6", ["Ocean dynamics"])) is not None
+
+    def test_no_component_by_default(self):
+        assert RegionGroup("MOM6", ["Ocean dynamics"]).component is None
+
+
+class TestLayoutIsReadBackOnce:
+    """An experiment this manager did not generate has its layout read off its configuration."""
+
+    def test_it_is_parsed_and_kept(self):
+        manager = MockProfilingManager([Path("expt")], ncpus=[8], datasets=[make_component_dataset([1.0, 2.0])])
+        manager._mock_layout["expt"] = _layout(component=4)
+
+        assert manager._layout("expt").n_cores == 4
+        assert manager._layout("expt").n_cores == 4
+        assert len(manager._parse_layout_calls) == 1
+        assert manager.experiments["expt"].layout is not None
+
+    def test_a_layout_that_cannot_be_told_stays_unknown(self):
+        manager = MockProfilingManager([Path("expt")], ncpus=[8], datasets=[make_component_dataset([1.0, 2.0])])
+
+        assert manager._layout("expt") is None
+        assert manager.experiments["expt"].layout is None

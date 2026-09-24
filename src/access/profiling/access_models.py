@@ -89,9 +89,78 @@ class ESM16Profiling(PayuManager):
 
     _branch_name_prefix: str = "esm1p6-layout"  # Prefix of the branch names of the generated layout experiments.
 
+    # The UM log is read twice, once for its regions and once for its total, so both name the same component.
+    _layout_component_names: dict[str, str] = {
+        "UM": ESM16_UM7_NAME,
+        "UM_Total_Walltime": ESM16_UM7_NAME,
+        "MOM5": ESM16_MOM5_NAME,
+        "CICE5": ESM16_CICE5_NAME,
+    }
+
+    # Which component each Payu submodel is, since a submodel is named by the control configuration rather
+    # than by this package. These are the names the released configuration uses; a configuration naming them
+    # otherwise can say so by setting this.
+    _submodel_components: dict[str, str] = {
+        "atmosphere": ESM16_UM7_NAME,
+        "ocean": ESM16_MOM5_NAME,
+        "ice": ESM16_CICE5_NAME,
+    }
+
     @property
     def model_type(self) -> str:
         return "access-esm1.6"
+
+    def parse_layout(self, path: Path, run_path: Path | None = None) -> ComponentLayout | None:
+        """Parses the layout an ACCESS-ESM1.6 experiment runs, from the Payu submodels it declares.
+
+        Payu gives each submodel its cores outright, so the configuration states this directly. What it does
+        not state is how a component divides its domain, so the layout that comes back carries no
+        decompositions; see ProfilingManager.parse_layout for what that means.
+
+        A submodel this does not recognise is left out rather than guessed at, and a configuration naming no
+        component it recognises produces nothing at all.
+
+        Args:
+            path (Path): Path to the experiment directory. Must contain a config.yaml file.
+            run_path (Path | None): Optional path to a separate runs directory. Unused for Payu experiments.
+
+        Returns:
+            ComponentLayout | None: The layout the experiment runs, or None if its configuration names no
+                component this recognises.
+        """
+        config_path = path / "config.yaml"
+        payu_config = YAMLParser().parse(config_path.read_text())
+
+        sub_layouts = []
+        for submodel in payu_config.get("submodels", []):
+            name = self._submodel_components.get(submodel.get("name"))
+            if name is None:
+                logger.debug(f"Submodel {submodel.get('name')!r} of {config_path} is not a component of this model.")
+                continue
+            n_cores = submodel.get("ncpus")
+            if not n_cores:
+                logger.debug(f"Submodel {submodel.get('name')!r} of {config_path} states no core count.")
+                continue
+            # One thread per rank throughout this model, as the tree requires, so ranks are cores.
+            sub_layouts.append(
+                ComponentLayout(name=name, n_cores=n_cores, n_ranks=n_cores, threads_per_rank=1, decomposition=None)
+            )
+
+        if not sub_layouts:
+            logger.debug(f"No component of this model is named among the submodels of {config_path}.")
+            return None
+
+        # The components run side by side, so the root spends what they spend between them. Any cores left
+        # idle to fill a node are not the layout's; parse_ncpus is what reports those.
+        used = sum(sub_layout.n_cores for sub_layout in sub_layouts)
+        return ComponentLayout(
+            name=self.model_type,
+            n_cores=used,
+            n_ranks=used,
+            threads_per_rank=None,
+            decomposition=None,
+            sub_layouts=tuple(sub_layouts),
+        )
 
     def get_component_logs(self, path: Path) -> dict[str, ProfilingLog]:
         """Returns available profiling logs for the components in ACCESS-ESM1.6.

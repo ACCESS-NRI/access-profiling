@@ -101,6 +101,21 @@ class CylcRoseManager(ProfilingManager, ABC):
         """
         raise NotImplementedError(self._no_layout_support)
 
+    def parse_layout(self, path: Path, run_path: Path | None = None) -> ComponentLayout | None:
+        """Raises NotImplementedError: Cylc Rose configurations have no layout to read back.
+
+        These configurations state their parallelism as a single layout variable rather than as a tree of
+        components, which is the same reason they generate no layout experiments. parse_ncpus is what
+        reports their size.
+
+        Args:
+            path (Path): Unused.
+            run_path (Path | None): Unused.
+        Raises:
+            NotImplementedError: Always.
+        """
+        raise NotImplementedError(self._no_layout_support)
+
     def parse_ncpus(self, path: Path, run_path: Path | None = None) -> int:
         """Parses the number of CPUs used in a given Cylc/Rose experiment, from the model layout.
 

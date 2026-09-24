@@ -134,3 +134,56 @@ def plot_scaling_metrics(
         plt.show()
 
     return fig
+
+
+def plot_component_scaling(
+    stats: list[tuple[str, xr.Dataset]],
+    metric: ProfilingMetric,
+    xcoordinate: str = "ncpus",
+    xlabel: str | None = None,
+    show: bool = True,
+) -> Figure:
+    """Plots a metric against the cores each component was given, one line per region.
+
+    This asks a different question from plot_scaling_metrics. That one reads every component against the
+    whole job, which is what a scaling study costs; this one reads each component against its own cores,
+    which is what tells you whether giving the ocean more of them bought anything. Two components therefore
+    sit on different points of the same axis, and the lines are labelled with both the component and the
+    region so that the two can be told apart - region names are only made unique within one log, so two
+    components may well each have a "Total".
+
+    The metric is plotted as it stands rather than turned into a speedup, so there is no baseline to choose
+    and no need for the metric to be a time, though a time is what this is for.
+
+    The data comes as a list rather than a mapping because the same log may appear more than once: a log
+    holding several components' regions is read once per component, each time against different cores.
+
+    Args:
+        stats (list[tuple[str, xr.Dataset]]): The data to plot, each dataset labelled by the log its regions
+            came from. Each holds those regions against the cores their component was given.
+        metric (ProfilingMetric): The metric to plot, which labels the axis and titles the figure.
+        xcoordinate (str): The coordinate holding the core counts. Default: "ncpus".
+        xlabel (str | None): Optional label for the x-axis. If None, a default naming the component's own
+            cores is used, since the coordinate name alone reads as the whole job's.
+        show (bool): Whether to show the generated plot. Default: True.
+
+    Returns:
+        Figure: The Matplotlib figure the lines are plotted on.
+    """
+    fig, ax = plt.subplots(figsize=(10, 6))
+
+    for label, stat in stats:
+        for region in stat.region.values:
+            stat[metric].sel(region=region).plot.line(x=xcoordinate, ax=ax, marker="o", label=f"{label}: {region}")
+
+    ax.set_xlabel(xlabel if xlabel is not None else "Cores assigned to the component")
+    ax.set_ylabel(f"{metric.name} ({metric.units})")
+    ax.set_title(f"{metric.description}")
+    ax.legend()
+    ax.grid(linestyle="--", alpha=0.7)
+    fig.tight_layout()
+
+    if show:
+        plt.show()
+
+    return fig
