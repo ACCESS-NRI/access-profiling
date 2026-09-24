@@ -194,14 +194,28 @@ class CylcRoseManager(ProfilingManager, ABC):
         self.experiments[rose] = ProfilingExperiment(path=experiment_path, run_path=run_path)
         self.experiments[rose].status = ProfilingExperimentStatus.DONE
 
-    def run_experiments(self) -> None:
-        """Runs Rose Cylc experiments via `rose suite-run` for profiling data generation."""
+    def run_experiments(self, retry_failed: bool = False) -> None:
+        """Runs Rose Cylc experiments via `rose suite-run` for profiling data generation.
+
+        An experiment whose suite failed is run where retry_failed asks for it. Note that what it is offered
+        is the same `rose suite-run` as any other, not a restart: whether a suite that has already run
+        accepts that is the suite's own affair, and one that does not says so and stops this method rather
+        than being worked around here.
+
+        Args:
+            retry_failed (bool): Whether to run the experiments whose suites failed as well as the new ones.
+                False (the default) runs only the new ones.
+        """
 
         # An experiment is only new as far as this manager knows: a status does not outlive the session, so
         # one generated and run in an earlier session comes back NEW. Ask before deciding what to submit.
         self.update_statuses()
 
-        to_run = {name: exp for name, exp in self.experiments.items() if exp.status == ProfilingExperimentStatus.NEW}
+        wanted = {ProfilingExperimentStatus.NEW}
+        if retry_failed:
+            wanted.add(ProfilingExperimentStatus.FAILED)
+
+        to_run = {name: exp for name, exp in self.experiments.items() if exp.status in wanted}
 
         if not to_run:
             logger.info("No new experiments to run. Will skip execution.")
