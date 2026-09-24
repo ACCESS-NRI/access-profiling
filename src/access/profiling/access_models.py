@@ -6,7 +6,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from access.config import YAMLParser
+from access.config import NUOPCParser, YAMLParser
 from access.config.parallel_component import ComponentLayout, CoreSharing, ParallelComponent
 from access.config.parallel_constraints import (
     DomainDivisibleByRanksConstraint,
@@ -535,6 +535,19 @@ def _om3_cice6_domain_nml(decomposition: DomainDecompositionSpec) -> dict[str, s
     }
 
 
+def _om3_leaf(name: str, n_cores: int, core_offset: int = 0) -> ComponentLayout:
+    """Returns the layout of one ACCESS-OM3 realm, which runs one thread per rank throughout."""
+
+    return ComponentLayout(
+        name=name,
+        n_cores=n_cores,
+        n_ranks=n_cores,
+        threads_per_rank=1,
+        decomposition=None,
+        core_offset=core_offset,
+    )
+
+
 class OM3Profiling(PayuManager):
     """Handles profiling of ACCESS-OM3 configurations.
 
@@ -547,6 +560,10 @@ class OM3Profiling(PayuManager):
     """
 
     _branch_name_prefix: str = "om3-layout"  # Prefix of the branch names of the generated layout experiments.
+
+    # Which NUOPC realm each log belongs to. The ESMF summary covers the whole model rather than any one
+    # component of it, so it names no realm and has no cores of its own to be read against.
+    _layout_component_names: dict[str, str] = {"MOM6": OM3_OCEAN_NAME, "CICE6": OM3_SEA_ICE_NAME}
 
     _configuration: OM3Configuration
 
@@ -602,6 +619,136 @@ class OM3Profiling(PayuManager):
             logs["ESMF"] = ProfilingLog(esmf_logfile, ESMFSummaryProfilingParser(), optional=True)
 
         return logs
+
+    def parse_layout(self, path: Path, run_path: Path | None = None) -> ComponentLayout | None:
+        """Parses the layout an ACCESS-OM3 experiment runs, from the PE layout its NUOPC configuration states.
+
+        This is the inverse of what layout_config_changes writes, and reads the same block: every realm the
+        configuration has states the first core it runs on and how many it is given. The shape has to come
+        back with it, since cores alone do not say it - the realms taking turns on one range belong under the
+        parent that holds that range, and the ones running beside it are its siblings - and which realms
+        those are is what the configuration being profiled says.
+
+        What comes back carries no decompositions: the PE layout says how many ranks each realm has, not what
+        grid they are arranged in. See ProfilingManager.parse_layout for what that means.
+
+        Args:
+            path (Path): Path to the experiment directory. Must contain a nuopc.runconfig file.
+            run_path (Path | None): Optional path to a separate runs directory. Unused for Payu experiments.
+
+        Returns:
+            ComponentLayout | None: The layout the experiment runs, or None if its configuration does not say.
+
+        Raises:
+            ValueError: If the cores the configuration states are not a layout of this component tree - a
+                shared range left partly idle, or a gap between two ranges. Better said here than quietly
+                plotted.
+        """
+        runconfig_path = path / "nuopc.runconfig"
+        ranges = self._parse_core_ranges(runconfig_path)
+        if ranges is None:
+            return None
+
+        try:
+            return self._layout_from_core_ranges(ranges)
+        except ValueError as error:
+            raise ValueError(f"The PE layout in {runconfig_path} is not a layout of this model: {error}") from error
+
+    def _layout_from_core_ranges(self, ranges: dict[str, tuple[int, int]]) -> ComponentLayout:
+        """Returns the layout the given core ranges describe, the inverse of _core_ranges.
+
+        Args:
+            ranges (dict[str, tuple[int, int]]): The first core and the number of cores of each realm.
+
+        Returns:
+            ComponentLayout: The layout those ranges describe.
+
+        Raises:
+            ValueError: If they do not describe a layout of this component tree.
+        """
+        configuration = self._configuration
+        shared_realms = configuration.shared_realms
+        # The realms sharing a range are placed within it, so the range starts where the earliest of them
+        # does and reaches as far as the furthest of them reaches.
+        shared_start = min(ranges[realm][0] for realm in shared_realms)
+        shared = ComponentLayout(
+            name=OM3_SHARED_NAME,
+            n_cores=max(ranges[realm][0] + ranges[realm][1] for realm in shared_realms) - shared_start,
+            # A shared parent counts the cores its components occupy between them, and they have to occupy
+            # all of them, so this is the size of the range itself.
+            n_ranks=max(ranges[realm][0] + ranges[realm][1] for realm in shared_realms) - shared_start,
+            threads_per_rank=None,
+            decomposition=None,
+            sub_layouts=tuple(
+                _om3_leaf(realm, ranges[realm][1], core_offset=ranges[realm][0] - shared_start)
+                for realm in shared_realms
+            ),
+            core_sharing=CoreSharing.SHARED,
+        )
+
+        # The realms with a range of their own follow it, in the order the tree declares them.
+        placed = [(shared_start, shared)]
+        if configuration.ocean is not None:
+            placed.append((ranges[OM3_OCEAN_NAME][0], _om3_leaf(OM3_OCEAN_NAME, ranges[OM3_OCEAN_NAME][1])))
+        if configuration.waves is not None:
+            placed.append((ranges[OM3_WAVE_NAME][0], _om3_leaf(OM3_WAVE_NAME, ranges[OM3_WAVE_NAME][1])))
+
+        # Each range has to start where the one before it ended, and the first of them at the first core.
+        # Anything else leaves cores between the ranges that no component accounts for, which a tree of
+        # components running side by side has no way to express.
+        expected = 0
+        for rootpe, sub_layout in placed:
+            if rootpe != expected:
+                raise ValueError(
+                    f"{sub_layout.name!r} starts at core {rootpe}, but the components before it end at "
+                    f"{expected}, so {rootpe - expected} core(s) belong to nothing."
+                )
+            expected += sub_layout.n_cores
+
+        sub_layouts = tuple(sub_layout for _, sub_layout in placed)
+        return ComponentLayout(
+            name=f"ACCESS-OM3 {configuration.name}",
+            n_cores=sum(sub_layout.n_cores for sub_layout in sub_layouts),
+            n_ranks=sum(sub_layout.n_ranks for sub_layout in sub_layouts),
+            threads_per_rank=None,
+            decomposition=None,
+            sub_layouts=sub_layouts,
+        )
+
+    def _parse_core_ranges(self, runconfig_path: Path) -> dict[str, tuple[int, int]] | None:
+        """Returns the first core and the core count of each realm, as nuopc.runconfig states them.
+
+        Args:
+            runconfig_path (Path): Path to the experiment's nuopc.runconfig.
+
+        Returns:
+            dict[str, tuple[int, int]] | None: The first core and the number of cores of each realm this
+                configuration has, or None if the file does not say.
+        """
+        if not runconfig_path.is_file():
+            logger.debug(f"No NUOPC configuration at {runconfig_path}.")
+            return None
+
+        pelayout = NUOPCParser().parse(runconfig_path.read_text()).get("PELAYOUT_attributes")
+        if not pelayout:
+            logger.debug(f"The NUOPC configuration at {runconfig_path} states no PE layout.")
+            return None
+
+        configuration = self._configuration
+        realms = list(configuration.shared_realms)
+        if configuration.ocean is not None:
+            realms.append(OM3_OCEAN_NAME)
+        if configuration.waves is not None:
+            realms.append(OM3_WAVE_NAME)
+
+        ranges = {}
+        for realm in realms:
+            rootpe, ntasks = pelayout.get(f"{realm}_rootpe"), pelayout.get(f"{realm}_ntasks")
+            if rootpe is None or ntasks is None:
+                logger.debug(f"The PE layout in {runconfig_path} does not say what {realm!r} was given.")
+                return None
+            ranges[realm] = (rootpe, ntasks)
+        return ranges
 
     def _core_ranges(self, layout: ComponentLayout) -> dict[str, tuple[int, int]]:
         """Returns the cores each ACCESS-OM3 component occupies, as a (rootpe, ntasks) pair per realm.
