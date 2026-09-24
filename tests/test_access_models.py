@@ -45,6 +45,7 @@ from access.profiling.access_models import (
 from access.profiling.cice5_parser import CICE5ProfilingParser
 from access.profiling.esmf_parser import ESMFSummaryProfilingParser
 from access.profiling.fms_parser import FMSProfilingParser
+from access.profiling.manager import find_component
 from access.profiling.um_parser import UMProfilingParser, UMTotalRuntimeParser
 
 
@@ -946,3 +947,199 @@ def test_om3_config_profiling(mock_is_file, mock_read_text, mock_yaml_parse, om3
     # None present: the run wrote no profiling data at all.
     mock_is_file.side_effect = [False, False, False]
     assert om3.get_component_logs(Path("/fake/output000")) == {}
+
+
+def _om3_ranges(layout: ComponentLayout) -> dict[str, tuple[int, int]]:
+    """The first core and the core count of each realm of a layout, however it is nested."""
+
+    ranges: dict[str, tuple[int, int]] = {}
+    rootpe = 0
+    for component in layout.sub_layouts:
+        if component.name == OM3_SHARED_NAME:
+            for shared in component.sub_layouts:
+                ranges[shared.name] = (rootpe + shared.core_offset, shared.n_cores)
+        else:
+            ranges[component.name] = (rootpe, component.n_cores)
+        rootpe += component.n_cores
+    return ranges
+
+
+def _write_runconfig(path: Path, pelayout: dict[str, int]) -> Path:
+    """Writes a nuopc.runconfig stating the given PE layout, and returns its directory."""
+
+    lines = ["PELAYOUT_attributes::"] + [f"     {key} = {value}" for key, value in pelayout.items()] + ["::"]
+    (path / "nuopc.runconfig").write_text("\n".join(lines) + "\n")
+    return path
+
+
+class TestOM3ParseLayout:
+    """Reading an ACCESS-OM3 layout back off the PE layout its configuration states."""
+
+    def test_it_is_the_inverse_of_what_generation_writes(self, tmp_path):
+        """The round trip that matters: what layout_config_changes wrote is what this reads back."""
+
+        configuration = dataclasses.replace(OM3_MC_100KM, name="MD-100km", data_sea_ice=True)
+        manager = OM3Profiling(Path("/fake/test_path"), Path("/fake/archive_path"), configuration)
+        # No component of this one carries a grid, so these core counts pick out a single layout.
+        (generated,) = manager.select_layouts(240, allocations=_om3_pinned(cpl=24, atm=24, ice=24, rof=24, ocn=216))
+        path = _write_runconfig(tmp_path, _pelayout(manager, generated))
+
+        parsed = manager.parse_layout(path)
+
+        assert _om3_ranges(parsed) == _om3_ranges(generated)
+        assert parsed.n_cores == generated.n_cores
+        assert find_component(parsed, OM3_OCEAN_NAME).n_cores == 216
+
+    def test_the_shared_realms_keep_their_places_on_the_range(self, om3, tmp_path):
+        """Their offsets are what a shared range is, and the range has to be covered exactly."""
+
+        path = _write_runconfig(
+            tmp_path,
+            {
+                "cpl_ntasks": 48,
+                "cpl_rootpe": 0,
+                "atm_ntasks": 24,
+                "atm_rootpe": 0,
+                "ice_ntasks": 24,
+                "ice_rootpe": 24,
+                "rof_ntasks": 24,
+                "rof_rootpe": 24,
+                "ocn_ntasks": 192,
+                "ocn_rootpe": 48,
+            },
+        )
+
+        parsed = om3.parse_layout(path)
+
+        (shared, ocean) = parsed.sub_layouts
+        assert shared.name == OM3_SHARED_NAME
+        assert shared.n_cores == 48
+        assert {sub.name: (sub.core_offset, sub.n_cores) for sub in shared.sub_layouts} == {
+            "cpl": (0, 48),
+            "atm": (0, 24),
+            "ice": (24, 24),
+            "rof": (24, 24),
+        }
+        assert (ocean.name, ocean.n_cores) == (OM3_OCEAN_NAME, 192)
+        assert parsed.n_cores == 240
+        assert parsed.idle_cores == 0
+
+    def test_the_sea_ice_can_be_found_under_the_range_it_shares(self, om3, tmp_path):
+        """Which is the whole reason find_component looks at any depth."""
+
+        path = _write_runconfig(
+            tmp_path,
+            {
+                "cpl_ntasks": 48,
+                "cpl_rootpe": 0,
+                "atm_ntasks": 48,
+                "atm_rootpe": 0,
+                "ice_ntasks": 48,
+                "ice_rootpe": 0,
+                "rof_ntasks": 48,
+                "rof_rootpe": 0,
+                "ocn_ntasks": 192,
+                "ocn_rootpe": 48,
+            },
+        )
+
+        assert find_component(om3.parse_layout(path), OM3_SEA_ICE_NAME).n_cores == 48
+
+    def test_cores_between_the_ranges_that_belong_to_nothing(self, om3, tmp_path):
+        """The shared range ends at 24 and the ocean starts at 48, so 24 cores answer to no component."""
+
+        path = _write_runconfig(
+            tmp_path,
+            {
+                "cpl_ntasks": 24,
+                "cpl_rootpe": 0,
+                "atm_ntasks": 24,
+                "atm_rootpe": 0,
+                "ice_ntasks": 24,
+                "ice_rootpe": 0,
+                "rof_ntasks": 24,
+                "rof_rootpe": 0,
+                "ocn_ntasks": 192,
+                "ocn_rootpe": 48,
+            },
+        )
+
+        with pytest.raises(ValueError, match=r"24 core\(s\) belong to nothing"):
+            om3.parse_layout(path)
+
+    def test_a_shared_range_its_realms_leave_partly_idle(self, om3, tmp_path):
+        """The range reaches core 48, but nothing runs on cores 24 to 35: they are idle in every realm."""
+
+        path = _write_runconfig(
+            tmp_path,
+            {
+                "cpl_ntasks": 24,
+                "cpl_rootpe": 0,
+                "atm_ntasks": 24,
+                "atm_rootpe": 0,
+                "ice_ntasks": 12,
+                "ice_rootpe": 36,
+                "rof_ntasks": 12,
+                "rof_rootpe": 36,
+                "ocn_ntasks": 192,
+                "ocn_rootpe": 48,
+            },
+        )
+
+        with pytest.raises(ValueError, match="is not a layout of this model"):
+            om3.parse_layout(path)
+
+    def test_no_configuration_file(self, om3, tmp_path):
+        assert om3.parse_layout(tmp_path) is None
+
+    def test_a_configuration_stating_no_pe_layout(self, om3, tmp_path):
+        (tmp_path / "nuopc.runconfig").write_text("ALLCOMP_attributes::\n     ATM_model = datm\n::\n")
+        assert om3.parse_layout(tmp_path) is None
+
+    def test_a_pe_layout_missing_a_realm(self, om3, tmp_path):
+        path = _write_runconfig(tmp_path, {"cpl_ntasks": 48, "cpl_rootpe": 0})
+        assert om3.parse_layout(path) is None
+
+    def test_a_configuration_without_an_ocean(self, tmp_path):
+        ice_only = OM3Configuration(name="ice-only", sea_ice=OM3_100KM_GRID, atmosphere=OM3_100KM_GRID)
+        manager = OM3Profiling(Path("/fake/test_path"), Path("/fake/archive_path"), ice_only)
+        path = _write_runconfig(
+            tmp_path,
+            {"cpl_ntasks": 24, "cpl_rootpe": 0, "atm_ntasks": 24, "atm_rootpe": 0, "ice_ntasks": 24, "ice_rootpe": 0},
+        )
+
+        parsed = manager.parse_layout(path)
+
+        assert [sub.name for sub in parsed.sub_layouts] == [OM3_SHARED_NAME]
+        assert parsed.n_cores == 24
+
+    def test_a_configuration_with_waves(self, tmp_path):
+        """WW3 takes a range of its own after the ocean, so it is read back beside it."""
+
+        manager = OM3Profiling(Path("/fake/test_path"), Path("/fake/archive_path"), OM3_MCW_100KM)
+        path = _write_runconfig(
+            tmp_path,
+            {
+                "cpl_ntasks": 24,
+                "cpl_rootpe": 0,
+                "atm_ntasks": 24,
+                "atm_rootpe": 0,
+                "ice_ntasks": 24,
+                "ice_rootpe": 0,
+                "rof_ntasks": 24,
+                "rof_rootpe": 0,
+                "ocn_ntasks": 192,
+                "ocn_rootpe": 24,
+                "wav_ntasks": 24,
+                "wav_rootpe": 216,
+            },
+        )
+
+        parsed = manager.parse_layout(path)
+
+        assert [sub.name for sub in parsed.sub_layouts] == [OM3_SHARED_NAME, OM3_OCEAN_NAME, OM3_WAVE_NAME]
+        assert find_component(parsed, OM3_WAVE_NAME).n_cores == 24
+        assert parsed.n_cores == 240
+
+    def test_the_logs_name_the_realms_they_belong_to(self, om3):
+        assert om3._layout_component_names == {"MOM6": OM3_OCEAN_NAME, "CICE6": OM3_SEA_ICE_NAME}
