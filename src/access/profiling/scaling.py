@@ -141,6 +141,7 @@ def plot_component_scaling(
     metric: ProfilingMetric,
     xcoordinate: str = "ncpus",
     xlabel: str | None = None,
+    ylabel: str | None = None,
     show: bool = True,
 ) -> Figure:
     """Plots a metric against the cores each component was given, one line per region.
@@ -158,13 +159,36 @@ def plot_component_scaling(
     The data comes as a list rather than a mapping because the same log may appear more than once: a log
     holding several components' regions is read once per component, each time against different cores.
 
+    Every curve is drawn with the one it would be if the component scaled perfectly: the same time at the
+    fewest cores it was given, halving as those cores double. The two meet at the left by construction, and
+    how far the measured curve rises above its ideal to the right is what the extra cores did not buy.
+
+    Both axes are logarithmic, which is what makes an ideal a straight line: halving the time for twice the
+    cores is a constant step down for a constant step along, so perfect scaling falls at a slope of one in
+    every direction. Against plain axes an ideal is a hyperbola, and over the right-hand half of such a
+    plot every curve looks flat whether it is scaling or not; straight is a shape the eye can judge
+    departures from. It also gives room to regions that differ by orders of magnitude, which the regions of
+    one component commonly do.
+
+    A metric of zero cannot be shown on a logarithmic axis and is dropped from the curve it belongs to. A
+    region that took no measurable time is not one a scaling plot has anything to say about.
+
+    The figure carries no title. What it is saying belongs in the caption of whatever it goes into, and
+    the y axis already names the metric.
+
+    Note that a region measuring a wait rather than work sits above its ideal and climbs - MOM5's
+    oasis_recv and the ACCESS-OM3 couplers do, since a component given more cores finishes its own work
+    sooner and waits longer on the components that have not.
+
     Args:
         stats (list[tuple[str, xr.Dataset]]): The data to plot, each dataset labelled by the log its regions
-            came from. Each holds those regions against the cores their component was given.
+            came from. Each holds those regions against the cores their component was given, its region
+            coordinate being the label each curve is to carry.
         metric (ProfilingMetric): The metric to plot, which labels the axis and titles the figure.
         xcoordinate (str): The coordinate holding the core counts. Default: "ncpus".
         xlabel (str | None): Optional label for the x-axis. If None, a default naming the component's own
             cores is used, since the coordinate name alone reads as the whole job's.
+        ylabel (str | None): Optional label for the y-axis. If None, the metric names it.
         show (bool): Whether to show the generated plot. Default: True.
 
     Returns:
@@ -172,13 +196,32 @@ def plot_component_scaling(
     """
     fig, ax = plt.subplots(figsize=(10, 6))
 
-    for label, stat in stats:
+    ideals = []
+    for _, stat in stats:
         for region in stat.region.values:
-            stat[metric].sel(region=region).plot.line(x=xcoordinate, ax=ax, marker="o", label=f"{label}: {region}")
+            values = stat[metric].sel(region=region)
+            values.plot.line(x=xcoordinate, ax=ax, marker="o", label=region)
+
+            # What this curve would be if every core it was given were bought in full, anchored where it
+            # starts. Taken from the magnitudes, as the measured curve is plotted from them.
+            cores = values[xcoordinate].values
+            times = values.pint.dequantify().values
+            ideals.append((cores, times[cores.argmin()] * cores.min() / cores))
+
+    # After the measured curves rather than beside each of them, which puts the references on top of what
+    # they are references for and leaves them at the end of the legend. One colour and one label for all of
+    # them: they say the same thing about every curve, so saying it once says it.
+    for index, (cores, ideal) in enumerate(ideals):
+        ax.plot(cores, ideal, "k-", label="Ideal" if index == 0 else None)
+
+    ax.set_xscale("log")
+    ax.set_yscale("log")
 
     ax.set_xlabel(xlabel if xlabel is not None else "Cores assigned to the component")
-    ax.set_ylabel(f"{metric.name} ({metric.units})")
-    ax.set_title(f"{metric.description}")
+    ax.set_ylabel(ylabel if ylabel is not None else f"{metric.name} ({metric.units})")
+    # Cleared rather than never set: plotting one region at a time leaves xarray titling the axes after
+    # the region it selected, which names whichever curve happened to be drawn last.
+    ax.set_title("")
     ax.legend()
     ax.grid(linestyle="--", alpha=0.7)
     fig.tight_layout()
