@@ -112,6 +112,26 @@ def _reject_shared_core_counts(component: str, cores: dict[str, int]) -> None:
         )
 
 
+def _region_label(log: str, region: str, region_relabel_map: dict | None) -> str:
+    """Returns the label a region is to be plotted under.
+
+    A region is named after the log it came from, since region names are only made unique within one log
+    and two components may each have a "Total". A caller who relabels one has said what they want it
+    called, though, so that name is left to stand on its own.
+
+    Args:
+        log (str): Name of the log the region came from.
+        region (str): Name of the region.
+        region_relabel_map (dict | None): Optional mapping from region name to the label to plot it under.
+
+    Returns:
+        str: The label.
+    """
+    if region_relabel_map is not None and region in region_relabel_map:
+        return region_relabel_map[region]
+    return f"{log}: {region}"
+
+
 def _component_names(layout: ComponentLayout) -> list[str]:
     """Returns the name of every component in a layout, itself included, for saying what it does hold."""
 
@@ -868,8 +888,12 @@ class ProfilingManager(ABC):
                 )
 
             ds = ds.sel(region=list(group.regions))
-            if region_relabel_map is not None:
-                ds = ds.assign_coords(region=[region_relabel_map.get(n, n) for n in ds.region.values])
+            # From here the coordinate is the label the curve will carry rather than the name of a region:
+            # the dataset exists only to be plotted, and settling the label here is what lets a relabelled
+            # region stand on its own, which the plot could not know to do.
+            ds = ds.assign_coords(
+                region=[_region_label(group.log, region, region_relabel_map) for region in ds.region.values]
+            )
             selected[exp_name] = ds
         return selected
 
@@ -880,6 +904,7 @@ class ProfilingManager(ABC):
         region_relabel_map: dict | None = None,
         experiments: list[str] | None = None,
         xlabel: str | None = None,
+        ylabel: str | None = None,
         show: bool = True,
     ) -> Figure:
         """Plots a metric for the given regions against the cores their own component was given.
@@ -905,10 +930,12 @@ class ProfilingManager(ABC):
             groups (list[RegionGroup]): Regions to plot, and what to read each of them against.
             metric (ProfilingMetric): The metric to plot.
             region_relabel_map (dict | None): Optional mapping from region name to the label to plot it
-                under. Regions not in it keep their own name.
+                under. A region named here is plotted under that label alone; one left out is plotted as
+                "<log>: <region>", since region names are only made unique within one log.
             experiments (list[str] | None): Experiments to plot. None (the default) plots all of those
                 with parsed profiling data.
             xlabel (str | None): Optional label for the x-axis.
+            ylabel (str | None): Optional label for the y-axis. If None, the metric names it.
             show (bool): Whether to show the generated plot. Default: True.
 
         Returns:
@@ -949,7 +976,7 @@ class ProfilingManager(ABC):
             group_data = [ds.expand_dims({"ncpus": [cores[exp_name]]}) for exp_name, ds in selected.items()]
             scaling_data.append((group.log, xr.concat(group_data, dim="ncpus", join="outer").sortby("ncpus")))
 
-        return plot_component_scaling(scaling_data, metric, xlabel=xlabel, show=show)
+        return plot_component_scaling(scaling_data, metric, xlabel=xlabel, ylabel=ylabel, show=show)
 
     def plot_bar_chart(
         self,
