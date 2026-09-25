@@ -90,6 +90,8 @@ def test_layout_generation_is_unsupported(manager):
         manager.layout_config_changes(mock.MagicMock())
     with pytest.raises(NotImplementedError):
         manager.select_layouts(4)
+    with pytest.raises(NotImplementedError):
+        manager.parse_layout(Path("/fake/expt"))
 
 
 @mock.patch("access.profiling.cylc_manager.Path.glob")

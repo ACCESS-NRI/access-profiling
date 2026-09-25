@@ -5,6 +5,8 @@ import itertools
 import logging
 import textwrap
 from abc import ABC, abstractmethod
+from collections.abc import Sequence
+from dataclasses import dataclass
 from pathlib import Path
 
 import xarray as xr
@@ -16,7 +18,7 @@ from matplotlib.figure import Figure
 from access.profiling.experiment import ProfilingExperiment, ProfilingExperimentStatus, ProfilingLog
 from access.profiling.metrics import ProfilingMetric
 from access.profiling.plotting_utils import plot_bar_metrics
-from access.profiling.scaling import plot_scaling_metrics
+from access.profiling.scaling import plot_component_scaling, plot_scaling_metrics
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +26,119 @@ _RUN_DIM_ERROR = (
     "Profiling data still has a 'run' dimension. Use select_best_run() to keep the best run of each experiment, "
     "or aggregate_runs() to reduce over runs."
 )
+
+
+@dataclass(frozen=True)
+class RegionGroup:
+    """Regions of one profiling log, to be read against the cores one component was given.
+
+    A log and a component are not the same thing, which is why both are said here. One log can hold the
+    regions of several components - the ACCESS-OM3 ESMF summary is the whole model in one file, and its
+    mediator, atmosphere, runoff and waves appear nowhere else - and one component can be spread over
+    several logs, as the ACCESS-ESM1.6 atmosphere is over the two the UM file is read into, and as the
+    ACCESS-OM3 sea ice is over its own log and the ESMF summary. So a group names the log its regions come
+    from and, where it is not the obvious one, the component whose cores they are to be read against.
+
+    Which component a region belongs to cannot be worked out from its name. A bracketed realm like
+    "[OCN] RunPhase1" says one thing, but "[OCN-TO-MED] RunPhase1" is a coupler between two and looks the
+    same; "cice_run_total" says nothing at all; and the call stack that would settle it is not kept. Hence
+    this.
+
+    Args:
+        log (str): Name of the profiling log the regions come from, as get_component_logs names it.
+        regions (Sequence[str]): Regions of that log to plot, each of which becomes a line.
+        component (str | None): Component whose cores these regions are read against, named as the layout
+            names it. None (the default) takes the component the manager associates with this log, and
+            failing that the log's own name - which is enough for a log that is one component's alone.
+    """
+
+    log: str
+    regions: Sequence[str] = ()
+    component: str | None = None
+
+    def __post_init__(self) -> None:
+        # Kept as a tuple, so that a group given a list is still the frozen thing it claims to be.
+        object.__setattr__(self, "regions", tuple(self.regions))
+
+
+def find_component(layout: ComponentLayout, name: str) -> ComponentLayout | None:
+    """Returns the part of a layout belonging to the named component, wherever it sits in it.
+
+    A component is looked for at any depth, since a tree groups its components as the model runs them
+    rather than as a reader asks about them: the ACCESS-OM3 sea ice, for one, sits under the range it
+    shares with the mediator and the atmosphere rather than beside the ocean.
+
+    Args:
+        layout (ComponentLayout): Layout to look in, itself included.
+        name (str): Name of the component to look for.
+
+    Returns:
+        ComponentLayout | None: The layout of that component, or None if it holds no such component.
+    """
+    if layout.name == name:
+        return layout
+    for sub_layout in layout.sub_layouts:
+        found = find_component(sub_layout, name)
+        if found is not None:
+            return found
+    return None
+
+
+def _reject_shared_core_counts(component: str, cores: dict[str, int]) -> None:
+    """Refuses a set of experiments that would put two points at one place on the x-axis.
+
+    Note that this is a different question from the one plot_scaling_data asks. Layouts agreeing on the
+    whole job's size may well disagree about any one component, and layouts differing in size may still
+    give one component the same share, so a collision here is neither implied by nor implies one there.
+
+    Args:
+        component (str): Name of the component being plotted, for the message.
+        cores (dict[str, int]): Cores that component was given, keyed by experiment.
+
+    Raises:
+        ValueError: If two or more experiments give the component the same number of cores.
+    """
+    by_count: dict[int, list[str]] = {}
+    for exp_name, count in cores.items():
+        by_count.setdefault(count, []).append(exp_name)
+
+    collisions = {count: names for count, names in by_count.items() if len(names) > 1}
+    if collisions:
+        raise ValueError(
+            f"Several experiments give component '{component}' the same number of cores, so they would "
+            "share a point on the x-axis: "
+            + "; ".join(f"{count} cores: {sorted(names)}" for count, names in sorted(collisions.items()))
+            + ". Select among them with the experiments argument."
+        )
+
+
+def _region_label(log: str, region: str, region_relabel_map: dict | None) -> str:
+    """Returns the label a region is to be plotted under.
+
+    A region is named after the log it came from, since region names are only made unique within one log
+    and two components may each have a "Total". A caller who relabels one has said what they want it
+    called, though, so that name is left to stand on its own.
+
+    Args:
+        log (str): Name of the log the region came from.
+        region (str): Name of the region.
+        region_relabel_map (dict | None): Optional mapping from region name to the label to plot it under.
+
+    Returns:
+        str: The label.
+    """
+    if region_relabel_map is not None and region in region_relabel_map:
+        return region_relabel_map[region]
+    return f"{log}: {region}"
+
+
+def _component_names(layout: ComponentLayout) -> list[str]:
+    """Returns the name of every component in a layout, itself included, for saying what it does hold."""
+
+    names = [layout.name]
+    for sub_layout in layout.sub_layouts:
+        names.extend(_component_names(sub_layout))
+    return names
 
 
 class ProfilingManager(ABC):
@@ -45,6 +160,11 @@ class ProfilingManager(ABC):
     data: dict[
         str, dict[str, xr.Dataset]
     ]  # Dictionary mapping experiments to component names and their profiling datasets.
+
+    # The component a log belongs to, where the log is one component's alone and is named something else.
+    # This is only what a RegionGroup falls back on when it names no component itself: a log holding the
+    # regions of several components has no one entry here, and says which is which group by group.
+    _layout_component_names: dict[str, str] = {}
 
     def __init__(self, work_dir: Path, archive_dir: Path):
         super().__init__()
@@ -113,6 +233,33 @@ class ProfilingManager(ABC):
 
         Returns:
             int: Number of CPUs the experiment occupied.
+        """
+
+    @abstractmethod
+    def parse_layout(self, path: Path, run_path: Path | None = None) -> ComponentLayout | None:
+        """Parses the layout a given experiment runs, from the configuration it runs it with.
+
+        This is what the components were given, which is the counterpart of parse_ncpus rather than a
+        breakdown of it: the cores put to work, component by component, where parse_ncpus reports the whole
+        nodes the job was charged for. The two differ by whatever was left idle to fill a node.
+
+        What comes back states the cores, ranks and threads of each component, but not necessarily how any
+        of them divided its domain: a configuration says how many ranks a component has far more readily
+        than it says what grid they are arranged in. So a parsed layout is for reading rather than for
+        generating from - a layout an experiment was generated from is the whole of it, and is kept on the
+        experiment instead.
+
+        Returning None means the configuration does not say, which is a missing answer rather than an
+        error, as it is for parse_status: a subclass should log the reason at DEBUG and return None rather
+        than raise, so that an experiment whose layout cannot be read is one that simply cannot be plotted
+        against its components.
+
+        Args:
+            path (Path): Path to the experiment directory.
+            run_path (Path | None): Optional path to a separate runs directory.
+
+        Returns:
+            ComponentLayout | None: The layout the experiment runs, or None if it cannot be told.
         """
 
     @abstractmethod
@@ -406,6 +553,26 @@ class ProfilingManager(ABC):
                 experiment.ncpus = self.parse_ncpus(exp_path, run_path)
         return experiment.ncpus
 
+    def _layout(self, exp_name: str) -> ComponentLayout | None:
+        """Returns the layout an experiment runs, reading it back at most once.
+
+        An experiment generated from a layout search already carries the layout it was generated from, and
+        is answered from that: it is the whole of it, and nothing on disk says more. Only an experiment
+        this manager did not generate is read back from its configuration, and what that gives is kept on
+        the experiment afterwards, for the same reasons the CPU count is.
+
+        Args:
+            exp_name (str): Name of the experiment.
+
+        Returns:
+            ComponentLayout | None: The layout the experiment runs, or None if it cannot be told.
+        """
+        experiment = self.experiments[exp_name]
+        if experiment.layout is None:
+            with experiment.directory() as (exp_path, run_path):
+                experiment.layout = self.parse_layout(exp_path, run_path)
+        return experiment.layout
+
     def update_statuses(self) -> None:
         """Brings the status of every experiment up to date with the state its run actually reached.
 
@@ -649,6 +816,167 @@ class ProfilingManager(ABC):
             scaling_data.append(xr.concat(component_data, dim="ncpus", join="outer").sortby("ncpus"))
 
         return plot_scaling_metrics(scaling_data, metric, xlabel=xlabel)
+
+    def _component_cores(self, exp_name: str, component: str) -> int:
+        """Returns the cores an experiment gave one of its components.
+
+        Args:
+            exp_name (str): Name of the experiment.
+            component (str): Name of the component, as the layout names it.
+
+        Returns:
+            int: Number of cores that component was given.
+
+        Raises:
+            ValueError: If the experiment's layout cannot be told, or names no such component.
+            NotImplementedError: If this manager's configurations have no layout to read.
+        """
+        layout = self._layout(exp_name)
+        if layout is None:
+            raise ValueError(
+                f"The layout of experiment '{exp_name}' could not be read, so there is nothing to say how "
+                f"many cores it gave '{component}'."
+            )
+
+        found = find_component(layout, component)
+        if found is None:
+            raise ValueError(
+                f"The layout of experiment '{exp_name}' holds no component '{component}'. It holds "
+                f"{sorted(_component_names(layout))}."
+            )
+        return found.n_cores
+
+    def _group_component(self, group: RegionGroup) -> str:
+        """Returns the component a group of regions is to be read against.
+
+        Args:
+            group (RegionGroup): The group.
+
+        Returns:
+            str: The component, as the layout names it.
+        """
+        if group.component is not None:
+            return group.component
+        return self._layout_component_names.get(group.log, group.log)
+
+    def _group_data(self, group: RegionGroup, exp_names: list[str], region_relabel_map: dict | None) -> dict:
+        """Returns the regions of a group for each experiment, keyed by experiment.
+
+        Args:
+            group (RegionGroup): Regions to select, and the log to select them from.
+            exp_names (list[str]): Experiments to select them for.
+            region_relabel_map (dict | None): Optional mapping from region name to the label to plot it under.
+
+        Returns:
+            dict: The selected data, keyed by experiment name.
+
+        Raises:
+            ValueError: If an experiment has no data for the group's log, or lacks one of its regions.
+        """
+        selected = {}
+        for exp_name in exp_names:
+            ds = self.data[exp_name].get(group.log)
+            if ds is None:
+                raise ValueError(f"No profiling data found for '{group.log}' in experiment '{exp_name}'.")
+
+            available_regions = ds.coords["region"].values.tolist()
+            missing_regions = [region for region in group.regions if region not in available_regions]
+            if missing_regions:
+                raise ValueError(
+                    f"Regions {missing_regions} not found in '{group.log}' for experiment '{exp_name}'. "
+                    f"Available regions: {available_regions}."
+                )
+
+            ds = ds.sel(region=list(group.regions))
+            # From here the coordinate is the label the curve will carry rather than the name of a region:
+            # the dataset exists only to be plotted, and settling the label here is what lets a relabelled
+            # region stand on its own, which the plot could not know to do.
+            ds = ds.assign_coords(
+                region=[_region_label(group.log, region, region_relabel_map) for region in ds.region.values]
+            )
+            selected[exp_name] = ds
+        return selected
+
+    def plot_component_scaling_data(
+        self,
+        groups: list[RegionGroup],
+        metric: ProfilingMetric,
+        region_relabel_map: dict | None = None,
+        experiments: list[str] | None = None,
+        xlabel: str | None = None,
+        ylabel: str | None = None,
+        show: bool = True,
+    ) -> Figure:
+        """Plots a metric for the given regions against the cores their own component was given.
+
+        Where plot_scaling_data reads every component against the whole job, this reads each against its
+        own cores. That is the question to ask of a component whose share of the budget is what changed:
+        an ocean given half again as many cores either ran faster for it or did not, and the total the job
+        occupied says nothing about which.
+
+        Each group names the log its regions come from and the component they belong to, because the two
+        are not the same: one log can hold several components' regions and one component can be spread over
+        several logs. See RegionGroup.
+
+        The regions of a group are plotted as their own lines rather than added together, since the timers
+        most of these models write are inclusive - a region and the region it sits inside both count the
+        same seconds, and adding them would count them twice.
+
+        Note that a region can be a wait rather than work, and will scale backwards if it is. MOM5's
+        oasis_recv and the ACCESS-OM3 couplers go up as their component is given more cores, because it
+        finishes its own work sooner and waits longer on the components that have not.
+
+        Args:
+            groups (list[RegionGroup]): Regions to plot, and what to read each of them against.
+            metric (ProfilingMetric): The metric to plot.
+            region_relabel_map (dict | None): Optional mapping from region name to the label to plot it
+                under. A region named here is plotted under that label alone; one left out is plotted as
+                "<log>: <region>", since region names are only made unique within one log.
+            experiments (list[str] | None): Experiments to plot. None (the default) plots all of those
+                with parsed profiling data.
+            xlabel (str | None): Optional label for the x-axis.
+            ylabel (str | None): Optional label for the y-axis. If None, the metric names it.
+            show (bool): Whether to show the generated plot. Default: True.
+
+        Returns:
+            Figure: The Matplotlib figure the lines are plotted on.
+
+        Raises:
+            ValueError: If no experiments are selected, if a selected experiment has no parsed profiling
+                data, if no profiling data is found for a group's log, if a requested region is missing, if
+                the profiling data still has a 'run' dimension, if an experiment's layout cannot be told or
+                names no such component, or if two experiments give one component the same number of cores.
+            NotImplementedError: If this manager's configurations have no layout to read, as Cylc Rose ones
+                do not. There is nothing for this plot to put on its x-axis in that case.
+        """
+        exp_names = experiments if experiments is not None else list(self.data.keys())
+        if not exp_names:
+            raise ValueError("No experiments selected for scaling plot.")
+
+        missing_data = [exp_name for exp_name in exp_names if exp_name not in self.data]
+        if missing_data:
+            raise ValueError(f"No parsed profiling data for experiments: {sorted(missing_data)}.")
+
+        if any("run" in ds.dims for exp_name in exp_names for ds in self.data[exp_name].values()):
+            raise ValueError(_RUN_DIM_ERROR)
+
+        # A list rather than a mapping: neither the log nor the component is unique across groups, since
+        # one of each is exactly what the other kind of group is for.
+        scaling_data = []
+        for group in groups:
+            # What was asked for is settled first, since a log or a region this manager holds nothing for
+            # is a plainer thing to be told than anything about cores.
+            selected = self._group_data(group, exp_names, region_relabel_map)
+
+            # Then where each of them goes: the cores this group's component was given are its x axis.
+            component = self._group_component(group)
+            cores = {exp_name: self._component_cores(exp_name, component) for exp_name in exp_names}
+            _reject_shared_core_counts(component, cores)
+
+            group_data = [ds.expand_dims({"ncpus": [cores[exp_name]]}) for exp_name, ds in selected.items()]
+            scaling_data.append((group.log, xr.concat(group_data, dim="ncpus", join="outer").sortby("ncpus")))
+
+        return plot_component_scaling(scaling_data, metric, xlabel=xlabel, ylabel=ylabel, show=show)
 
     def plot_bar_chart(
         self,

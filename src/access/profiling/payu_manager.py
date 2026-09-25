@@ -297,8 +297,11 @@ class PayuManager(ProfilingManager, ABC):
                     layout, branch, walltime_hrs
                 )
                 if existing is None:
+                    # The layout goes with it: this is the whole of it, grids and all, and an experiment
+                    # asked later what its components were given answers from this rather than reading
+                    # back the configuration it was written into.
                     new_experiments[branch] = ProfilingExperiment(
-                        path=self.work_dir / branch / self._repository_directory
+                        path=self.work_dir / branch / self._repository_directory, layout=layout
                     )
                 else:
                     # Already registered, and its status is left as it stands: the record of the failed run
