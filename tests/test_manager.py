@@ -1183,17 +1183,31 @@ class TestPlotComponentScalingData:
         manager.plot_component_scaling_data([RegionGroup("component", ["Region 1", "Region 2"])], tavg)
 
         ((_, stat),) = mock_plot.call_args.args[0]
-        assert list(stat["region"].values) == ["Region 1", "Region 2"]
+        assert list(stat["region"].values) == ["component: Region 1", "component: Region 2"]
 
     @mock.patch("access.profiling.manager.plot_component_scaling")
-    def test_regions_can_be_relabelled(self, mock_plot, component_scaling_data):
+    def test_a_region_is_labelled_with_the_log_it_came_from(self, mock_plot, component_scaling_data):
+        """Region names are only unique within one log, so two components may each have a "Total"."""
+
+        manager, _ = component_scaling_data
+        manager.plot_component_scaling_data([RegionGroup("component", ["Region 1"])], tavg)
+
+        ((_, stat),) = mock_plot.call_args.args[0]
+        assert list(stat["region"].values) == ["component: Region 1"]
+
+    @mock.patch("access.profiling.manager.plot_component_scaling")
+    def test_a_relabelled_region_stands_on_its_own_name(self, mock_plot, component_scaling_data):
+        """Naming one is the caller saying what it should be called, so the log is not put in front of it."""
+
         manager, _ = component_scaling_data
         manager.plot_component_scaling_data(
-            [RegionGroup("component", ["Region 1"])], tavg, region_relabel_map={"Region 1": "Dynamics"}
+            [RegionGroup("component", ["Region 1", "Region 2"])],
+            tavg,
+            region_relabel_map={"Region 1": "Dynamics"},
         )
 
         ((_, stat),) = mock_plot.call_args.args[0]
-        assert list(stat["region"].values) == ["Dynamics"]
+        assert list(stat["region"].values) == ["Dynamics", "component: Region 2"], "one named, one not"
 
     @mock.patch("access.profiling.manager.plot_component_scaling")
     def test_one_log_holding_several_components(self, mock_plot, component_scaling_data):
@@ -1249,6 +1263,26 @@ class TestPlotComponentScalingData:
         groups = mock_plot.call_args.args[0]
         assert list(groups[0][1]["ncpus"].values) == [30, 60, 120], "the mapping named 'other'"
         assert list(groups[1][1]["ncpus"].values) == sorted(cores), "nothing named it, so the log's own name"
+
+    @mock.patch("access.profiling.manager.plot_component_scaling")
+    def test_the_axis_labels_are_passed_on(self, mock_plot, component_scaling_data):
+        """Both of them, so a caller can name the axes of a plot this method builds for them."""
+
+        manager, _ = component_scaling_data
+        manager.plot_component_scaling_data(
+            [RegionGroup("component", ["Region 1"])], tavg, xlabel="Ocean cores", ylabel="Ocean walltime"
+        )
+
+        assert mock_plot.call_args.kwargs["xlabel"] == "Ocean cores"
+        assert mock_plot.call_args.kwargs["ylabel"] == "Ocean walltime"
+
+    @mock.patch("access.profiling.manager.plot_component_scaling")
+    def test_no_axis_labels_are_given_by_default(self, mock_plot, component_scaling_data):
+        manager, _ = component_scaling_data
+        manager.plot_component_scaling_data([RegionGroup("component", ["Region 1"])], tavg)
+
+        assert mock_plot.call_args.kwargs["xlabel"] is None
+        assert mock_plot.call_args.kwargs["ylabel"] is None
 
     @mock.patch("access.profiling.manager.plot_component_scaling")
     def test_the_layout_a_generated_experiment_carries_is_used_as_it_stands(self, mock_plot, component_scaling_data):
