@@ -56,6 +56,10 @@ class MockPayuManager(PayuManager):
         ocn_nx, ocn_ny = ocn.decomposition.grid.shape
         return f"mock_atm_{atm_nx}x{atm_ny}_ocn_{ocn_nx}x{ocn_ny}"
 
+    def parse_layout(self, path, run_path=None):
+        """The layout of a generated experiment is attached to it, so nothing here needs to read one back."""
+        return None
+
     def layout_config_changes(self, layout) -> dict:
         atm, ocn = layout.sub_layouts
         return {"config.yaml": {"submodels": [[{"ncpus": atm.n_cores}, {"ncpus": ocn.n_cores}]]}}
@@ -541,6 +545,24 @@ def test_generate_scaling_experiments_callables(mock_experiment_generator, manag
     allocations.assert_called_once_with(1.0)
     config = mock_experiment_generator.call_args[0][0]
     assert config["Perturbation_Experiment"]["Experiment_1"]["config.yaml"]["walltime"] == "1:30:00"
+
+
+@mock.patch("access.profiling.payu_manager.ExperimentGenerator")
+def test_generate_scaling_experiments_attaches_the_layout(mock_experiment_generator, manager):
+    """An experiment keeps the layout it was generated from, so nothing has to read it back later."""
+
+    manager.set_control("https://example.com/repo", "commit")
+    manager.generate_scaling_experiments(
+        num_nodes_list=[1.0], control_options={}, cores_per_node=4, walltime=2.0, allocations=MOCK_ALLOCATIONS
+    )
+
+    layouts = {branch: exp.layout for branch, exp in manager.experiments.items()}
+    assert all(layout is not None for layout in layouts.values())
+    # Every branch is a distinct layout, and the branch is named after it.
+    assert len(set(layouts.values())) == len(layouts)
+    for branch, layout in layouts.items():
+        assert manager.layout_branch_name(layout) == branch
+        assert layout.n_cores == 4
 
 
 @mock.patch("access.profiling.payu_manager.ExperimentGenerator")
