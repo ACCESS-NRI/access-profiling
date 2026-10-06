@@ -5,7 +5,7 @@ import itertools
 import logging
 import textwrap
 from abc import ABC, abstractmethod
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -15,6 +15,8 @@ from access.config.parallel_component import ComponentLayout, ParallelComponent
 from access.config.parallel_layouts import iter_layouts
 from matplotlib.figure import Figure
 
+from access.profiling.configuration import ExperimentPlan, ModelConfiguration
+from access.profiling.control import ControlSource
 from access.profiling.experiment import ProfilingExperiment, ProfilingExperimentStatus, ProfilingLog
 from access.profiling.metrics import ProfilingMetric
 from access.profiling.plotting_utils import plot_bar_metrics
@@ -45,7 +47,7 @@ class RegionGroup:
     this.
 
     Args:
-        log (str): Name of the profiling log the regions come from, as get_component_logs names it.
+        log (str): Name of the profiling log the regions come from, as the configuration's LogSpec names it.
         regions (Sequence[str]): Regions of that log to plot, each of which becomes a line.
         component (str | None): Component whose cores these regions are read against, named as the layout
             names it. None (the default) takes the component the manager associates with this log, and
@@ -148,10 +150,23 @@ class ProfilingManager(ABC):
     it supports parsing and plotting scaling data, including selecting the best performing experiment
     for each number of CPUs.
 
+    A manager is the workflow engine, and nothing about any one model: what is being profiled arrives as a
+    ModelConfiguration and what it is being profiled against as a ControlSource. So a subclass is written once
+    per engine rather than once per model, and a new model or a new configuration of one is data rather than
+    code.
+
+    Which of the two answers a question is decided by what wrote the thing being read: the manager reads what
+    the engine and the scheduler wrote - the logs, the job records, the CPU count the scheduler charged for -
+    and the configuration reads what the model's own configuration files say.
+
     Args:
         work_dir (Path): Working directory where profiling experiments will be generated and run.
         archive_dir (Path): Directory where completed experiments will be archived.
-        archive_exclude_patterns (list[str] | None): File patterns to exclude when archiving experiments.
+        configuration (ModelConfiguration): The model configuration being profiled, which says how the model
+            is parallelised, what it writes and how a layout is realised in its configuration files.
+        control (ControlSource | None): Where the control configuration every experiment perturbs comes from.
+            None (the default) is enough to read and plot experiments that already exist, and is rejected by
+            generate_scaling_experiments, which has nothing to perturb without it.
     """
 
     work_dir: Path  # Working directory where profiling experiments will be generated and run.
@@ -161,15 +176,18 @@ class ProfilingManager(ABC):
         str, dict[str, xr.Dataset]
     ]  # Dictionary mapping experiments to component names and their profiling datasets.
 
-    # The component a log belongs to, where the log is one component's alone and is named something else.
-    # This is only what a RegionGroup falls back on when it names no component itself: a log holding the
-    # regions of several components has no one entry here, and says which is which group by group.
-    _layout_component_names: dict[str, str] = {}
-
-    def __init__(self, work_dir: Path, archive_dir: Path):
+    def __init__(
+        self,
+        work_dir: Path,
+        archive_dir: Path,
+        configuration: ModelConfiguration,
+        control: ControlSource | None = None,
+    ):
         super().__init__()
         self.work_dir = work_dir
         self.archive_dir = archive_dir
+        self._configuration = configuration
+        self._control = control
         self.experiments = {}
         self.data = {}
 
@@ -186,6 +204,9 @@ class ProfilingManager(ABC):
 
         indent = "    "
         summary = f"<{type(self).__name__}>\n"
+        summary += indent + f"Configuration: {self.configuration.name}\n"
+        if self.control is not None:
+            summary += indent + f"Control: {self.control.label}\n"
         summary += indent + f"Working directory: {self.work_dir!r}\n"
         summary += indent + f"Archive directory: {self.archive_dir!r}\n"
         summary += indent + "Experiments:\n"
@@ -201,6 +222,36 @@ class ProfilingManager(ABC):
                     summary += indent * 3 + f"'{comp_name}':\n"
                     summary += textwrap.indent(f"{ds}\n", indent * 4)
         return summary
+
+    @property
+    def configuration(self) -> ModelConfiguration:
+        """Returns the model configuration being profiled.
+
+        Returns:
+            ModelConfiguration: The configuration.
+        """
+        return self._configuration
+
+    @property
+    def control(self) -> ControlSource | None:
+        """Returns where the control configuration every experiment perturbs comes from.
+
+        Returns:
+            ControlSource | None: The control, or None if this manager was given none.
+        """
+        return self._control
+
+    @control.setter
+    def control(self, value: ControlSource | None) -> None:
+        """Sets where the control configuration comes from.
+
+        Settable so that one manager can profile the same configuration against several controls in turn -
+        two releases, or a release and a fork - without being rebuilt and losing the experiments it holds.
+
+        Args:
+            value (ControlSource | None): The control.
+        """
+        self._control = value
 
     @abstractmethod
     def profiling_logs(self, path: Path, run_path: Path | None = None) -> dict[str, dict[int, ProfilingLog]]:
@@ -236,33 +287,6 @@ class ProfilingManager(ABC):
         """
 
     @abstractmethod
-    def parse_layout(self, path: Path, run_path: Path | None = None) -> ComponentLayout | None:
-        """Parses the layout a given experiment runs, from the configuration it runs it with.
-
-        This is what the components were given, which is the counterpart of parse_ncpus rather than a
-        breakdown of it: the cores put to work, component by component, where parse_ncpus reports the whole
-        nodes the job was charged for. The two differ by whatever was left idle to fill a node.
-
-        What comes back states the cores, ranks and threads of each component, but not necessarily how any
-        of them divided its domain: a configuration says how many ranks a component has far more readily
-        than it says what grid they are arranged in. So a parsed layout is for reading rather than for
-        generating from - a layout an experiment was generated from is the whole of it, and is kept on the
-        experiment instead.
-
-        Returning None means the configuration does not say, which is a missing answer rather than an
-        error, as it is for parse_status: a subclass should log the reason at DEBUG and return None rather
-        than raise, so that an experiment whose layout cannot be read is one that simply cannot be plotted
-        against its components.
-
-        Args:
-            path (Path): Path to the experiment directory.
-            run_path (Path | None): Optional path to a separate runs directory.
-
-        Returns:
-            ComponentLayout | None: The layout the experiment runs, or None if it cannot be told.
-        """
-
-    @abstractmethod
     def parse_status(self, path: Path, run_path: Path | None = None) -> ProfilingExperimentStatus | None:
         """Parses the state a given experiment's run actually reached.
 
@@ -283,35 +307,16 @@ class ProfilingManager(ABC):
         """
 
     @property
-    @abstractmethod
     def parallel_component(self) -> ParallelComponent:
         """Returns the component tree describing how the model is parallelised.
 
         Returns:
-            ParallelComponent: Root of the component tree, holding the domains and the requirements that every
-                valid layout of this model must satisfy. Requirements specific to a particular study belong in the
-                allocation strategy passed to the layout search instead.
+            ParallelComponent: Root of the component tree, as the configuration being profiled states it. It
+                holds the domains and the requirements that every valid layout of that configuration must
+                satisfy; requirements specific to a particular study belong in the allocation strategy passed
+                to the layout search instead.
         """
-
-    @abstractmethod
-    def layout_branch_name(self, layout: ComponentLayout) -> str:
-        """Returns the name of the branch holding the experiment for a given layout.
-
-        Args:
-            layout (ComponentLayout): Layout of the model components, as returned by the layout search.
-        Returns:
-            str: Branch name. Must be distinct for every distinct layout, as it is what identifies an experiment.
-        """
-
-    @abstractmethod
-    def layout_config_changes(self, layout: ComponentLayout) -> dict:
-        """Returns the configuration file changes needed to run the model with a given layout.
-
-        Args:
-            layout (ComponentLayout): Layout of the model components, as returned by the layout search.
-        Returns:
-            dict: Changes to apply, keyed by the path of each configuration file relative to the control directory.
-        """
+        return self.configuration.parallel_component
 
     def select_layouts(
         self,
@@ -349,6 +354,233 @@ class ProfilingManager(ABC):
             )
             found = found[:max_layouts]
         return sorted(found, key=lambda layout: layout.idle_cores)
+
+    @staticmethod
+    def _validate_sizing(num_nodes_list: list[float], cores_per_node: int) -> None:
+        """Rejects the sizes no layout search could be made for.
+
+        Everything is checked before the first search, so that a bad value late in the list costs nothing and
+        generate_scaling_experiments either generates all the experiments it was asked for or none of them.
+
+        Args:
+            num_nodes_list (list[float]): Numbers of nodes to generate experiments for.
+            cores_per_node (int): Number of cores available on each node.
+
+        Raises:
+            ValueError: If cores_per_node is not a positive integer, or if any of the node counts is not
+                positive.
+        """
+        if not isinstance(cores_per_node, int) or cores_per_node <= 0:
+            raise ValueError(f"Cores per node must be a positive integer. Got {cores_per_node} instead")
+
+        for num_nodes in num_nodes_list:
+            if num_nodes <= 0:
+                raise ValueError(f"Number of nodes must be > 0. Got {num_nodes} instead")
+
+    def _plan_experiments(
+        self,
+        num_nodes_list: list[float],
+        cores_per_node: int,
+        walltime: float | Callable[[float], float],
+        allocations: RootAllocation | Callable[[float], RootAllocation] | None,
+        max_layouts: int | None,
+        regenerate_failed: bool,
+    ) -> list[ExperimentPlan]:
+        """Returns the experiments a scaling study is to create, one per layout it has not covered yet.
+
+        What generate_scaling_experiments decides, separated from what it then does with it: nothing here
+        touches the working directory, so what a study would generate can be worked out without generating it.
+
+        Args:
+            num_nodes_list (list[float]): Numbers of nodes to generate experiments for.
+            cores_per_node (int): Number of cores available on each node.
+            walltime (float | Callable[[float], float]): Walltime in hours, or a function of the node count.
+            allocations (RootAllocation | Callable[[float], RootAllocation] | None): Allocation strategy, or a
+                function of the node count, or None to leave every component unconstrained.
+            max_layouts (int | None): Maximum number of layouts to enumerate for each number of nodes.
+            regenerate_failed (bool): Whether to plan an experiment this manager already holds again when its
+                run failed.
+
+        Returns:
+            list[ExperimentPlan]: What to create, in the order the sizes were asked for.
+        """
+        plans: list[ExperimentPlan] = []
+        # What this call has already covered. self.experiments on its own does not say, the registration
+        # being deferred until the engine has returned, and the same layout is regularly valid at two
+        # different node counts.
+        planned: set[str] = set()
+        for num_nodes in num_nodes_list:
+            total_cores = int(num_nodes * cores_per_node)
+            layouts = self.select_layouts(
+                total_cores,
+                allocations=allocations(num_nodes) if callable(allocations) else allocations,
+                max_layouts=max_layouts,
+            )
+            if not layouts:
+                logger.warning(
+                    f"No layouts found for {num_nodes} nodes ({total_cores} cores). Check the bounds and the "
+                    "constraints of the allocation strategy."
+                )
+                continue
+            logger.info(f"Found {len(layouts)} layouts for {num_nodes} nodes ({total_cores} cores).")
+
+            walltime_hrs = walltime(num_nodes) if callable(walltime) else walltime
+
+            for layout in layouts:
+                name = self.configuration.experiment_name(layout)
+                if name in planned:
+                    continue
+
+                existing = self.experiments.get(name)
+                if existing is not None and not (
+                    regenerate_failed and existing.status == ProfilingExperimentStatus.FAILED
+                ):
+                    logger.info(f"Experiment {name} already exists. Skipping addition.")
+                    continue
+                if existing is not None:
+                    logger.info(f"Regenerating experiment {name}, whose run failed.")
+
+                planned.add(name)
+                plans.append(
+                    ExperimentPlan(
+                        name=name,
+                        layout=layout,
+                        changes=self.configuration.config_changes(layout),
+                        walltime_hours=walltime_hrs,
+                        regenerating=existing is not None,
+                    )
+                )
+
+        return plans
+
+    def generate_scaling_experiments(
+        self,
+        num_nodes_list: list[float],
+        cores_per_node: int,
+        walltime: float | Callable[[float], float],
+        allocations: RootAllocation | Callable[[float], RootAllocation] | None = None,
+        max_layouts: int | None = None,
+        regenerate_failed: bool = False,
+        **runner_options,
+    ) -> None:
+        """Generates scaling experiments, one per valid layout of the configuration being profiled.
+
+        For each requested number of nodes, the valid layouts are enumerated and each one becomes an
+        experiment. Layouts whose experiment is already known to this manager, or was already planned earlier
+        in the same call, are skipped, so the same layout found for two different numbers of nodes only
+        generates one experiment.
+
+        That happens whenever a layout fits both budgets, which is a matter of how much waste the component
+        tree tolerates: a layout spending 508 cores is valid on 520 and on 546, leaving 2.3% and 7.0% of them
+        idle. Note that it does not arise for an allocation strategy written in fractions of the total, since
+        its bounds move with the budget; it is strategies stated in cores, and callables, that repeat
+        themselves.
+
+        An experiment that failed may be generated again, which is what regenerate_failed asks for. The
+        changes each experiment makes are worked out afresh from the arguments of this call rather than
+        replayed from what was generated before, so correcting whatever produced the failure - the walltime,
+        the allocation, the configuration's own config_changes - and calling this method again is what puts
+        the correction on the experiment.
+
+        Regenerating leaves the status alone, so an experiment that failed still reads as failed: what a run
+        did is the run's to say, not generation's, and the record of the failure is still there to be read.
+        Running it again therefore takes run_experiments(retry_failed=True), which is also what clears that
+        record.
+
+        Experiments become known to this manager only once the engine has created them, since an experiment
+        it holds is one that can be run, archived and deleted. A generation that fails therefore registers
+        nothing, not even what the engine managed to create before failing, and it is the whole call that is
+        abandoned: correcting the cause and calling this method again generates the rest. A regenerated
+        experiment is already registered and so survives such a failure, whether or not the engine reached it.
+
+        Deciding what to generate is the same question for every workflow engine and is answered here;
+        creating it is each engine's own and is left to _create_experiments.
+
+        Args:
+            num_nodes_list (list[float]): Numbers of nodes to generate experiments for. Fractional values are
+                allowed; the number of cores the layouts are searched for is the product with cores_per_node,
+                truncated to an integer.
+            cores_per_node (int): Number of cores available on each node. Must be a positive integer.
+            walltime (float | Callable[[float], float]): Walltime in hours to request for each experiment,
+                either as a fixed value or as a function of the number of nodes.
+            allocations (RootAllocation | Callable[[float], RootAllocation] | None): Allocation strategy
+                deciding how many cores each component may receive, either as a single strategy or as a
+                function of the number of nodes. A single strategy is usually enough, since the bounds of an
+                allocation may be written as fractions of the total core count, which resolve to a different
+                number of cores at every size in the study. Pass a function only where a bound cannot be
+                expressed that way; note that allocation bounds are in cores, so it typically multiplies by
+                cores_per_node itself. None (the default) leaves every component unconstrained.
+            max_layouts (int | None): Maximum number of layouts to enumerate for each number of nodes. None
+                (the default) enumerates all of them.
+            regenerate_failed (bool): Whether to generate an experiment this manager already holds again when
+                its run failed, so that a correction reaches it. False (the default) skips every experiment
+                already held, whatever became of it. Only failed ones are ever regenerated: a running one
+                would be rewritten underneath a live job, and one that finished has results that its
+                configuration should go on matching.
+            **runner_options: Further options for the workflow engine, passed through to _create_experiments.
+
+        Raises:
+            ValueError: If this manager has no control, if cores_per_node is not a positive integer, or if any
+                of the node counts is not positive.
+            Exception: Whatever the workflow engine raises, unchanged. No experiment is registered when it
+                does.
+        """
+        if self.control is None:
+            raise ValueError(
+                "Cannot generate experiments without a control: every experiment is a perturbation of one, so "
+                "there is nothing to generate from. Pass a ControlSource to this manager."
+            )
+        self._validate_sizing(num_nodes_list, cores_per_node)
+        plans = self._plan_experiments(
+            num_nodes_list, cores_per_node, walltime, allocations, max_layouts, regenerate_failed
+        )
+
+        if not plans:
+            logger.warning("No new experiments to generate. Will skip generation.")
+            return
+
+        try:
+            created = self._create_experiments(plans, **runner_options)
+        except Exception:
+            # How far the engine got is unknown, so nothing new is registered: an experiment this manager has
+            # never heard of is simply generated again on the next call, whereas one registered without
+            # anything on disk behind it would be submitted by run_experiments() and would never be
+            # generated, the check above having claimed it.
+            new_names = sorted(plan.name for plan in plans if not plan.regenerating)
+            logger.warning(
+                f"Experiment generation failed, so none of {new_names} were added to this manager. Some may "
+                "already exist in the working directory; correcting the cause and calling this method again "
+                "generates the rest and leaves those alone."
+            )
+            regenerating = sorted(plan.name for plan in plans if plan.regenerating)
+            if regenerating:
+                logger.warning(
+                    f"The experiments being regenerated, {regenerating}, are still held by this manager, "
+                    "since they were already. How far the engine got through them is unknown, so some may "
+                    "carry the correction and others not."
+                )
+            raise
+
+        self.experiments.update(created)
+
+    @abstractmethod
+    def _create_experiments(self, plans: list[ExperimentPlan], **runner_options) -> dict[str, ProfilingExperiment]:
+        """Creates the planned experiments with this manager's workflow engine.
+
+        Called once with everything generate_scaling_experiments decided to create, so that an engine which
+        sets up many experiments in one invocation - the Payu experiment generator does - is invoked once.
+        Raising abandons the whole call and registers nothing.
+
+        Args:
+            plans (list[ExperimentPlan]): What to create. A plan marked as regenerating corrects an experiment
+                this manager already holds, so the engine is to apply its changes to what is already there
+                rather than start it over.
+            **runner_options: Whatever generate_scaling_experiments was passed for this engine.
+
+        Returns:
+            dict[str, ProfilingExperiment]: The experiments this manager is to start holding, keyed by name.
+                The ones being regenerated are left out, being held already.
+        """
 
     def archive_experiments(
         self,
@@ -569,8 +801,8 @@ class ProfilingManager(ABC):
         """
         experiment = self.experiments[exp_name]
         if experiment.layout is None:
-            with experiment.directory() as (exp_path, run_path):
-                experiment.layout = self.parse_layout(exp_path, run_path)
+            with experiment.directory() as (exp_path, _):
+                experiment.layout = self.configuration.parse_layout(exp_path)
         return experiment.layout
 
     def update_statuses(self) -> None:
@@ -857,7 +1089,10 @@ class ProfilingManager(ABC):
         """
         if group.component is not None:
             return group.component
-        return self._layout_component_names.get(group.log, group.log)
+        # A log the configuration declares a component for is read against that component; one it does not -
+        # a coupled profile covering several, or a log of another configuration entirely - is read against
+        # its own name, and a caller naming regions says which component each group is.
+        return self.configuration.component_for_log(group.log) or group.log
 
     def _group_data(self, group: RegionGroup, exp_names: list[str], region_relabel_map: dict | None) -> dict:
         """Returns the regions of a group for each experiment, keyed by experiment.

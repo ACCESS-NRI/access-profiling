@@ -4,15 +4,15 @@
 import json
 import logging
 import subprocess
-from abc import ABC, abstractmethod
-from collections.abc import Callable
+import warnings
 from pathlib import Path
 
 from access.config import YAMLParser
-from access.config.parallel_allocation_strategies import RootAllocation
 from experiment_generator.experiment_generator import ExperimentGenerator
 from experiment_runner.experiment_runner import ExperimentRunner
 
+from access.profiling.configuration import ExperimentPlan, PayuConfiguration
+from access.profiling.control import ControlSource, GitControlSource
 from access.profiling.experiment import ProfilingLog
 from access.profiling.manager import ProfilingExperiment, ProfilingExperimentStatus, ProfilingManager
 from access.profiling.payujson_parser import PayuJSONProfilingParser
@@ -45,29 +45,46 @@ def _walltime_string(hours: float) -> str:
     return f"{hours_part}:{minutes:02d}:{seconds:02d}"
 
 
-class PayuManager(ProfilingManager, ABC):
-    """Abstract base class to handle profiling of Payu configurations."""
+class PayuManager(ProfilingManager):
+    """Profiling of any ACCESS model driven by Payu.
 
-    _repository_directory: str = "config"  # Repository directory name needed by the experiment generator and runner.
+    One class for every Payu model: what is being profiled arrives as a PayuConfiguration, so ACCESS-ESM1.6
+    and ACCESS-OM3 are two values rather than two subclasses. What is written here is the engine - the
+    experiment generator and runner, Payu's own output layout, and the job records the scheduler leaves
+    behind - and none of it is any one model's.
+
+    Args:
+        work_dir (Path): Working directory where profiling experiments will be generated and run.
+        archive_dir (Path): Directory where completed experiments will be archived.
+        configuration (PayuConfiguration): The model configuration being profiled.
+        control (ControlSource | None): Where the control configuration every experiment perturbs comes from.
+            None (the default) is enough to read and plot experiments that already exist.
+    """
+
     _nruns: int = 1  # Number of repetitions for the Payu experiments.
     _startfrom_restart: str = "cold"  # Restart option for the Payu experiments.
-    _repository: str  # Git repository URL or path of the control experiment. Set by set_control.
-    _control_commit: str  # Git commit of the control experiment. Set by set_control.
 
-    @abstractmethod
-    def get_component_logs(self, path: Path) -> dict[str, ProfilingLog]:
-        """Returns available profiling logs for the components in the configuration.
-
-        Args:
-            path (Path): Path to the output directory.
-        Returns:
-            dict[str, ProfilingLog]: Dictionary mapping component names to their ProfilingLog instances.
-        """
+    def __init__(
+        self,
+        work_dir: Path,
+        archive_dir: Path,
+        configuration: PayuConfiguration,
+        control: ControlSource | None = None,
+    ):
+        super().__init__(work_dir, archive_dir, configuration, control)
 
     @property
-    @abstractmethod
-    def model_type(self) -> str:
-        """Returns the model type identifier, as defined in Payu."""
+    def _repository_directory(self) -> str:
+        """Returns the name the control clone takes under the working directory.
+
+        The experiment generator and the runner both need it, and both are given it by the control, which is
+        what decides the name. A manager with no control has nothing to clone, but still deletes and archives
+        what it already holds, so the name Payu studies use is answered in that case.
+
+        Returns:
+            str: The directory name, relative to the working directory.
+        """
+        return self.control.directory if self.control is not None else "config"
 
     @property
     def nruns(self) -> int:
@@ -108,235 +125,108 @@ class PayuManager(ProfilingManager, ABC):
         self._startfrom_restart = value
 
     def set_control(self, repository, commit) -> None:
-        """Sets the control experiment from an existing Payu configuration.
+        """Sets the control experiment from a git repository.
+
+        Deprecated: assign a ControlSource to `control` instead, or pass one when building the manager. A
+        control is no longer git's alone, and where it comes from is no longer Payu's question, so saying so
+        in two coordinates with no name for what they are has nowhere left to go.
 
         Args:
             repository: Git repository URL or path.
             commit: Git commit hash or identifier.
         """
-        self._repository = repository
-        self._control_commit = commit
+        warnings.warn(
+            "PayuManager.set_control() is deprecated. Pass a ControlSource when building the manager, or "
+            f"assign one: manager.control = GitControlSource({repository!r}, {commit!r}).",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        self.control = GitControlSource(repository, commit)
 
-    @staticmethod
-    def _validate_sizing(num_nodes_list: list[float], cores_per_node: int) -> None:
-        """Rejects the sizes no layout search could be made for.
-
-        Everything is checked before the first search, so that a bad value late in the list costs nothing and
-        generate_scaling_experiments either generates all the experiments it was asked for or none of them.
-
-        Args:
-            num_nodes_list (list[float]): Numbers of nodes to generate experiments for.
-            cores_per_node (int): Number of cores available on each node.
-
-        Raises:
-            ValueError: If cores_per_node is not a positive integer, or if any of the node counts is not
-                positive.
-        """
-        if not isinstance(cores_per_node, int) or cores_per_node <= 0:
-            raise ValueError(f"Cores per node must be a positive integer. Got {cores_per_node} instead")
-
-        for num_nodes in num_nodes_list:
-            if num_nodes <= 0:
-                raise ValueError(f"Number of nodes must be > 0. Got {num_nodes} instead")
-
-    def _perturbation_block(self, layout, branch: str, walltime_hrs: float) -> dict:
-        """Returns what the experiment generator is to make of one layout.
+    def _perturbation_block(self, plan: ExperimentPlan) -> dict:
+        """Returns what the experiment generator is to make of one planned experiment.
 
         A perturbation block names the branch it applies to and then, keyed by the configuration file each
-        change belongs in, everything that distinguishes this experiment from the control. The model says
-        what its own layout comes to; the walltime and the experiment name are added here, since they are
-        the same question for every model.
+        change belongs in, everything that distinguishes this experiment from the control. The configuration
+        says what its own layout comes to; the walltime and the experiment name are added here, since they are
+        Payu's question rather than any model's.
 
         Args:
-            layout (ComponentLayout): Layout the experiment is to run.
-            branch (str): Name of the branch the experiment lives on.
-            walltime_hrs (float): Walltime to request, in hours.
+            plan (ExperimentPlan): The experiment to create.
 
         Returns:
             dict: The perturbation block, ready to hand to the experiment generator.
         """
         # Everything this experiment changes in the control configuration, keyed by the file each change
-        # applies to.
-        changes_by_file = self.layout_config_changes(layout)
-        if "config.yaml" not in changes_by_file:
-            # Not every model has something of its own to change in there.
-            changes_by_file["config.yaml"] = {}
-        changes_by_file["config.yaml"]["walltime"] = _walltime_string(walltime_hrs)
+        # applies to. Copied, so that adding Payu's own entries cannot reach back into a configuration that
+        # returned something it holds.
+        changes_by_file = dict(plan.changes)
+        # Not every model has something of its own to change in there.
+        changes_by_file["config.yaml"] = dict(changes_by_file.get("config.yaml", {}))
+        changes_by_file["config.yaml"]["walltime"] = _walltime_string(plan.walltime_hours)
         # Payu names the laboratory's work and archive sub-directories after this. Left to work the name out
         # itself it would give every experiment the control directory's name, which is the same string for
         # all of them, and the runs would share one directory.
-        changes_by_file["config.yaml"]["experiment"] = branch
+        changes_by_file["config.yaml"]["experiment"] = plan.name
 
-        pert_config = {"branches": [branch]}
+        pert_config = {"branches": [plan.name]}
         pert_config.update(changes_by_file)
         return pert_config
 
-    def generate_scaling_experiments(
-        self,
-        num_nodes_list: list[float],
-        control_options: dict,
-        cores_per_node: int,
-        walltime: float | Callable[[float], float],
-        allocations: RootAllocation | Callable[[float], RootAllocation] | None = None,
-        max_layouts: int | None = None,
-        regenerate_failed: bool = False,
-    ) -> None:
-        """Generates scaling experiments, one per valid layout of the model.
+    def _create_experiments(
+        self, plans: list[ExperimentPlan], control_options: dict | None = None
+    ) -> dict[str, ProfilingExperiment]:
+        """Creates the planned experiments as branches of a Payu control clone.
 
-        For each requested number of nodes, the valid layouts of the model are enumerated and each one becomes a
-        perturbation experiment. Layouts whose branch is already known to this manager, or was already found
-        earlier in the same call, are skipped, so the same layout found for two different numbers of nodes only
-        generates one experiment.
-
-        That happens whenever a layout fits both budgets, which is a matter of how much waste the component tree
-        tolerates: a layout spending 508 cores is valid on 520 and on 546, leaving 2.3% and 7.0% of them idle.
-        Note that it does not arise for an allocation strategy written in fractions of the total, since its
-        bounds move with the budget; it is strategies stated in cores, and callables, that repeat themselves.
-
-        An experiment that failed may be generated again, which is what regenerate_failed asks for. The
-        changes each experiment makes are worked out afresh from the arguments of this call rather than
-        replayed from what was generated before, so correcting whatever produced the failure - the walltime,
-        the allocation, the control options, the model's own layout_config_changes - and calling this method
-        again is what puts the correction on the branch. The generator applies the changes to the branch it
-        already has rather than starting it over, leaving its history intact.
-
-        Regenerating leaves the status alone, so an experiment that failed still reads as failed: what a run
-        did is the run's to say, not generation's, and the record of the failure is still there to be read.
-        Running it again therefore takes run_experiments(retry_failed=True), which is also what clears that
-        record.
-
-        Experiments become known to this manager only once the generator has returned, since an experiment it
-        holds is one that can be run, archived and deleted. A generation that fails therefore registers
-        nothing, not even the branches the generator managed to create before failing, and it is the whole
-        call that is abandoned: correcting the cause and calling this method again generates the rest, the
-        generator leaving the branches that already exist alone. A regenerated experiment is already
-        registered and so survives such a failure, whether or not the generator reached it.
+        Every plan becomes one perturbation of the control, and the generator is invoked once with all of
+        them: it clones the control itself and sets up the branches in one pass. A plan being regenerated is
+        applied to the branch that already exists rather than starting it over, leaving its history intact,
+        which is the generator's own behaviour.
 
         Args:
-            num_nodes_list (list[float]): Numbers of nodes to generate experiments for. Fractional values are
-                allowed; the number of cores the layouts are searched for is the product with cores_per_node,
-                truncated to an integer.
-            control_options (dict): Options of the control experiment, passed to the experiment generator.
-            cores_per_node (int): Number of cores available on each node. Must be a positive integer.
-            walltime (float | Callable[[float], float]): Walltime in hours to request for each experiment, either as
-                a fixed value or as a function of the number of nodes.
-            allocations (RootAllocation | Callable[[float], RootAllocation] | None): Allocation strategy deciding
-                how many cores each component may receive, either as a single strategy or as a function of the
-                number of nodes. A single strategy is usually enough, since the bounds of an allocation may be
-                written as fractions of the total core count, which resolve to a different number of cores at every
-                size in the study. Pass a function only where a bound cannot be expressed that way; note that
-                allocation bounds are in cores, so it typically multiplies by cores_per_node itself. None (the
-                default) leaves every component unconstrained.
-            max_layouts (int | None): Maximum number of layouts to enumerate for each number of nodes. None (the
-                default) enumerates all of them.
-            regenerate_failed (bool): Whether to generate an experiment this manager already holds again when
-                its run failed, so that a correction reaches its branch. False (the default) skips every
-                experiment already held, whatever became of it. Only failed ones are ever regenerated: a
-                running one would have its branch rewritten underneath a live job, and one that finished has
-                results that its branch should go on matching.
+            plans (list[ExperimentPlan]): The experiments to create.
+            control_options (dict | None): Options of the control experiment, passed to the experiment
+                generator. None (the default) passes none.
+
+        Returns:
+            dict[str, ProfilingExperiment]: The experiments new to this manager, keyed by branch name.
 
         Raises:
-            ValueError: If cores_per_node is not a positive integer, or if any of the node counts is not positive.
-            Exception: Whatever the experiment generator raises, unchanged. No experiment is registered when it
-                does.
+            ValueError: If the control states no start point, which the generator needs to branch from.
+            Exception: Whatever the experiment generator raises, unchanged.
         """
-
-        self._validate_sizing(num_nodes_list, cores_per_node)
+        if self.control.start_point is None:
+            raise ValueError(
+                f"The control {self.control.label!r} states no start point. The Payu experiment generator "
+                "clones the control and branches every experiment from a particular state of it, so it has "
+                "to be told which: give the control a tag, a branch, a commit or a revision."
+            )
 
         generator_config = {
-            "model_type": self.model_type,
-            "repository_url": self._repository,
-            "start_point": self._control_commit,
+            "model_type": self.configuration.model_type,
+            "repository_url": self.control.origin,
+            "start_point": self.control.start_point,
             "test_path": str(self.work_dir),
             "repository_directory": self._repository_directory,
             "control_branch_name": "ctrl",
-            "Control_Experiment": control_options,
-            "Perturbation_Experiment": {},
+            "Control_Experiment": control_options if control_options is not None else {},
+            "Perturbation_Experiment": {
+                f"Experiment_{seqnum}": self._perturbation_block(plan) for seqnum, plan in enumerate(plans, start=1)
+            },
         }
 
-        seqnum = 1
-        # Nothing reaches the manager until the generator has returned. An entry in self.experiments is a
-        # claim that a branch exists to be run, archived and deleted, and until then none of them do.
-        new_experiments: dict[str, ProfilingExperiment] = {}
-        # Regenerated ones are already registered, so they are tracked only to keep this call from
-        # covering the same branch twice.
-        regenerated: set[str] = set()
-        for num_nodes in num_nodes_list:
-            total_cores = int(num_nodes * cores_per_node)
-            layouts = self.select_layouts(
-                total_cores,
-                allocations=allocations(num_nodes) if callable(allocations) else allocations,
-                max_layouts=max_layouts,
+        ExperimentGenerator(generator_config).run()
+
+        # The layout goes with each one: this is the whole of it, grids and all, and an experiment asked
+        # later what its components were given answers from this rather than reading back the configuration
+        # it was written into. The regenerated ones are left out, this manager holding them already.
+        return {
+            plan.name: ProfilingExperiment(
+                path=self.work_dir / plan.name / self._repository_directory, layout=plan.layout
             )
-            if not layouts:
-                logger.warning(
-                    f"No layouts found for {num_nodes} nodes ({total_cores} cores). Check the bounds and the "
-                    "constraints of the allocation strategy."
-                )
-                continue
-            logger.info(f"Found {len(layouts)} layouts for {num_nodes} nodes ({total_cores} cores).")
-
-            walltime_hrs = walltime(num_nodes) if callable(walltime) else walltime
-
-            for layout in layouts:
-                branch = self.layout_branch_name(layout)
-                # What this call has already covered: with the registration deferred, self.experiments on
-                # its own no longer says whether a layout has been seen, and the same layout is regularly
-                # valid at two different node counts.
-                if branch in new_experiments or branch in regenerated:
-                    continue
-
-                existing = self.experiments.get(branch)
-                if existing is not None and not (
-                    regenerate_failed and existing.status == ProfilingExperimentStatus.FAILED
-                ):
-                    logger.info(f"Experiment for branch {branch} already exists. Skipping addition.")
-                    continue
-
-                generator_config["Perturbation_Experiment"][f"Experiment_{seqnum}"] = self._perturbation_block(
-                    layout, branch, walltime_hrs
-                )
-                if existing is None:
-                    # The layout goes with it: this is the whole of it, grids and all, and an experiment
-                    # asked later what its components were given answers from this rather than reading
-                    # back the configuration it was written into.
-                    new_experiments[branch] = ProfilingExperiment(
-                        path=self.work_dir / branch / self._repository_directory, layout=layout
-                    )
-                else:
-                    # Already registered, and its status is left as it stands: the record of the failed run
-                    # is still on disk, so anything set here would be read back over at the next look.
-                    logger.info(f"Regenerating experiment for branch {branch}, whose run failed.")
-                    regenerated.add(branch)
-
-                seqnum += 1
-
-        if not generator_config["Perturbation_Experiment"]:
-            logger.warning("No new experiments to generate. Will skip generation.")
-            return
-
-        try:
-            ExperimentGenerator(generator_config).run()
-        except Exception:
-            # The generator sets up one branch at a time and says nothing about how far it got, so which
-            # branches survive a failure is unknown. None of them are registered: an experiment this manager
-            # has never heard of is simply generated again on the next call, and the generator leaves
-            # branches that already exist alone, whereas one registered without its branch would be
-            # submitted by run_experiments() and would never be generated, the check above having claimed it.
-            logger.warning(
-                f"Experiment generation failed, so none of {sorted(new_experiments)} were added to this "
-                "manager. Some of their branches may already exist in the control clone; correcting the "
-                "cause and calling this method again generates the rest and leaves those alone."
-            )
-            if regenerated:
-                logger.warning(
-                    f"The experiments being regenerated, {sorted(regenerated)}, are still held by this "
-                    "manager, since they were already. How far the generator got through them is unknown, "
-                    "so some may carry the correction and others not."
-                )
-            raise
-
-        self.experiments.update(new_experiments)
+            for plan in plans
+            if not plan.regenerating
+        }
 
     @staticmethod
     def _archived_output(path: Path) -> bool:
@@ -755,7 +645,7 @@ class PayuManager(ProfilingManager, ABC):
             raise FileNotFoundError(f"No output files found in {path}!")
         for output_dir in output_dirs:
             run = int(output_dir.name.removeprefix("output"))
-            for name, log in self.get_component_logs(output_dir).items():
+            for name, log in self.configuration.component_logs(output_dir).items():
                 logs.setdefault(name, {})[run] = log
 
         return logs

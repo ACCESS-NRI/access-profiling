@@ -48,6 +48,32 @@ class ControlSource(ABC):
             str: The identifier.
         """
 
+    @property
+    @abstractmethod
+    def origin(self) -> str:
+        """Returns where the control is obtained from.
+
+        A repository URL or a path on disk, depending on how the control is retrieved. A runner that fetches
+        the control itself - the Payu experiment generator does - is given this; one that expects it to be
+        there already ignores it and keeps it only as provenance.
+
+        Returns:
+            str: The origin.
+        """
+
+    @property
+    @abstractmethod
+    def start_point(self) -> str | None:
+        """Returns the revision of the control to start the experiments from.
+
+        None means the control is taken as it stands, which is what an already checked-out directory of
+        unknown revision amounts to. A runner that has to start branches from somewhere needs a value here
+        and should say so rather than guess one.
+
+        Returns:
+            str | None: A tag, branch, commit or revision, or None if the control states none.
+        """
+
     @abstractmethod
     def provenance(self) -> dict[str, str]:
         """Returns what this control was, as a record to keep beside the results.
@@ -100,6 +126,10 @@ class GitControlSource(ControlSource):
     def label(self) -> str:
         return self._label if self._label is not None else self.start_point
 
+    @property
+    def origin(self) -> str:
+        return self.repository
+
     def provenance(self) -> dict[str, str]:
         return {"repository": self.repository, "start_point": self.start_point}
 
@@ -116,8 +146,9 @@ class ExistingDirectoryControlSource(ControlSource):
     Args:
         path (Path): The control directory, which must already exist when a study runs.
         label (str | None): Short identifier for this control. Defaults to the directory's own name.
-        revision (str | None): The revision the directory holds, if it is known. Recorded as provenance only;
-            nothing checks it or checks it out.
+        revision (str | None): The revision the directory holds, if it is known. Nothing here checks it out -
+            the directory is taken as it stands - but it is what a runner that has to start branches from
+            somewhere is given, and it is recorded as provenance either way.
 
     Raises:
         ValueError: If the path is not absolute, since a control outlives the working directory a study runs
@@ -143,6 +174,14 @@ class ExistingDirectoryControlSource(ControlSource):
     @property
     def label(self) -> str:
         return self._label if self._label is not None else self.path.name
+
+    @property
+    def origin(self) -> str:
+        return str(self.path)
+
+    @property
+    def start_point(self) -> str | None:
+        return self.revision
 
     def provenance(self) -> dict[str, str]:
         record = {"path": str(self.path)}
