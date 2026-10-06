@@ -105,7 +105,10 @@ class GitControlSource(ControlSource):
     """
 
     repository: str
-    start_point: str
+    # Defaulted only so that this satisfies the abstract start_point of the base class: a dataclass field
+    # with no default leaves nothing in the class namespace, and the member would stay abstract. Omitting it
+    # is still refused, by __post_init__ below.
+    start_point: str = ""
     _directory: str = "config"
     _label: str | None = None
 
