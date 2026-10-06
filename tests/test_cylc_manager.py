@@ -9,7 +9,8 @@ from unittest import mock
 
 import pytest
 
-from access.profiling.configuration import RoseSuiteConfiguration
+from access.profiling.configuration import ExperimentPlan, RoseSuiteConfiguration
+from access.profiling.control import ExistingDirectoryControlSource
 from access.profiling.cylc_manager import CylcRoseManager
 from access.profiling.cylc_parser import CylcDBReader, CylcProfilingParser
 from access.profiling.experiment import ProfilingExperiment, ProfilingExperimentStatus
@@ -539,3 +540,110 @@ def test_archive_experiments_defaults(mock_archive, manager):
     mock_archive.assert_called_once_with(
         exclude_dirs=["dir1"], exclude_files=["file1"], follow_symlinks=True, overwrite=True
     )
+
+
+class TestLayoutGenerationHook:
+    """The creation hook the base class calls once a scaling study has decided what to generate.
+
+    Nothing here yet knows how to search over a rose-suite.conf, so the hook declines rather than quietly
+    creating experiments that run the control's own layout - a study of identical suites would look like a
+    flat scaling curve rather than like the missing feature it is.
+    """
+
+    def test_creating_planned_experiments_is_refused(self, manager):
+        """The refusal has to survive a well-formed plan: it is the engine that is missing, not the plan."""
+
+        plan = ExperimentPlan(name="rose-layout_8x6", layout=mock.MagicMock(), changes={}, walltime_hours=2.0)
+
+        with pytest.raises(NotImplementedError, match="rose-suite.conf"):
+            manager._create_experiments([plan])
+
+    def test_a_scaling_study_stops_before_it_reaches_the_hook(self, tmp_path):
+        """The configuration refuses a layout search first, so the hook is never the thing that says no.
+
+        That ordering is what keeps the refusal honest: were the search to get as far as planning experiments,
+        the names and layouts in those plans would have come from somewhere other than rose-suite.conf.
+        """
+
+        manager = CylcRoseManager(
+            tmp_path / "work",
+            tmp_path / "archive",
+            mock_configuration(),
+            control=ExistingDirectoryControlSource(tmp_path / "control"),
+        )
+
+        with (
+            mock.patch.object(CylcRoseManager, "_create_experiments", autospec=True) as mock_create,
+            pytest.raises(NotImplementedError, match="rose-suite.conf"),
+        ):
+            manager.generate_scaling_experiments([1.0], cores_per_node=48, walltime=2.0)
+
+        mock_create.assert_not_called()
+        assert manager.experiments == {}
+
+
+class TestParseRoseConf:
+    """What a rose-suite.conf is read to say, which is what the CPU count is then worked out from.
+
+    Rose writes more into that file than settings. A section header carries no value at all, and a setting
+    rose has been asked to leave out is kept with a `!!` in front of it rather than removed. Taking either for
+    a setting would put a variable into the configuration that the suite does not actually run with.
+    """
+
+    def test_a_line_that_is_not_an_assignment_is_skipped(self, tmp_path):
+        """Section headers have no `=`, and splitting one as though it had would raise rather than parse."""
+
+        config_path = tmp_path / "rose-suite.conf"
+        config_path.write_text("[jinja2:suite.rc]\nMAIN_ATM_PROCX=6\n\nMAIN_ATM_PROCY=4\n")
+
+        assert CylcRoseManager._parse_rose_conf(config_path) == {"MAIN_ATM_PROCX": "6", "MAIN_ATM_PROCY": "4"}
+
+    def test_a_setting_rose_has_commented_out_is_skipped(self, tmp_path):
+        """`!!` marks a setting rose is not applying, so honouring it would read back a value nothing uses.
+
+        Written after the live one on purpose: a parser that merely stripped the `!!` would overwrite the
+        value the suite runs with, and the CPU count would be the commented-out one.
+        """
+
+        config_path = tmp_path / "rose-suite.conf"
+        config_path.write_text("MAIN_IOS_NPROC=48\n!!MAIN_IOS_NPROC=0\n")
+
+        assert CylcRoseManager._parse_rose_conf(config_path) == {"MAIN_IOS_NPROC": "48"}
+
+    def test_headers_and_commented_out_settings_do_not_reach_the_cpu_count(self, tmp_path):
+        """The same file read end to end, since what the skipping is for is the number that comes out of it."""
+
+        manager = mock_manager(
+            tmp_path / "work",
+            tmp_path / "archive",
+            layout_variable=("MAIN_ATM_PROCX", "MAIN_ATM_PROCY"),
+            io_server_variable="MAIN_IOS_NPROC",
+        )
+        exp_path = tmp_path / "experiment"
+        exp_path.mkdir()
+        (exp_path / "rose-suite.conf").write_text(
+            "[jinja2:suite.rc]\nMAIN_ATM_PROCX=6\nMAIN_ATM_PROCY=4\nMAIN_IOS_NPROC=48\n!!MAIN_IOS_NPROC=0\n"
+        )
+
+        assert manager.parse_ncpus(exp_path) == 24 + 48
+
+
+def test_delete_experiments_without_a_run_directory(tmp_path, caplog):
+    """An experiment added without a Cylc run directory still has its own directory deleted.
+
+    That is the state add_rose_experiment leaves behind whenever the run directory was not given or had gone
+    missing, so deletion has to cope with it rather than fail on a run path that was never there.
+    """
+
+    manager = mock_manager(tmp_path / "work", tmp_path / "archive")
+    exp_path = tmp_path / "work/u-aa123"
+    exp_path.mkdir(parents=True)
+    (exp_path / "rose-suite.conf").write_text("um_layout = 2,3\n")
+    manager.experiments["u-aa123"] = ProfilingExperiment(path=exp_path)
+
+    with caplog.at_level(logging.WARNING):
+        manager.delete_experiments(experiments=["u-aa123"])
+
+    assert "u-aa123" not in manager.experiments
+    assert not exp_path.exists()
+    assert "Run directory" not in caplog.text

@@ -10,6 +10,7 @@ import xarray as xr
 from access.config.parallel_component import ComponentLayout
 
 from access.profiling.configuration import LogSpec, ModelConfiguration
+from access.profiling.control import GitControlSource
 from access.profiling.manager import (
     ProfilingExperiment,
     ProfilingExperimentStatus,
@@ -238,6 +239,30 @@ def test_repr(scaling_data):
     assert "Dimensions:" in result
     assert "Coordinates:" in result
     assert "Data variables:" in result
+
+
+def test_repr_names_the_control_the_study_perturbs():
+    """A manager profiling the same configuration against two releases in turn must be able to say which one.
+
+    The control line is printed only when there is one - test_repr covers the manager that has none - so a repr
+    that dropped it would still look entirely plausible, while two studies of 'mock' became indistinguishable.
+    The label is what is shown, not the repository, because that is the short identifier a control exists to give.
+    """
+
+    manager = MockProfilingManager(paths=[Path("/fake/work_dir")])
+    manager.control = GitControlSource("https://example.com/configurations.git", "release-2025.01.000")
+
+    expected = """<MockProfilingManager>
+    Configuration: mock
+    Control: release-2025.01.000
+    Working directory: PosixPath('/fake/work_dir')
+    Archive directory: PosixPath('/fake/archive_dir')
+    Experiments:
+        'work_dir': ProfilingExperiment(path=PosixPath('/fake/work_dir'), status=DONE)
+    Data:
+        No parsed data.
+"""
+    assert repr(manager) == expected
 
 
 @mock.patch("access.profiling.manager.Path.is_dir")
@@ -841,6 +866,25 @@ def test_select_best_experiments_tie_keeps_first(caplog):
     assert len(caplog.records) == 1
     assert caplog.records[0].levelname == "WARNING"
     assert "2cpu_a" in caplog.records[0].message and "2cpu_b" in caplog.records[0].message
+
+
+def test_select_best_experiments_keeps_the_incumbent_when_a_later_experiment_is_slower(caplog):
+    """A layout that is merely slower than the one already held must lose quietly, neither winning nor warning.
+
+    The warning exists to flag two layouts that cannot be told apart, which is a result worth a second look. A
+    simply slower layout is the ordinary outcome of a layout study, and reporting it would bury the real ties in
+    noise - while promoting it would hand the scaling plot the wrong point for that CPU count.
+    """
+
+    paths = [Path("2cpu_fast"), Path("2cpu_slow")]
+    datasets = [make_component_dataset([300.0, 3.0]), make_component_dataset([400.0, 4.0])]
+    manager = MockProfilingManager(paths, ncpus=[2, 2], datasets=datasets)
+
+    with caplog.at_level(logging.WARNING):
+        selected = manager.select_best_experiments("component", "Region 1", tavg)
+
+    assert selected == ["2cpu_fast"]
+    assert caplog.records == [], "A slower layout is not a tie, so nothing should be reported about it."
 
 
 def test_experiment_ncpus_parsed_once(layout_scaling_data):

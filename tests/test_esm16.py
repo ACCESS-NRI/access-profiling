@@ -495,3 +495,135 @@ def test_the_released_ocean_grid_is_the_sea_ice_grid(esm16):
 
     assert esm16.sea_ice.grid == ESM16_1DEG_OCEAN.shape
     assert esm16.sea_ice.grid[0] == ESM16_CICE5_NX_GLOBAL
+
+
+class TestESM16WithoutAnAtmosphere:
+    """An ACCESS-ESM1.6 configuration that runs the ocean and the sea ice but no UM.
+
+    No released configuration drops the atmosphere - AMIP is the other way round, the atmosphere alone - but
+    the class admits one, since it asks only for a component rather than for that component. The tree, the
+    logs and the configuration changes each ask whether there is an atmosphere instead of assuming it, and
+    these are the other side of those three questions: an implementation that assumed one would reach into
+    `self.atmosphere.shape` and raise, or write an `atmosphere/um_env.yaml` into a control that has no
+    atmosphere to read it.
+    """
+
+    OCEAN_ICE_SUBMODELS = (("ocean", ESM16_MOM5_NAME), ("ice", ESM16_CICE5_NAME), ("coupler", None))
+    OCEAN_ICE_TOTAL_CORES = 260
+    OCEAN_ICE_ALLOCATIONS = RootAllocation(
+        subcomponents={
+            ESM16_MOM5_NAME: FixedAllocation(240, local_constraints=(SubdomainAspectRatioConstraint(1.5),)),
+            ESM16_CICE5_NAME: FixedAllocation(12),
+        },
+    )
+
+    @pytest.fixture()
+    def ocean_ice(self, esm16):
+        """The released coupled configuration with its atmosphere taken out, submodels and all."""
+
+        return dataclasses.replace(esm16, name="ocean-ice", atmosphere=None, submodels=self.OCEAN_ICE_SUBMODELS)
+
+    @pytest.fixture()
+    def ocean_ice_layout(self, ocean_ice):
+        """A layout of it, picked by the ocean grid so that what it comes to can be written out in full."""
+
+        layouts = _select(ocean_ice, self.OCEAN_ICE_TOTAL_CORES, allocations=self.OCEAN_ICE_ALLOCATIONS)
+        picked = [
+            layout for layout in layouts if layout.sub_layouts[0].decomposition.grid.shape == PI_CONTROL_MOM5_GRID
+        ]
+        assert len(picked) == 1, "The layout search should find the released ocean grid exactly once."
+        return picked[0]
+
+    def test_its_tree_starts_with_the_ocean(self, ocean_ice):
+        """The components are read back out of a layout by position, so a tree that kept an empty slot for the
+        absent atmosphere would hand the ocean's cores to the UM."""
+
+        tree = ocean_ice.parallel_component
+
+        assert [component.name for component in tree.subcomponents] == [ESM16_MOM5_NAME, ESM16_CICE5_NAME]
+
+    def test_it_declares_neither_um_log(self, ocean_ice):
+        """A declared log that no run can write is looked for in every output directory and never found."""
+
+        assert {spec.name for spec in ocean_ice.logs} == {"MOM5", "CICE5"}
+        assert ocean_ice.component_for_log("UM") is None
+        assert ocean_ice.component_for_log("UM_Total_Walltime") is None
+
+    def test_it_writes_no_um_env(self, ocean_ice, ocean_ice_layout):
+        """um_env.yaml is the UM's own file, and this control has no atmosphere directory for it to go in."""
+
+        changes = ocean_ice.config_changes(ocean_ice_layout)
+
+        assert "atmosphere/um_env.yaml" not in changes
+        assert changes["config.yaml"]["submodels"] == [
+            [{"ncpus": 240}, {"ncpus": 12, "exe": ["cice_access.exe"]}, "PRESERVE"]
+        ]
+        assert changes["ocean/input.nml"] == {"ocean_model_nml": {"layout": ["16,15"]}}
+
+    def test_its_experiments_name_the_two_components_it_runs(self, ocean_ice, ocean_ice_layout):
+        assert ocean_ice.experiment_name(ocean_ice_layout) == "esm1p6-layout_ocean-ice_mom_16x15_ice_12"
+
+
+class TestESM16SeaIceThatDecomposesNothing:
+    """A CICE5 whose blocks are distributed by a scheme that forms no process grid.
+
+    ACCESS-ESM1.6 releases distribute `cartesian`, so their sea ice splits the x extent and the search picks
+    the split. A release that distributed `roundrobin` instead would leave the search nothing to choose but a
+    rank count, and the name of an experiment has to record what that component actually received. It cannot
+    record a process grid, because there is none to record: a name built from one would raise on the absent
+    decomposition, and a rank count is what distinguishes the layouts in the first place.
+    """
+
+    OPAQUE_CICE5 = dataclasses.replace(ESM16_PI_CONTROL.sea_ice, distribution_type="roundrobin")
+    # Not a divisor of 360, so no sea ice that tiles the x extent could ever be given it. It is reachable only
+    # because this one tiles nothing.
+    OPAQUE_ICE_RANKS = 7
+    OPAQUE_TOTAL_CORES = 520
+    OPAQUE_ALLOCATIONS = RootAllocation(
+        subcomponents={
+            ESM16_UM7_NAME: FixedAllocation(256, local_constraints=(SubdomainAspectRatioConstraint(1.5),)),
+            ESM16_MOM5_NAME: FixedAllocation(240, local_constraints=(SubdomainAspectRatioConstraint(1.5),)),
+            ESM16_CICE5_NAME: FixedAllocation(OPAQUE_ICE_RANKS),
+        },
+    )
+
+    @pytest.fixture()
+    def roundrobin(self, esm16):
+        """The released coupled configuration with a sea ice that distributes roundrobin."""
+
+        return dataclasses.replace(esm16, sea_ice=self.OPAQUE_CICE5)
+
+    @pytest.fixture()
+    def roundrobin_layout(self, roundrobin):
+        """A layout of it at the released core counts, bar the sea ice's, picked by the two process grids."""
+
+        layouts = _select(roundrobin, self.OPAQUE_TOTAL_CORES, allocations=self.OPAQUE_ALLOCATIONS)
+        picked = [
+            layout
+            for layout in layouts
+            if (layout.sub_layouts[0].decomposition.grid.shape, layout.sub_layouts[1].decomposition.grid.shape)
+            == (PI_CONTROL_UM7_GRID, PI_CONTROL_MOM5_GRID)
+        ]
+        assert len(picked) == 1, "The layout search should find the released process grids exactly once."
+        return picked[0]
+
+    def test_the_search_is_given_nothing_to_decompose(self, roundrobin, roundrobin_layout):
+        """Which is the premise of the naming below, and the reason the sea ice can take 7 ranks at all."""
+
+        assert roundrobin.parallel_component.subcomponents[2].domain is None
+        assert roundrobin_layout.sub_layouts[2].decomposition is None
+        assert roundrobin_layout.sub_layouts[2].n_ranks == self.OPAQUE_ICE_RANKS
+
+    def test_it_is_named_by_its_rank_count_while_the_others_keep_their_grids(self, roundrobin, roundrobin_layout):
+        """One name per distinct layout is what lets a manager tell whether it already has an experiment, so a
+        component with no process grid still has to put what it received into the name."""
+
+        assert roundrobin.experiment_name(roundrobin_layout) == "esm1p6-layout_piControl_atm_16x16_mom_16x15_ice_7"
+
+    def test_it_writes_its_ranks_and_its_grid_but_no_block_size(self, roundrobin, roundrobin_layout):
+        """A block size left over from a decomposition this scheme never made is how a namelist and the layout
+        it is supposed to realise come apart."""
+
+        changes = roundrobin.config_changes(roundrobin_layout)
+
+        assert changes["ice/cice_in.nml"] == {"domain_nml": {"nprocs": "7", "nx_global": "360", "ny_global": "300"}}

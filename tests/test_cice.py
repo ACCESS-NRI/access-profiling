@@ -65,6 +65,27 @@ class TestTheModeFollowsFromTheNamelist:
         assert partitioning.domain is None, "so the search chooses the rank count and nothing else"
 
 
+class TestTheColumnsWhereNoBlockSizeIsPinned:
+    """Where the control pins no block size there is nothing yet to divide the grid into, so a point is a column."""
+
+    def test_a_search_that_chooses_the_split_counts_one_column_per_grid_point(self):
+        """The domain it decomposes is the x extent itself, and the two have to be the same number."""
+
+        partitioning = CICEPartitioning(grid=GRID)
+
+        assert partitioning.mode is CICEPartitioningMode.BLOCK_PER_RANK
+        assert partitioning.n_block_columns == 360, "the x extent, not the y one and not a single whole-grid block"
+        assert partitioning.domain == Domain((partitioning.n_block_columns,))
+
+    def test_an_opaque_sea_ice_counts_them_the_same_way(self):
+        """Its scheme pins no block size either, so nothing has decided how wide a block is here either."""
+
+        opaque = CICEPartitioning(grid=GRID, distribution_type="roundrobin", processor_shape="square-ice")
+
+        assert opaque.mode is CICEPartitioningMode.OPAQUE
+        assert opaque.n_block_columns == 360
+
+
 class TestTheConstraintsFollowFromTheMode:
     """Derived rather than hand-written, because the wrong one raises mid-search or passes vacuously."""
 
@@ -170,3 +191,20 @@ class TestWhatIsRefused:
     def test_a_partitioning_that_describes_nothing(self, kwargs, match):
         with pytest.raises(ValueError, match=match):
             CICEPartitioning(**kwargs)
+
+    @pytest.mark.parametrize("n_ranks", [0, -4])
+    def test_a_rank_count_that_is_not_positive(self, n_ranks):
+        """No scheme divides a grid among no ranks, and the grid has to be named or the report says nothing."""
+
+        with pytest.raises(ValueError, match=rf"\(360, 300\) grid was given {n_ranks} ranks"):
+            CICEPartitioning(grid=GRID).check(n_ranks)
+
+    def test_a_rank_count_that_is_not_positive_never_reaches_the_namelist(self):
+        """namelist_changes checks first - otherwise both of these would quietly write a layout nothing can run."""
+
+        with pytest.raises(ValueError, match="was given 0 ranks"):
+            CICEPartitioning(grid=GRID, writes_nprocs=True).namelist_changes(0, _decomposition(1))
+
+        opaque = CICEPartitioning(grid=GRID, distribution_type="roundrobin", writes_nprocs=True)
+        with pytest.raises(ValueError, match="was given -1 ranks"):
+            opaque.namelist_changes(-1)

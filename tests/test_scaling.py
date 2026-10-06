@@ -3,6 +3,7 @@
 
 from unittest import mock
 
+import matplotlib.pyplot as plt
 import numpy as np
 import pint
 import pytest
@@ -172,6 +173,37 @@ def test_plot_scaling_metrics_efficiency_ylim_covers_superlinear_efficiency(mock
     ax2 = fig.axes[1]
 
     assert ax2.get_ylim()[1] >= 1.1 * 125  # true max efficiency is 125%; default ylim must cover it
+
+
+class TestPlotScalingMetricsIsShownOnlyWhenAsked:
+    """Whether the figure is put on screen, and whether the caller gets it back either way.
+
+    A caller writing the figure to a file, or building a batch of them, passes show=False: on an
+    interactive backend plt.show() blocks, so a script that could not turn it off would stop at its first
+    figure and a test suite would hang. The figure is the return value in both cases, which is what the
+    caller came for - saving it or stacking it into a report is only possible with the figure in hand, so a
+    show=False that returned nothing would buy the caller nothing.
+    """
+
+    @mock.patch("matplotlib.pyplot.show", autospec=True)
+    def test_it_is_shown_when_asked(self, mock_show, simple_scaling_data):
+        fig = plot_scaling_metrics(stats=[simple_scaling_data], metric=tavg, xcoordinate="ncpus", show=True)
+
+        mock_show.assert_called_once()
+        assert isinstance(fig, Figure)
+        assert [ax.get_title() for ax in fig.axes[:2]] == ["Parallel Speedup", "Parallel Efficiency"]
+        plt.close(fig)
+
+    @mock.patch("matplotlib.pyplot.show", autospec=True)
+    def test_it_is_not_shown_otherwise(self, mock_show, simple_scaling_data):
+        """Nothing reaches the screen, and the figure is still handed back to be saved or stacked."""
+
+        fig = plot_scaling_metrics(stats=[simple_scaling_data], metric=tavg, xcoordinate="ncpus", show=False)
+
+        mock_show.assert_not_called()
+        assert isinstance(fig, Figure)
+        assert [ax.get_title() for ax in fig.axes[:2]] == ["Parallel Speedup", "Parallel Efficiency"]
+        plt.close(fig)
 
 
 @pytest.fixture()
