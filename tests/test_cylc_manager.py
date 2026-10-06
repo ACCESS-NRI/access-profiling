@@ -9,24 +9,35 @@ from unittest import mock
 
 import pytest
 
+from access.profiling.configuration import RoseSuiteConfiguration
 from access.profiling.cylc_manager import CylcRoseManager
 from access.profiling.cylc_parser import CylcDBReader, CylcProfilingParser
 from access.profiling.experiment import ProfilingExperiment, ProfilingExperimentStatus
 from access.profiling.manager import ProfilingManager
-from access.profiling.parser import ProfilingParser
 
 
-class MockCylcManager(CylcRoseManager):
-    """Test class inheriting from CylcRoseManager to test its methods."""
+def mock_configuration(**kwargs) -> RoseSuiteConfiguration:
+    """Returns a rose suite configuration for these tests, overridden by whatever a test needs.
 
-    @property
-    def known_parsers(self) -> dict[str, ProfilingParser]:
-        return {"fake-parser": mock.MagicMock()}
+    Args:
+        **kwargs: Fields to set, the rest taking the defaults a single-variable suite uses.
+
+    Returns:
+        RoseSuiteConfiguration: The configuration.
+    """
+    fields = {"name": "mock", "layout_variable": "um_layout", "parsers": {"fake-parser": mock.MagicMock()}}
+    fields.update(kwargs)
+    return RoseSuiteConfiguration(**fields)
+
+
+def mock_manager(work_dir: Path, archive_dir: Path, **kwargs) -> CylcRoseManager:
+    """Returns a Cylc Rose manager over mock_configuration(**kwargs)."""
+    return CylcRoseManager(work_dir, archive_dir, mock_configuration(**kwargs))
 
 
 @pytest.fixture()
 def manager():
-    return MockCylcManager(Path("/fake/test_path"), Path("/fake/archive_path"), layout_variable="um_layout")
+    return mock_manager(Path("/fake/test_path"), Path("/fake/archive_path"))
 
 
 class TestParseStatus:
@@ -78,20 +89,20 @@ class TestParseStatus:
 def test_layout_generation_is_unsupported(manager):
     """Test that the layout API promoted to ProfilingManager reports itself unsupported here.
 
-    Cylc Rose suites take their layout from rose-suite.conf rather than from a layout search, so a Cylc Rose
-    manager has to remain instantiable while declining the layout API.
+    Cylc Rose suites take their layout from rose-suite.conf rather than from a layout search, so the
+    configuration declines the layout API and the manager is as usable as any other.
     """
 
     with pytest.raises(NotImplementedError):
         _ = manager.parallel_component
     with pytest.raises(NotImplementedError):
-        manager.layout_branch_name(mock.MagicMock())
+        manager.configuration.experiment_name(mock.MagicMock())
     with pytest.raises(NotImplementedError):
-        manager.layout_config_changes(mock.MagicMock())
+        manager.configuration.config_changes(mock.MagicMock())
     with pytest.raises(NotImplementedError):
         manager.select_layouts(4)
     with pytest.raises(NotImplementedError):
-        manager.parse_layout(Path("/fake/expt"))
+        manager.configuration.parse_layout(Path("/fake/expt"))
 
 
 @mock.patch("access.profiling.cylc_manager.Path.glob")
@@ -183,7 +194,7 @@ def test_parse_ncpus_uses_run_path(tmp_path, manager):
 def test_parse_ncpus_with_split_layout_variable(tmp_path):
     """AM3-style layouts store x and y as two separate variables rather than one comma-separated tuple."""
 
-    manager = MockCylcManager(
+    manager = mock_manager(
         tmp_path / "work", tmp_path / "archive", layout_variable=("MAIN_ATM_PROCX", "MAIN_ATM_PROCY")
     )
     exp_path = tmp_path / "experiment"
@@ -196,7 +207,7 @@ def test_parse_ncpus_with_split_layout_variable(tmp_path):
 def test_parse_ncpus_with_split_layout_variable_missing_key(tmp_path):
     """A missing PROCX/PROCY key should raise ValueError rather than a silent wrong answer."""
 
-    manager = MockCylcManager(
+    manager = mock_manager(
         tmp_path / "work", tmp_path / "archive", layout_variable=("MAIN_ATM_PROCX", "MAIN_ATM_PROCY")
     )
     exp_path = tmp_path / "experiment"
@@ -210,7 +221,7 @@ def test_parse_ncpus_with_split_layout_variable_missing_key(tmp_path):
 def test_parse_ncpus_with_cpus_per_proc_variable_and_io_server(tmp_path):
     """Total CPUs should be (layout + io_server_ranks) * cpus_per_proc, matching site/nci_gadi.rc's pbs_cpus macro."""
 
-    manager = MockCylcManager(
+    manager = mock_manager(
         tmp_path / "work",
         tmp_path / "archive",
         layout_variable=("MAIN_ATM_PROCX", "MAIN_ATM_PROCY"),
@@ -229,7 +240,7 @@ def test_parse_ncpus_with_cpus_per_proc_variable_and_io_server(tmp_path):
 def test_parse_ncpus_defaults_cpus_per_proc_variable_to_none(tmp_path):
     """cpus_per_proc_variable should default to None, leaving the layout size unchanged."""
 
-    manager = MockCylcManager(
+    manager = mock_manager(
         tmp_path / "work", tmp_path / "archive", layout_variable=("MAIN_ATM_PROCX", "MAIN_ATM_PROCY")
     )
     exp_path = tmp_path / "experiment"
@@ -242,7 +253,7 @@ def test_parse_ncpus_defaults_cpus_per_proc_variable_to_none(tmp_path):
 def test_parse_ncpus_with_cpus_per_proc_variable_missing_key(tmp_path):
     """A missing cpus-per-process key should raise ValueError rather than a silent wrong answer."""
 
-    manager = MockCylcManager(
+    manager = mock_manager(
         tmp_path / "work",
         tmp_path / "archive",
         layout_variable=("MAIN_ATM_PROCX", "MAIN_ATM_PROCY"),
@@ -259,7 +270,7 @@ def test_parse_ncpus_with_cpus_per_proc_variable_missing_key(tmp_path):
 def test_parse_ncpus_with_io_server_variable_missing_key(tmp_path):
     """A missing I/O server key should raise ValueError rather than a silent wrong answer."""
 
-    manager = MockCylcManager(
+    manager = mock_manager(
         tmp_path / "work",
         tmp_path / "archive",
         layout_variable=("MAIN_ATM_PROCX", "MAIN_ATM_PROCY"),
@@ -335,7 +346,7 @@ def test_add_rose_experiment_without_run_path(caplog, manager):
 def test_delete_experiments_removes_path_and_run_path(tmp_path):
     """delete_experiments should use ProfilingExperiment.path and run_path."""
 
-    manager = MockCylcManager(tmp_path / "work", tmp_path / "archive", layout_variable="um_layout")
+    manager = mock_manager(tmp_path / "work", tmp_path / "archive", layout_variable="um_layout")
     exp_path = tmp_path / "work/u-aa123"
     run_path = tmp_path / "runs/u-aa123"
     exp_path.mkdir(parents=True)
@@ -369,7 +380,7 @@ def test_delete_experiments_rejects_unmanaged_experiment(manager):
 def test_delete_experiments_warns_for_missing_directories(tmp_path, caplog):
     """Missing experiment and run directories should warn but still remove manager state."""
 
-    manager = MockCylcManager(tmp_path / "work", tmp_path / "archive", layout_variable="um_layout")
+    manager = mock_manager(tmp_path / "work", tmp_path / "archive", layout_variable="um_layout")
     exp_path = tmp_path / "work/u-aa123"
     run_path = tmp_path / "runs/u-aa123"
     manager.experiments["u-aa123"] = ProfilingExperiment(path=exp_path, run_path=run_path)
@@ -385,7 +396,7 @@ def test_delete_experiments_warns_for_missing_directories(tmp_path, caplog):
 def test_delete_experiments_dry_run_keeps_directories_and_manager_state(tmp_path, caplog):
     """Dry runs should report actions without deleting directories or manager entries."""
 
-    manager = MockCylcManager(tmp_path / "work", tmp_path / "archive", layout_variable="um_layout")
+    manager = mock_manager(tmp_path / "work", tmp_path / "archive", layout_variable="um_layout")
     exp_path = tmp_path / "work/u-aa123"
     run_path = tmp_path / "runs/u-aa123"
     exp_path.mkdir(parents=True)

@@ -9,6 +9,7 @@ import pytest
 import xarray as xr
 from access.config.parallel_component import ComponentLayout
 
+from access.profiling.configuration import LogSpec, ModelConfiguration
 from access.profiling.manager import (
     ProfilingExperiment,
     ProfilingExperimentStatus,
@@ -18,6 +19,54 @@ from access.profiling.manager import (
     find_component,
 )
 from access.profiling.metrics import count, tavg
+
+
+class MockConfiguration(ModelConfiguration):
+    """The model axis these tests do not exercise, with the one member they do.
+
+    What the manager's own tests cover - parsing, archiving, bookkeeping, plotting - takes a configuration
+    only to read a layout back and to say which component a log belongs to. The rest raises, so a test that
+    reached the layout search by accident would say so.
+
+    Args:
+        layouts (dict[str, ComponentLayout]): What parse_layout reports, keyed by the name of the directory
+            it is asked about. Anything absent reports None, meaning the layout could not be told.
+        log_components (dict[str, str]): The component each log belongs to, keyed by log name.
+    """
+
+    def __init__(self, layouts: dict[str, ComponentLayout] | None = None, log_components: dict[str, str] | None = None):
+        self.layouts = layouts if layouts is not None else {}
+        self.log_components = log_components if log_components is not None else {}
+        self.parse_layout_calls: list[Path] = []
+
+    @property
+    def name(self):
+        return "mock"
+
+    @property
+    def experiment_prefix(self):
+        return "mock-layout"
+
+    @property
+    def parallel_component(self):
+        raise NotImplementedError
+
+    @property
+    def logs(self):
+        return tuple(
+            LogSpec(name, lambda _: None, mock.Mock(), component=component)
+            for name, component in self.log_components.items()
+        )
+
+    def experiment_name(self, layout):
+        raise NotImplementedError
+
+    def config_changes(self, layout):
+        raise NotImplementedError
+
+    def parse_layout(self, output_dir):
+        self.parse_layout_calls.append(output_dir)
+        return self.layouts.get(output_dir.name)
 
 
 class MockProfilingManager(ProfilingManager):
@@ -40,7 +89,7 @@ class MockProfilingManager(ProfilingManager):
         ncpus: list[int] | None = None,
         datasets: list[dict[str, xr.Dataset]] | None = None,
     ):
-        super().__init__(Path("/fake/work_dir"), Path("/fake/archive_dir"))
+        super().__init__(Path("/fake/work_dir"), Path("/fake/archive_dir"), MockConfiguration())
 
         # Pre-generate experiments
         for path in paths:
@@ -53,29 +102,14 @@ class MockProfilingManager(ProfilingManager):
             self._mock_ncpus = {}
         self._parse_ncpus_calls = []
         self._deleted_experiments = []
+        self._created_plans = []
         # What parse_status reports, keyed by experiment name; anything absent reports None, meaning the state
         # could not be determined. Only consulted for experiments this manager thinks are running.
         self._mock_status: dict[str, ProfilingExperimentStatus] = {}
         self._parse_status_calls: list[Path] = []
-        # What parse_layout reports, keyed by experiment name; anything absent reports None, meaning the
-        # layout could not be told.
-        self._mock_layout: dict[str, ComponentLayout] = {}
-        self._parse_layout_calls: list[tuple[Path, Path | None]] = []
 
         if datasets is not None:
             self.data = dict(zip([path.name for path in paths], datasets, strict=True))
-
-    # The layout API is abstract on ProfilingManager but plays no part in these tests, which cover the parsing,
-    # archiving and bookkeeping side of the manager.
-    @property
-    def parallel_component(self):
-        raise NotImplementedError
-
-    def layout_branch_name(self, layout):
-        raise NotImplementedError
-
-    def layout_config_changes(self, layout):
-        raise NotImplementedError
 
     def parse_status(self, path, run_path=None):
         self._parse_status_calls.append(path)
@@ -86,18 +120,22 @@ class MockProfilingManager(ProfilingManager):
         self._parse_ncpus_calls.append((path, run_path))
         return self._mock_ncpus[path.name]
 
-    def parse_layout(self, path, run_path=None):
-        """Simulate reading the layout back off a given path."""
-        self._parse_layout_calls.append((path, run_path))
-        return self._mock_layout.get(path.name)
-
     def profiling_logs(self, path, run_path=None):  # pyright: ignore[reportIncompatibleMethodOverride]
         """Simulate parsing profiling data for a given path."""
         pass
 
-    def _delete_experiment(self, name, dry_run):
+    def _delete_experiment(self, name, dry_run, **kwargs):
         """Record requested deletions instead of touching the filesystem."""
         self._deleted_experiments.append((name, dry_run))
+
+    def _create_experiments(self, plans, **runner_options):
+        """Record what generation decided, and register everything new."""
+        self._created_plans.append(plans)
+        return {
+            plan.name: ProfilingExperiment(path=self.work_dir / plan.name, layout=plan.layout)
+            for plan in plans
+            if not plan.regenerating
+        }
 
 
 def make_component_dataset(tavg_values: list[float]) -> dict[str, xr.Dataset]:
@@ -180,6 +218,7 @@ def test_repr(scaling_data):
     # Test with no data
     manager = MockProfilingManager(paths=[Path("/fake/work_dir")])
     expected = """<MockProfilingManager>
+    Configuration: mock
     Working directory: PosixPath('/fake/work_dir')
     Archive directory: PosixPath('/fake/archive_dir')
     Experiments:
@@ -1252,7 +1291,7 @@ class TestPlotComponentScalingData:
         """First to what the manager associates with the log, and failing that to the log's own name."""
 
         manager, cores = component_scaling_data
-        manager._layout_component_names = {"a_log": "other"}
+        manager.configuration.log_components = {"a_log": "other"}
         for exp_name in manager.data:
             manager.data[exp_name]["a_log"] = manager.data[exp_name]["component"]
 
@@ -1290,7 +1329,7 @@ class TestPlotComponentScalingData:
 
         manager, _ = component_scaling_data
         manager.plot_component_scaling_data([RegionGroup("component", ["Region 1"])], tavg)
-        assert manager._parse_layout_calls == []
+        assert manager.configuration.parse_layout_calls == []
 
     def test_an_experiment_whose_layout_cannot_be_told(self, component_scaling_data):
         manager, _ = component_scaling_data
@@ -1403,11 +1442,11 @@ class TestLayoutIsReadBackOnce:
 
     def test_it_is_parsed_and_kept(self):
         manager = MockProfilingManager([Path("expt")], ncpus=[8], datasets=[make_component_dataset([1.0, 2.0])])
-        manager._mock_layout["expt"] = _layout(component=4)
+        manager.configuration.layouts["expt"] = _layout(component=4)
 
         assert manager._layout("expt").n_cores == 4
         assert manager._layout("expt").n_cores == 4
-        assert len(manager._parse_layout_calls) == 1
+        assert len(manager.configuration.parse_layout_calls) == 1
         assert manager.experiments["expt"].layout is not None
 
     def test_a_layout_that_cannot_be_told_stays_unknown(self):
