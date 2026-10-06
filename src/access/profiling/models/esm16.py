@@ -113,26 +113,36 @@ class ESM16Configuration(PayuConfiguration):
             grid is not two-dimensional, or if the submodels name a component the configuration does not run.
     """
 
-    _name: str
+    # These three are dataclass fields rather than properties because that is all it takes to satisfy the
+    # abstract properties of the base class: a field with a default leaves a value in the class namespace, and
+    # a plain value is not a data descriptor, so each instance reads back its own. A field with no default
+    # would leave the member abstract and the class uninstantiable, which is why name is defaulted and then
+    # checked below rather than simply required.
+    name: str = ""
     atmosphere: Domain | None = None
     ocean: Domain | None = None
     sea_ice: CICEPartitioning | None = None
     submodels: tuple[tuple[str, str | None], ...] = ESM16_COUPLED_SUBMODELS
-    _model_type: str = "access-esm1.6"
-    _experiment_prefix: str = "esm1p6-layout"
+    model_type: str = "access-esm1.6"
+    experiment_prefix: str = "esm1p6-layout"
     sea_ice_executable: str | None = "cice_access.exe"
 
     def __post_init__(self) -> None:
+        if not self.name:
+            raise ValueError(
+                "ESM16Configuration.name must be non-empty: it is what tells one released configuration's "
+                "experiments from another's, and two of them can have identical layouts."
+            )
         if self.atmosphere is None and self.ocean is None and self.sea_ice is None:
             raise ValueError(
-                f"ACCESS-ESM1.6 configuration {self._name!r} runs no component. There is nothing to profile."
+                f"ACCESS-ESM1.6 configuration {self.name!r} runs no component. There is nothing to profile."
             )
         for component, domain in ((ESM16_UM7_NAME, self.atmosphere), (ESM16_MOM5_NAME, self.ocean)):
             # Checked here rather than where the grid is decomposed, so a configuration that cannot be
             # written out is refused when it is built instead of once a layout has been found for it.
             if domain is not None and domain.ndim != 2:
                 raise ValueError(
-                    f"ACCESS-ESM1.6 configuration {self._name!r} gives {component!r} a {domain.ndim}-"
+                    f"ACCESS-ESM1.6 configuration {self.name!r} gives {component!r} a {domain.ndim}-"
                     f"dimensional grid {domain.shape}. Its decomposition is written as a two-dimensional "
                     "process grid, so the grid it decomposes has to be one too."
                 )
@@ -140,21 +150,9 @@ class ESM16Configuration(PayuConfiguration):
         declared = {component for _, component in self.submodels if component is not None}
         if not declared <= running:
             raise ValueError(
-                f"ACCESS-ESM1.6 configuration {self._name!r} declares submodels for {sorted(declared - running)}, "
+                f"ACCESS-ESM1.6 configuration {self.name!r} declares submodels for {sorted(declared - running)}, "
                 f"which it does not run. It runs {sorted(running)}."
             )
-
-    @property
-    def name(self) -> str:
-        return self._name
-
-    @property
-    def model_type(self) -> str:
-        return self._model_type
-
-    @property
-    def experiment_prefix(self) -> str:
-        return self._experiment_prefix
 
     @property
     def _components(self) -> tuple[str, ...]:
@@ -209,7 +207,7 @@ class ESM16Configuration(PayuConfiguration):
                 )
             )
         return ParallelComponent(
-            name=f"ACCESS-ESM1.6 {self._name}",
+            name=f"ACCESS-ESM1.6 {self.name}",
             subcomponents=tuple(subcomponents),
             local_constraints=(MaxWastedCoreFractionConstraint(max_fraction=ESM16_MAX_WASTED_CORE_FRACTION),),
         )
@@ -249,7 +247,7 @@ class ESM16Configuration(PayuConfiguration):
         if len(layout.sub_layouts) != len(components):
             raise ValueError(
                 f"The layout {layout.name!r} has {len(layout.sub_layouts)} component(s), but ACCESS-ESM1.6 "
-                f"configuration {self._name!r} runs {len(components)}: {list(components)}."
+                f"configuration {self.name!r} runs {len(components)}: {list(components)}."
             )
         # ComponentLayout.sub_layouts is documented to come in the order of ParallelComponent.subcomponents,
         # which is the order _components states, so zipping is the inverse of how the tree was built.
@@ -281,7 +279,7 @@ class ESM16Configuration(PayuConfiguration):
                 parts.append(f"{tokens[component]}_{sub_layout.n_ranks}")
             else:
                 parts.append(f"{tokens[component]}_" + "x".join(str(ranks) for ranks in sub_layout.decomposition.grid))
-        return f"{self._experiment_prefix}_{self._name}_{'_'.join(parts)}"
+        return f"{self.experiment_prefix}_{self.name}_{'_'.join(parts)}"
 
     def config_changes(self, layout: ComponentLayout) -> dict:
         """Returns the configuration file changes needed to run this configuration with a given layout.
@@ -395,7 +393,7 @@ class ESM16Configuration(PayuConfiguration):
         # idle to fill a node are not the layout's; the manager's parse_ncpus is what reports those.
         used = sum(sub_layout.n_cores for sub_layout in sub_layouts)
         return ComponentLayout(
-            name=f"ACCESS-ESM1.6 {self._name}",
+            name=f"ACCESS-ESM1.6 {self.name}",
             n_cores=used,
             n_ranks=used,
             threads_per_rank=None,
@@ -408,7 +406,7 @@ class ESM16Configuration(PayuConfiguration):
 # amip, esm-piControl, the scenario runs - are reached by replacing what differs, which for the coupled ones
 # is the name alone:
 #
-#     replace(ESM16_PI_CONTROL, _name="historical")
+#     replace(ESM16_PI_CONTROL, name="historical")
 #
 # paired with a control of their own:
 #
@@ -417,7 +415,7 @@ class ESM16Configuration(PayuConfiguration):
 # Shipping one rather than a dozen is deliberate: a preset per config-repo release would tie a release of this
 # package to every release of that one.
 ESM16_PI_CONTROL: ESM16Configuration = ESM16Configuration(
-    _name="piControl",
+    name="piControl",
     atmosphere=ESM16_N96_ATMOSPHERE,
     ocean=ESM16_1DEG_OCEAN,
     sea_ice=ESM16_CICE5,

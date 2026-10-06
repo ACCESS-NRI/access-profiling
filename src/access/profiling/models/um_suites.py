@@ -23,10 +23,10 @@ UM_SUITE_PARSERS: dict = {
 # the I/O server's ranks to their product, and multiplies the result by the OpenMP threads each rank runs.
 # This is the arithmetic of the pbs_cpus macro in site/nci_gadi.rc: cpus(x, y, i, nt) = (x*y + i)*nt.
 AM3_N96E: RoseSuiteConfiguration = RoseSuiteConfiguration(
-    _name="n96e",
+    name="n96e",
     layout_variable=("MAIN_ATM_PROCX", "MAIN_ATM_PROCY"),
     parsers=UM_SUITE_PARSERS,
-    _experiment_prefix="am3-layout",
+    experiment_prefix="am3-layout",
     cpus_per_proc_variable="MAIN_OMPTHR_ATM",
     io_server_variable="MAIN_IOS_NPROC",
 )
@@ -46,8 +46,8 @@ AM3_N96E_SOURCE: GitControlSource = GitControlSource(
 # now that the configurations are moving to git - so a study supplies its own control rather than taking one
 # from here.
 RAM3: RoseSuiteConfiguration = RoseSuiteConfiguration(
-    _name="ram3",
+    name="ram3",
     layout_variable="rg01_rs01_m01_nproc",
     parsers=UM_SUITE_PARSERS,
-    _experiment_prefix="ram3-layout",
+    experiment_prefix="ram3-layout",
 )

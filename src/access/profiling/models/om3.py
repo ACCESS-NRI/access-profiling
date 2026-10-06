@@ -120,7 +120,12 @@ class OM3Configuration(PayuConfiguration):
             shared range.
     """
 
-    _name: str
+    # These three are dataclass fields rather than properties because that is all it takes to satisfy the
+    # abstract properties of the base class: a field with a default leaves a value in the class namespace, and
+    # a plain value is not a data descriptor, so each instance reads back its own. A field with no default
+    # would leave the member abstract and the class uninstantiable, which is why name is defaulted and then
+    # checked below rather than simply required.
+    name: str = ""
     ocean: Domain | None = None
     sea_ice: CICEPartitioning | None = None
     waves: Domain | None = None
@@ -129,13 +134,18 @@ class OM3Configuration(PayuConfiguration):
     shared_core_offsets: Mapping[str, int] = field(default_factory=dict)
     auto_ocean_layout: bool = True
     data_sea_ice: bool = False
-    _model_type: str = "access-om3"
-    _experiment_prefix: str = "om3-layout"
+    model_type: str = "access-om3"
+    experiment_prefix: str = "om3-layout"
 
     def __post_init__(self) -> None:
+        if not self.name:
+            raise ValueError(
+                "OM3Configuration.name must be non-empty: it is what tells one configuration's experiments "
+                "from another's, and ACCESS-OM3's differ in which components they run."
+            )
         if self.ocean is None and self.sea_ice is None and self.waves is None:
             raise ValueError(
-                f"ACCESS-OM3 configuration {self._name!r} has no ocean, sea ice or waves. A configuration of "
+                f"ACCESS-OM3 configuration {self.name!r} has no ocean, sea ice or waves. A configuration of "
                 "nothing but the mediator and the data components has no model to profile."
             )
         # Checked here rather than where the grid is decomposed, so a configuration that cannot be written
@@ -143,32 +153,20 @@ class OM3Configuration(PayuConfiguration):
         # is checked by CICEPartitioning itself.
         if self.ocean is not None and self.ocean.ndim != 2:
             raise ValueError(
-                f"ACCESS-OM3 configuration {self._name!r} gives {OM3_OCEAN_NAME!r} a {self.ocean.ndim}-"
+                f"ACCESS-OM3 configuration {self.name!r} gives {OM3_OCEAN_NAME!r} a {self.ocean.ndim}-"
                 f"dimensional grid {self.ocean.shape}. Its decomposition is written as MOM6's LAYOUT, a "
                 "two-dimensional process grid, so the grid it decomposes has to be one too."
             )
         for realm, offset in self.shared_core_offsets.items():
             if realm not in self.shared_realms:
                 raise ValueError(
-                    f"ACCESS-OM3 configuration {self._name!r} gives a core offset for {realm!r}, which is not "
+                    f"ACCESS-OM3 configuration {self.name!r} gives a core offset for {realm!r}, which is not "
                     f"one of the components sharing its cores: {self.shared_realms}."
                 )
             if offset < 0:
                 raise ValueError(
-                    f"ACCESS-OM3 configuration {self._name!r} gives {realm!r} a negative core offset {offset}."
+                    f"ACCESS-OM3 configuration {self.name!r} gives {realm!r} a negative core offset {offset}."
                 )
-
-    @property
-    def name(self) -> str:
-        return self._name
-
-    @property
-    def model_type(self) -> str:
-        return self._model_type
-
-    @property
-    def experiment_prefix(self) -> str:
-        return self._experiment_prefix
 
     @property
     def shared_realms(self) -> tuple[str, ...]:
@@ -248,7 +246,7 @@ class OM3Configuration(PayuConfiguration):
         if self.waves is not None:
             subcomponents.append(ParallelComponent(name=OM3_WAVE_NAME, local_constraints=no_threads))
         return ParallelComponent(
-            name=f"ACCESS-OM3 {self._name}",
+            name=f"ACCESS-OM3 {self.name}",
             subcomponents=tuple(subcomponents),
             local_constraints=(MaxWastedCoreFractionConstraint(max_fraction=OM3_MAX_WASTED_CORE_FRACTION),),
         )
@@ -363,7 +361,7 @@ class OM3Configuration(PayuConfiguration):
                 components.append(f"{realm}_{ranges[realm][1]}")
             else:
                 components.append(f"{realm}_" + "x".join(str(ranks) for ranks in decomposition.grid))
-        return f"{self._experiment_prefix}_{self._name}_{'_'.join(components)}"
+        return f"{self.experiment_prefix}_{self.name}_{'_'.join(components)}"
 
     def config_changes(self, layout: ComponentLayout) -> dict:
         """Returns the configuration file changes needed to run this configuration with a given layout.
@@ -525,7 +523,7 @@ class OM3Configuration(PayuConfiguration):
 
         sub_layouts = tuple(sub_layout for _, sub_layout in placed)
         return ComponentLayout(
-            name=f"ACCESS-OM3 {self._name}",
+            name=f"ACCESS-OM3 {self.name}",
             n_cores=sum(sub_layout.n_cores for sub_layout in sub_layouts),
             n_ranks=sum(sub_layout.n_ranks for sub_layout in sub_layouts),
             threads_per_rank=None,
@@ -573,7 +571,7 @@ OM3_25KM_CICE6: CICEPartitioning = CICEPartitioning(
 # nothing here rules them out, but a decomposition it writes for them is not the one the release runs. Treat
 # OM3_MC_25KM_RELEASE_CORES as the budget the release occupied rather than as a layout to reproduce.
 OM3_MC_25KM: OM3Configuration = OM3Configuration(
-    _name="MC-25km",
+    name="MC-25km",
     ocean=OM3_25KM_GRID,
     sea_ice=OM3_25KM_CICE6,
     atmosphere=OM3_25KM_GRID,

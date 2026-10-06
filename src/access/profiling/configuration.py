@@ -321,13 +321,18 @@ class RoseSuiteConfiguration(ModelConfiguration):
             suite has one.
 
     Raises:
-        ValueError: If no layout variable is given.
+        ValueError: If no name or no layout variable is given.
     """
 
-    _name: str
-    layout_variable: str | tuple[str, str]
+    # These three are dataclass fields rather than properties because that is all it takes to satisfy the
+    # abstract properties of the base class: a field with a default leaves a value in the class namespace, and
+    # a plain value is not a data descriptor, so each instance reads back its own. A field with no default
+    # would leave the member abstract and the class uninstantiable, which is why name is defaulted and then
+    # checked below rather than simply required.
+    name: str = ""
+    layout_variable: str | tuple[str, str] = ""
     parsers: Mapping[str, ProfilingParser] = field(default_factory=dict)
-    _experiment_prefix: str = "rose-layout"
+    experiment_prefix: str = "rose-layout"
     cpus_per_proc_variable: str | None = None
     io_server_variable: str | None = None
 
@@ -337,16 +342,10 @@ class RoseSuiteConfiguration(ModelConfiguration):
     )
 
     def __post_init__(self) -> None:
+        if not self.name:
+            raise ValueError("RoseSuiteConfiguration.name must be non-empty: it is what tells one suite from another.")
         if not self.layout_variable:
             raise ValueError("RoseSuiteConfiguration.layout_variable must name at least one variable.")
-
-    @property
-    def name(self) -> str:
-        return self._name
-
-    @property
-    def experiment_prefix(self) -> str:
-        return self._experiment_prefix
 
     @property
     def logs(self) -> tuple[LogSpec, ...]:
