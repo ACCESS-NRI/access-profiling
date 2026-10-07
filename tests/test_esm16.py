@@ -177,7 +177,7 @@ def _esm16_scaling_allocations(atm_ocn_tolerance: float = 0.05, ice_tolerance: f
     """An allocation strategy following the proportions of the ACCESS-ESM1.6 PI control configuration.
 
     This is the kind of strategy a caller supplies to the layout search: it is the study's own choice, not a
-    requirement of ACCESS-ESM1.6, which is why it lives here rather than in access.profiling.access_models.
+    requirement of ACCESS-ESM1.6, which is why it lives here rather than in access.profiling.models.esm16.
 
     Every bound is a fraction of the total, so the strategy this returns is a single object usable at every core
     count of a scaling study - which is the whole reason the layout search understands fractions.

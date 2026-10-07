@@ -158,8 +158,8 @@ def test_profiling_logs_uses_run_path(tmp_path, manager):
     assert all(set(runs) == {0} for runs in logs.values())
 
 
-@mock.patch("access.profiling.access_models.Path.is_file")
-@mock.patch("access.profiling.access_models.Path.read_text")
+@mock.patch("pathlib.Path.is_file")
+@mock.patch("pathlib.Path.read_text")
 def test_parse_ncpus(mock_read_text, mock_is_file, manager):
     """Test the parse_ncpus method of CylcRoseManager."""
 

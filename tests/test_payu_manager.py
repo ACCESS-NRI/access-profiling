@@ -107,19 +107,6 @@ def test_startfrom_restart(manager):
     assert manager.startfrom_restart == "restart000"
 
 
-def test_set_control(manager):
-    """The deprecated shim still sets a control, as a GitControlSource."""
-    repository = "https://github.com/example/repo.git"
-    commit = "abc123def456"
-
-    with pytest.warns(DeprecationWarning, match="set_control"):
-        manager.set_control(repository, commit)
-
-    assert manager.control == GitControlSource(repository, commit)
-    assert manager.control.origin == repository
-    assert manager.control.start_point == commit
-
-
 def test_the_control_decides_the_clone_directory():
     """Both the generator and the runner are told the control's own directory name."""
     manager = PayuManager(Path("/fake/test_path"), Path("/fake/archive_path"), MockPayuConfiguration())

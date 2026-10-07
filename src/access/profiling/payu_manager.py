@@ -4,7 +4,6 @@
 import json
 import logging
 import subprocess
-import warnings
 from pathlib import Path
 
 from access.config import YAMLParser
@@ -12,7 +11,7 @@ from experiment_generator.experiment_generator import ExperimentGenerator
 from experiment_runner.experiment_runner import ExperimentRunner
 
 from access.profiling.configuration import ExperimentPlan, PayuConfiguration
-from access.profiling.control import ControlSource, GitControlSource
+from access.profiling.control import ControlSource
 from access.profiling.experiment import ProfilingLog
 from access.profiling.manager import ProfilingExperiment, ProfilingExperimentStatus, ProfilingManager
 from access.profiling.payujson_parser import PayuJSONProfilingParser
@@ -123,25 +122,6 @@ class PayuManager(ProfilingManager):
             value (str): Restart option.
         """
         self._startfrom_restart = value
-
-    def set_control(self, repository, commit) -> None:
-        """Sets the control experiment from a git repository.
-
-        Deprecated: assign a ControlSource to `control` instead, or pass one when building the manager. A
-        control is no longer git's alone, and where it comes from is no longer Payu's question, so saying so
-        in two coordinates with no name for what they are has nowhere left to go.
-
-        Args:
-            repository: Git repository URL or path.
-            commit: Git commit hash or identifier.
-        """
-        warnings.warn(
-            "PayuManager.set_control() is deprecated. Pass a ControlSource when building the manager, or "
-            f"assign one: manager.control = GitControlSource({repository!r}, {commit!r}).",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        self.control = GitControlSource(repository, commit)
 
     def _perturbation_block(self, plan: ExperimentPlan) -> dict:
         """Returns what the experiment generator is to make of one planned experiment.
