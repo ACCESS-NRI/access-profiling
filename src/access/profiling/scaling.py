@@ -7,6 +7,7 @@ import matplotlib.gridspec as gridspec
 import matplotlib.pyplot as plt
 import xarray as xr
 from matplotlib.figure import Figure
+from matplotlib.transforms import Bbox
 
 from access.profiling.metrics import ProfilingMetric
 from access.profiling.plotting_utils import calculate_column_widths
@@ -81,15 +82,25 @@ def plot_scaling_metrics(
     ax1, ax2 = fig.add_subplot(gs[0, 0]), fig.add_subplot(gs[0, 1])
     ax_tbl = fig.add_subplot(gs[1, :])
 
+    # Everything outside the loop reads the first dataset, so the table header, the ideal lines and the
+    # units of the table's title all describe the same x-axis. Reading whichever dataset the loop happened
+    # to leave behind would describe the last one instead, and the two disagree as soon as a caller passes
+    # datasets with different x values.
+    reference = stats[0]
+
+    # The ceiling spans every dataset, so it is set once rather than per dataset. Resetting it inside the
+    # loop would fit the axis to the last dataset alone and clip the curves of all the others - which is
+    # the very silent dropping the dequantify below exists to prevent.
+    max_eff = 100
+
     # add table of raw timings
-    tbl = [[xlabel if xlabel is not None else xcoordinate] + list(stats[0][xcoordinate].values)]  # first row
+    tbl = [[xlabel if xlabel is not None else xcoordinate] + list(reference[xcoordinate].values)]  # first row
     for stat in stats:
         # calculate efficiency and speedup
         efficiency = parallel_efficiency(stat, metric)
         speedup = parallel_speedup(stat, metric)
 
         # plots speedup and efficiency on their respective axes.
-        max_eff = 100
         for region in stat.region.values:
             speedup.loc[region, :].plot.line(x=xcoordinate, ax=ax1, marker="o", label=region)
             efficiency.loc[region, :].plot.line(x=xcoordinate, ax=ax2, marker="o", label=region)
@@ -101,11 +112,11 @@ def plot_scaling_metrics(
             tbl.append([region] + [f"{val:.2f}" for val in stat[metric].loc[:, region].pint.dequantify().values])
 
     # ideal speedup/scaling
-    minx = stat[xcoordinate].values.min()
-    nx = len(stat[xcoordinate].values)
-    ideal_speedups = [i / minx for i in stat[xcoordinate].values]
-    ax1.plot(stat[xcoordinate].values, ideal_speedups, "k:", label="ideal")
-    ax2.plot(stat[xcoordinate].values, [100] * nx, "k:", label="ideal")
+    minx = reference[xcoordinate].values.min()
+    nx = len(reference[xcoordinate].values)
+    ideal_speedups = [i / minx for i in reference[xcoordinate].values]
+    ax1.plot(reference[xcoordinate].values, ideal_speedups, "k:", label="ideal")
+    ax2.plot(reference[xcoordinate].values, [100] * nx, "k:", label="ideal")
 
     # formatting
     ax1.legend()
@@ -120,11 +131,11 @@ def plot_scaling_metrics(
     ax_tbl.axis("off")
     tbl_chart = ax_tbl.table(
         tbl,
-        bbox=(0.05, 0, 0.9, 1),
+        bbox=Bbox.from_bounds(0.05, 0, 0.9, 1),
         cellLoc="center",
         colWidths=calculate_column_widths(tbl, first_col_fraction),
     )
-    ax_tbl.set_title(f"Timings ({stat[metric].pint.units})")
+    ax_tbl.set_title(f"Timings ({reference[metric].pint.units})")
     for i in range(len(tbl[0])):
         tbl_chart[(0, i)].set_text_props(weight="bold")
     for i in range(len(tbl)):

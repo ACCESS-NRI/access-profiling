@@ -7,8 +7,14 @@ from pathlib import Path
 import pytest
 import xarray as xr
 
-from access.profiling.metrics import count, tmax, tmin
-from access.profiling.parser import ProfilingParser, _convert_from_string, _read_text_file, aggregate_pe_data
+from access.profiling.metrics import count, tavg, tmax, tmin
+from access.profiling.parser import (
+    ProfilingParser,
+    _convert_from_string,
+    _read_text_file,
+    aggregate_pe_data,
+    flatten_hierarchical,
+)
 
 
 class MockProfilingParser(ProfilingParser):
@@ -78,7 +84,8 @@ def test_str2num():
 def test_read_text_file(tmp_path):
     """Tests _read_text_file exceptions."""
     with pytest.raises(TypeError):
-        _read_text_file(1)
+        # Passing something that is not a path is the point of the test.
+        _read_text_file(1)  # pyright: ignore[reportArgumentType]
     bytes_file = tmp_path / "bytes"
     bytes_file.write_bytes(bytes(range(256)))
     with pytest.raises(ValueError):
@@ -141,3 +148,20 @@ def test_aggregate_pe_data_perfect_balance():
     base = str(tmin).replace(" ", "_")
     assert result[f"{base}_imbalance_pe"].sel(region="r1").item() == pytest.approx(0.0)
     assert result[f"{base}_imbalance_pe"].sel(region="r2").item() == pytest.approx(0.0)
+
+
+def test_flatten_hierarchical_skips_a_top_level_measurement():
+    """Top-level keys are region names; a metric there would be a measurement belonging to no region.
+
+    The hierarchical format has no way to express that, so it is skipped rather than flattened into a
+    region with no name.
+    """
+    data = {
+        tavg: 1.0,  # not a region, so not a subtree
+        "[ESMF]": {tavg: 2.0},
+    }
+
+    flattened = flatten_hierarchical(data, [tavg])
+
+    assert flattened["region"] == ["[ESMF]"]
+    assert flattened[tavg] == [2.0]

@@ -13,9 +13,12 @@ from access.config.parallel_allocation_strategies import FixedAllocation, RootAl
 from access.config.parallel_component import ParallelComponent
 from access.config.parallel_constraints import FixedThreadsPerRankConstraint
 from access.config.parallel_domain import Domain
+from conftest import grid_of
 
+from access.profiling.control import GitControlSource
 from access.profiling.experiment import ProfilingLog
 from access.profiling.manager import ProfilingManager
+from access.profiling.payu_configuration import PayuConfiguration
 from access.profiling.payu_manager import (
     PayuManager,
     ProfilingExperiment,
@@ -36,38 +39,45 @@ MOCK_COMPONENT = ParallelComponent(
 MOCK_ALLOCATIONS = RootAllocation(subcomponents={"atm": FixedAllocation(2), "ocn": FixedAllocation(2)})
 
 
-class MockPayuManager(PayuManager):
-    """Test class inheriting from PayuConfigProfiling to test its methods."""
+class MockPayuConfiguration(PayuConfiguration):
+    """A configuration of the model above, so that PayuManager is tested without involving a real one."""
 
-    @property
-    def model_type(self) -> str:
-        return "mock-payu-model"
-
-    def get_component_logs(self, path):
-        return {"component": ProfilingLog(path, mock.MagicMock())}
+    name = "mock"
+    model_type = "mock-payu-model"
+    experiment_prefix = "mock"
 
     @property
     def parallel_component(self) -> ParallelComponent:
         return MOCK_COMPONENT
 
-    def layout_branch_name(self, layout) -> str:
+    @property
+    def logs(self):
+        return ()
+
+    def component_logs(self, output_dir):
+        return {"component": ProfilingLog(output_dir, mock.MagicMock())}
+
+    def experiment_name(self, layout) -> str:
         atm, ocn = layout.sub_layouts
-        atm_nx, atm_ny = atm.decomposition.grid.shape
-        ocn_nx, ocn_ny = ocn.decomposition.grid.shape
+        atm_nx, atm_ny = grid_of(atm)
+        ocn_nx, ocn_ny = grid_of(ocn)
         return f"mock_atm_{atm_nx}x{atm_ny}_ocn_{ocn_nx}x{ocn_ny}"
 
-    def parse_layout(self, path, run_path=None):
+    def parse_layout(self, output_dir):
         """The layout of a generated experiment is attached to it, so nothing here needs to read one back."""
         return None
 
-    def layout_config_changes(self, layout) -> dict:
+    def config_changes(self, layout) -> dict:
         atm, ocn = layout.sub_layouts
         return {"config.yaml": {"submodels": [[{"ncpus": atm.n_cores}, {"ncpus": ocn.n_cores}]]}}
 
 
+MOCK_CONTROL = GitControlSource("https://example.com/repo", "commit")
+
+
 @pytest.fixture(scope="function")
 def manager():
-    return MockPayuManager(Path("/fake/test_path"), Path("/fake/archive_path"))
+    return PayuManager(Path("/fake/test_path"), Path("/fake/archive_path"), MockPayuConfiguration(), MOCK_CONTROL)
 
 
 def test_nruns(manager):
@@ -98,15 +108,48 @@ def test_startfrom_restart(manager):
     assert manager.startfrom_restart == "restart000"
 
 
-def test_set_control(manager):
-    """Test the set_control method of PayuManager."""
-    repository = "https://github.com/example/repo.git"
-    commit = "abc123def456"
+def test_the_control_decides_the_clone_directory():
+    """Both the generator and the runner are told the control's own directory name."""
+    manager = PayuManager(Path("/fake/test_path"), Path("/fake/archive_path"), MockPayuConfiguration())
 
-    manager.set_control(repository, commit)
+    assert manager._repository_directory == "config", "the Payu default, with no control to say otherwise"
 
-    assert manager._repository == repository
-    assert manager._control_commit == commit
+    manager.control = GitControlSource("https://example.com/repo", "commit", _directory="ctrl-clone")
+    assert manager._repository_directory == "ctrl-clone"
+
+
+def test_generation_without_a_control_is_refused():
+    """Every experiment perturbs one, so there is nothing to generate from."""
+    manager = PayuManager(Path("/fake/test_path"), Path("/fake/archive_path"), MockPayuConfiguration())
+
+    with pytest.raises(ValueError, match="without a control"):
+        manager.generate_scaling_experiments(num_nodes_list=[1.0], cores_per_node=4, walltime=2.0)
+
+
+def test_creating_experiments_without_a_control_is_refused():
+    """generate_scaling_experiments refuses it first, but the hook is reachable on its own.
+
+    `control` is a settable property, deliberately, so a manager can be pointed at a second control without
+    being rebuilt - which means the hook cannot assume the public entry point checked for it.
+    """
+    manager = PayuManager(Path("/fake/test_path"), Path("/fake/archive_path"), MockPayuConfiguration())
+
+    with pytest.raises(ValueError, match="without a control"):
+        manager._create_experiments([])
+
+
+@mock.patch("access.profiling.payu_manager.ExperimentGenerator")
+def test_generation_needs_the_control_to_state_a_start_point(mock_experiment_generator, manager):
+    """The generator branches every experiment from a particular state of the control."""
+    from access.profiling.control import ExistingDirectoryControlSource
+
+    manager.control = ExistingDirectoryControlSource(Path("/fake/control"))
+
+    with pytest.raises(ValueError, match="states no start point"):
+        manager.generate_scaling_experiments(
+            num_nodes_list=[1.0], cores_per_node=4, walltime=2.0, allocations=MOCK_ALLOCATIONS
+        )
+    mock_experiment_generator.assert_not_called()
 
 
 @mock.patch("access.profiling.payu_manager.YAMLParser")
@@ -355,7 +398,7 @@ class TestLatestAttempt:
         latest = write_job_file(tmp_path, 0, self.FINISHED_RUN, job_id="149764670.gadi-pbs")
         (tmp_path / "archive" / "output000").mkdir(parents=True)
 
-        with mock.patch.object(manager, "get_component_logs", return_value={}):
+        with mock.patch.object(manager.application, "component_logs", return_value={}):
             logs = manager.profiling_logs(tmp_path)
 
         assert set(logs["payu"]) == {0}
@@ -463,7 +506,6 @@ def test_select_layouts(manager):
 def test_generate_scaling_experiments(mock_experiment_generator, manager):
     """Test the generate_scaling_experiments method of PayuManager."""
 
-    manager.set_control("https://example.com/repo", "commit")
     manager.generate_scaling_experiments(
         num_nodes_list=[1.0],
         control_options={"some": "option"},
@@ -511,9 +553,10 @@ def test_generate_scaling_experiments(mock_experiment_generator, manager):
 def test_generate_scaling_experiments_for_a_model_changing_nothing_in_config_yaml(mock_experiment_generator, manager):
     """Not every model has something of its own to change there, but the walltime and the name still go in."""
 
-    manager.set_control("https://example.com/repo", "commit")
     # A fresh dictionary per layout, since the changes of one experiment are not those of another.
-    with mock.patch.object(manager, "layout_config_changes", side_effect=lambda layout: {"MOM_input": {"DT": 1800.0}}):
+    with mock.patch.object(
+        manager.application, "config_changes", side_effect=lambda layout: {"MOM_input": {"DT": 1800.0}}
+    ):
         manager.generate_scaling_experiments(
             num_nodes_list=[1.0],
             control_options={},
@@ -533,7 +576,6 @@ def test_generate_scaling_experiments_for_a_model_changing_nothing_in_config_yam
 def test_generate_scaling_experiments_callables(mock_experiment_generator, manager):
     """Test that generate_scaling_experiments evaluates its callable arguments with the number of nodes."""
 
-    manager.set_control("https://example.com/repo", "commit")
     walltime = mock.MagicMock(return_value=1.5)
     allocations = mock.MagicMock(return_value=MOCK_ALLOCATIONS)
 
@@ -551,7 +593,6 @@ def test_generate_scaling_experiments_callables(mock_experiment_generator, manag
 def test_generate_scaling_experiments_attaches_the_layout(mock_experiment_generator, manager):
     """An experiment keeps the layout it was generated from, so nothing has to read it back later."""
 
-    manager.set_control("https://example.com/repo", "commit")
     manager.generate_scaling_experiments(
         num_nodes_list=[1.0], control_options={}, cores_per_node=4, walltime=2.0, allocations=MOCK_ALLOCATIONS
     )
@@ -561,7 +602,7 @@ def test_generate_scaling_experiments_attaches_the_layout(mock_experiment_genera
     # Every branch is a distinct layout, and the branch is named after it.
     assert len(set(layouts.values())) == len(layouts)
     for branch, layout in layouts.items():
-        assert manager.layout_branch_name(layout) == branch
+        assert manager.application.experiment_name(layout) == branch
         assert layout.n_cores == 4
 
 
@@ -569,7 +610,6 @@ def test_generate_scaling_experiments_attaches_the_layout(mock_experiment_genera
 def test_generate_scaling_experiments_duplicates(mock_experiment_generator, manager):
     """Test that generate_scaling_experiments skips layouts whose experiment already exists."""
 
-    manager.set_control("https://example.com/repo", "commit")
     manager.generate_scaling_experiments(
         num_nodes_list=[1.0], control_options={}, cores_per_node=4, walltime=2.0, allocations=MOCK_ALLOCATIONS
     )
@@ -606,7 +646,6 @@ class TestRegenerateFailed:
 
     @mock.patch("access.profiling.payu_manager.ExperimentGenerator")
     def test_a_failed_experiment_is_generated_again(self, mock_experiment_generator, manager):
-        manager.set_control("https://example.com/repo", "commit")
         self._generate(manager)
         branch = sorted(manager.experiments)[0]
         self._fail(manager, branch)
@@ -621,7 +660,6 @@ class TestRegenerateFailed:
     def test_it_carries_the_arguments_of_this_call(self, mock_experiment_generator, manager):
         """The point of regenerating: the block is worked out afresh, so a correction is what lands."""
 
-        manager.set_control("https://example.com/repo", "commit")
         self._generate(manager, walltime=2.0)
         branch = sorted(manager.experiments)[0]
         self._fail(manager, branch)
@@ -633,7 +671,6 @@ class TestRegenerateFailed:
 
     @mock.patch("access.profiling.payu_manager.ExperimentGenerator")
     def test_it_is_not_generated_again_without_being_asked(self, mock_experiment_generator, manager):
-        manager.set_control("https://example.com/repo", "commit")
         self._generate(manager)
         self._fail(manager, sorted(manager.experiments)[0])
         mock_experiment_generator.reset_mock()
@@ -650,7 +687,6 @@ class TestRegenerateFailed:
     def test_only_a_failed_experiment_is_generated_again(self, mock_experiment_generator, manager, status):
         """A running one would have its branch rewritten under a live job, a finished one under its results."""
 
-        manager.set_control("https://example.com/repo", "commit")
         self._generate(manager)
         branch = sorted(manager.experiments)[0]
         manager.experiments[branch] = _experiment(Path("/fake/other"), status)
@@ -664,7 +700,6 @@ class TestRegenerateFailed:
     def test_it_keeps_the_experiment_it_already_held(self, mock_experiment_generator, manager):
         """Status included: the record of the failed run is still on disk, so a reset would not survive."""
 
-        manager.set_control("https://example.com/repo", "commit")
         self._generate(manager)
         branch = sorted(manager.experiments)[0]
         self._fail(manager, branch)
@@ -680,7 +715,6 @@ class TestRegenerateFailed:
     def test_it_is_generated_once_across_node_counts(self, mock_experiment_generator, manager):
         """The same layout is regularly valid at two sizes, and regenerating it twice would be a double edit."""
 
-        manager.set_control("https://example.com/repo", "commit")
         self._generate(manager)
         branch = sorted(manager.experiments)[0]
         self._fail(manager, branch)
@@ -702,7 +736,6 @@ class TestRegenerateFailed:
     def test_a_regenerated_experiment_survives_a_failed_generation(self, mock_experiment_generator, manager, caplog):
         """It was already held, so there is nothing to withhold - only how far the generator got is unknown."""
 
-        manager.set_control("https://example.com/repo", "commit")
         self._generate(manager)
         branch = sorted(manager.experiments)[0]
         self._fail(manager, branch)
@@ -723,8 +756,6 @@ def test_generate_scaling_experiments_duplicates_across_node_counts(mock_experim
     tolerates, so the same one can be found at two sizes. The branch name is what says they are the same
     experiment, since it records the process grids and not the number of nodes asked for.
     """
-
-    manager.set_control("https://example.com/repo", "commit")
 
     # The allocation is stated in cores rather than fractions, so both budgets admit the same four-core
     # layouts; the larger one simply leaves two of its six cores idle.
@@ -747,7 +778,6 @@ def test_generate_scaling_experiments_registers_nothing_when_generation_fails(
     a directory that is not there.
     """
 
-    manager.set_control("https://example.com/repo", "commit")
     mock_experiment_generator.return_value.run.side_effect = RuntimeError("the generator gave up")
 
     with caplog.at_level(logging.WARNING), pytest.raises(RuntimeError, match="the generator gave up"):
@@ -775,8 +805,6 @@ def test_generate_scaling_experiments_registers_nothing_when_a_later_node_count_
     and then abandoned.
     """
 
-    manager.set_control("https://example.com/repo", "commit")
-
     with pytest.raises(ValueError, match="Number of nodes must be > 0"):
         manager.generate_scaling_experiments(
             num_nodes_list=[1.0, -1.0],
@@ -798,7 +826,6 @@ def test_generate_scaling_experiments_retries_after_a_failed_generation(mock_exp
     that failed for a fixable reason recoverable by calling the method a second time.
     """
 
-    manager.set_control("https://example.com/repo", "commit")
     mock_experiment_generator.return_value.run.side_effect = RuntimeError("the generator gave up")
     with pytest.raises(RuntimeError):
         manager.generate_scaling_experiments(
@@ -824,7 +851,6 @@ def test_generate_scaling_experiments_retries_after_a_failed_generation(mock_exp
 def test_generate_scaling_experiments_registers_only_after_generation(mock_experiment_generator, manager):
     """Test that nothing is registered while the generator is still working."""
 
-    manager.set_control("https://example.com/repo", "commit")
     seen = {}
 
     def record_what_the_manager_holds():
@@ -844,7 +870,6 @@ def test_generate_scaling_experiments_registers_only_after_generation(mock_exper
 def test_generate_scaling_experiments_no_layouts(mock_experiment_generator, manager):
     """Test that generate_scaling_experiments does nothing when no layout can be found."""
 
-    manager.set_control("https://example.com/repo", "commit")
     too_big = RootAllocation(subcomponents={"atm": FixedAllocation(100), "ocn": FixedAllocation(100)})
 
     manager.generate_scaling_experiments(
@@ -859,8 +884,6 @@ def test_generate_scaling_experiments_no_layouts(mock_experiment_generator, mana
 def test_generate_scaling_experiments_fractional_nodes(mock_experiment_generator, manager):
     """Test that a fractional node count reaches the layout search as the truncated number of cores."""
 
-    manager.set_control("https://example.com/repo", "commit")
-
     # Half of an 8 core node is the same 4 core budget as a whole 4 core one
     manager.generate_scaling_experiments(
         num_nodes_list=[0.5], control_options={}, cores_per_node=8, walltime=2.0, allocations=MOCK_ALLOCATIONS
@@ -872,8 +895,6 @@ def test_generate_scaling_experiments_fractional_nodes(mock_experiment_generator
 
 def test_generate_scaling_experiments_invalid_inputs(manager):
     """Test that generate_scaling_experiments rejects node counts and node sizes it cannot use."""
-
-    manager.set_control("https://example.com/repo", "commit")
 
     for cores_per_node in (0, -4, 4.0):
         with pytest.raises(ValueError):
@@ -1206,7 +1227,9 @@ def path_glob_side_effect(pattern):
 def test_profiling_logs(mock_glob, mock_is_dir, manager):
     """Test the profiling_logs method of PayuManager."""
 
-    with mock.patch.object(manager, "get_component_logs", wraps=manager.get_component_logs) as mock_get_logs:
+    with mock.patch.object(
+        manager.application, "component_logs", wraps=manager.application.component_logs
+    ) as mock_get_logs:
         logs = manager.profiling_logs(Path("/fake/path"))
         # Check correct path access
         assert mock_is_dir.call_count == 1  # Called to check archive directory

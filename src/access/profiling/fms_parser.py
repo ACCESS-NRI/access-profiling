@@ -20,7 +20,7 @@ from pathlib import Path
 from pint import Unit
 
 from access.profiling.metrics import ProfilingMetric, count, pemax, pemin, tavg, tfrac, tmax, tmin, tstd
-from access.profiling.parser import ProfilingParser, _convert_from_string, _read_text_file
+from access.profiling.parser import ProfilingData, ProfilingParser, _convert_from_string, _read_text_file
 
 grain = ProfilingMetric("grain", Unit("dimensionless"), "Grain")
 
@@ -62,7 +62,7 @@ class FMSProfilingParser(ProfilingParser):
         profiling_region_p = re.compile(profile_line, re.MULTILINE)
 
         # Parse data
-        stats = {"region": []}
+        stats: ProfilingData = {"region": []}
         stats.update({m: [] for m in self.metrics})
         match = profiling_section_p.search(stream)
         if match is None:

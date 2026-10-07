@@ -5,125 +5,69 @@ import logging
 import shutil
 import sqlite3
 import subprocess
-from abc import ABC, abstractmethod
 from pathlib import Path
 
-from access.config.parallel_component import ComponentLayout, ParallelComponent
-
 from access.profiling.cylc_parser import CylcDBReader, CylcProfilingParser
-from access.profiling.experiment import ProfilingExperiment, ProfilingExperimentStatus, ProfilingLog
+from access.profiling.experiment import (
+    ExperimentPlan,
+    ProfilingExperiment,
+    ProfilingExperimentStatus,
+    ProfilingLog,
+)
 from access.profiling.manager import ProfilingManager
-from access.profiling.parser import ProfilingParser
+from access.profiling.rose_configuration import RoseSuiteConfiguration
 
 logger = logging.getLogger(__name__)
 
 
-class CylcRoseManager(ProfilingManager, ABC):
-    """Abstract base class to handle profiling data for Cylc Rose configurations.
+class CylcRoseManager(ProfilingManager[RoseSuiteConfiguration]):
+    """Profiling of any ACCESS model driven by a Cylc Rose suite.
+
+    One class for every rose suite: what tells ACCESS-AM3 from ACCESS-rAM3 is the names their
+    `rose-suite.conf` files give the variables stating their parallelism, and which parsers read their task
+    logs, both of which arrive as a RoseSuiteConfiguration. What is written here is the engine - `rose
+    suite-run`, the Cylc run directory and the suite database the scheduler writes - and none of it is any one
+    suite's.
 
     Args:
         work_dir (Path): Working directory where profiling experiments will be generated and run.
         archive_dir (Path): Directory where completed experiments will be archived.
-        layout_variable (str | tuple[str, str]): Name(s) of the variable(s) in rose-suite-run.conf that define the
-            layout. A single name (e.g. rAM3's "rg01_rs01_m01_nproc") is treated as a comma-separated "x,y" tuple.
-            A pair of names (e.g. AM3's ("MAIN_ATM_PROCX", "MAIN_ATM_PROCY")) is treated as separate x and y
-            variables to multiply together.
-        cpus_per_proc_variable (str | None): Name of the variable in rose-suite-run.conf that defines the number of
-            OpenMP threads per MPI process (e.g. AM3's "MAIN_OMPTHR_ATM"). If given, the layout size is multiplied
-            by this value to give the total number of CPUs. Defaults to None, i.e. one thread per process.
-        io_server_variable (str | None): Name of the variable in rose-suite-run.conf that defines the number of I/O
-            server ranks (e.g. AM3's "MAIN_IOS_NPROC"). If given, these ranks are added to the layout size before
-            applying cpus_per_proc_variable, matching how PBS resources are requested (see the pbs_cpus/pbs_mem
-            Jinja2 macros in site/nci_gadi.rc: cpus(x,y,i,nt) = (x*y+i)*nt). Defaults to None, i.e. no I/O server
-            ranks.
+        application (RoseSuiteConfiguration): The suite being profiled.
+        control (ControlSource | None): Where the control suite comes from. Recorded rather than acted on:
+            unlike the Payu side, nothing here clones or checks out, so the suite is expected to be in the
+            working directory already - `rosie checkout` or `git clone` having been run in a terminal, where
+            a credentials prompt can be answered. None (the default) records nothing.
     """
 
-    # Name(s) of the variable(s) in rose-suite-run.conf file that define the layout.
-    _layout_variable: str | tuple[str, str]
-    # Name of the variable in rose-suite-run.conf that defines the number of OpenMP threads per MPI process.
-    _cpus_per_proc_variable: str | None
-    # Name of the variable in rose-suite-run.conf that defines the number of I/O server ranks.
-    _io_server_variable: str | None
-
-    def __init__(
-        self,
-        work_dir: Path,
-        archive_dir: Path,
-        layout_variable: str | tuple[str, str],
-        cpus_per_proc_variable: str | None = None,
-        io_server_variable: str | None = None,
-    ):
-        super().__init__(work_dir, archive_dir)
-        self._layout_variable = layout_variable
-        self._cpus_per_proc_variable = cpus_per_proc_variable
-        self._io_server_variable = io_server_variable
-
-    @property
-    @abstractmethod
-    def known_parsers(self) -> dict[str, ProfilingParser]:
-        """Returns the parsers that this model configuration knows about.
-
-        Returns:
-            dict[str, ProfilingParser]: a dictionary of known parsers with names as keys.
-        """
-
-    # ProfilingManager declares the layout API for every model, but a Cylc Rose suite takes its layout from
-    # rose-suite.conf rather than from a layout search, and no component tree describing one has been written
-    # yet. These overrides state that plainly, and keep Cylc Rose managers instantiable in the meantime.
-    _no_layout_support: str = "Layout generation is not supported for Cylc Rose configurations."
-
-    @property
-    def parallel_component(self) -> ParallelComponent:
-        """Raises NotImplementedError: Cylc Rose configurations have no component tree.
-
-        Raises:
-            NotImplementedError: Always.
-        """
-        raise NotImplementedError(self._no_layout_support)
-
-    def layout_branch_name(self, layout: ComponentLayout) -> str:
-        """Raises NotImplementedError: Cylc Rose configurations do not generate layout experiments.
+    def _create_experiments(self, plans: list[ExperimentPlan], **runner_options) -> dict[str, ProfilingExperiment]:
+        """Raises NotImplementedError: layout experiments are not generated for Cylc Rose suites yet.
 
         Args:
-            layout (ComponentLayout): Unused.
+            plans (list[ExperimentPlan]): Unused.
+            **runner_options: Ignored. Accepted so that this stays substitutable for the base method, whose
+                callers may pass options other runners take.
+
         Raises:
-            NotImplementedError: Always.
+            NotImplementedError: Always. Unreachable in practice, generate_scaling_experiments asking the
+                configuration for a layout search first and that raising the same way.
         """
-        raise NotImplementedError(self._no_layout_support)
-
-    def layout_config_changes(self, layout: ComponentLayout) -> dict:
-        """Raises NotImplementedError: Cylc Rose configurations do not generate layout experiments.
-
-        Args:
-            layout (ComponentLayout): Unused.
-        Raises:
-            NotImplementedError: Always.
-        """
-        raise NotImplementedError(self._no_layout_support)
-
-    def parse_layout(self, path: Path, run_path: Path | None = None) -> ComponentLayout | None:
-        """Raises NotImplementedError: Cylc Rose configurations have no layout to read back.
-
-        These configurations state their parallelism as a single layout variable rather than as a tree of
-        components, which is the same reason they generate no layout experiments. parse_ncpus is what
-        reports their size.
-
-        Args:
-            path (Path): Unused.
-            run_path (Path | None): Unused.
-        Raises:
-            NotImplementedError: Always.
-        """
-        raise NotImplementedError(self._no_layout_support)
+        raise NotImplementedError(
+            "Layout generation is not supported for Cylc Rose configurations yet: a rose suite states its "
+            "parallelism in rose-suite.conf, and nothing here yet knows how to search over that."
+        )
 
     def parse_ncpus(self, path: Path, run_path: Path | None = None) -> int:
         """Parses the number of CPUs used in a given Cylc/Rose experiment, from the model layout.
 
+        Finding the configuration file is this manager's, since where a rose suite keeps it and how it is
+        written is the runner's business; what its variables are called, and so how many CPUs they come to, is
+        the suite's and is answered by the configuration.
+
         Unlike the Payu manager, this reports the cores the layout puts to work rather than the ones the job
-        occupied: it does not yet round up to whole compute nodes the way PayuManager.parse_ncpus does, though the
-        configuration does state the node size. Scaling studies whose sizes are not multiples of the node size will
-        therefore group experiments by a slightly smaller count than they were charged for, until this is
-        implemented.
+        occupied: it does not yet round up to whole compute nodes the way PayuManager.parse_ncpus does, though
+        the configuration does state the node size. Scaling studies whose sizes are not multiples of the node
+        size will therefore group experiments by a slightly smaller count than they were charged for, until
+        this is implemented.
 
         Args:
             path (Path): Path to the experiment directory. Must contain a rose-suite.conf file.
@@ -131,11 +75,11 @@ class CylcRoseManager(ProfilingManager, ABC):
                 preferred over the one in path when present, since it records what the run actually used.
 
         Returns:
-            int: Product of the two dimensions of the layout variable.
+            int: Number of CPUs the layout puts to work.
 
         Raises:
             FileNotFoundError: If neither configuration file exists.
-            ValueError: If the layout variable is not set in the configuration file that was found.
+            ValueError: If a variable the configuration names is not set in the file that was found.
         """
         # TODO: round up to whole compute nodes, as PayuManager.parse_ncpus does, using the node size from the
         # Rose/Cylc configuration.
@@ -150,31 +94,7 @@ class CylcRoseManager(ProfilingManager, ABC):
             tried = ", ".join(str(p) for p in config_paths)
             raise FileNotFoundError(f"Could not find suitable config file. Tried: {tried}")
 
-        config = self._parse_rose_conf(config_path)
-
-        if isinstance(self._layout_variable, tuple):
-            x_key, y_key = self._layout_variable
-            missing = [key for key in (x_key, y_key) if key not in config]
-            if missing:
-                raise ValueError(f"Cannot find layout key(s) {missing} in {config_path}.")
-            layout_size = int(config[x_key]) * int(config[y_key])
-        else:
-            if self._layout_variable not in config:
-                raise ValueError(f"Cannot find layout key, {self._layout_variable}, in {config_path}.")
-            nx, ny = config[self._layout_variable].split(",")
-            layout_size = int(nx.strip()) * int(ny.strip())
-
-        if self._io_server_variable is not None:
-            if self._io_server_variable not in config:
-                raise ValueError(f"Cannot find I/O server key, {self._io_server_variable}, in {config_path}.")
-            layout_size += int(config[self._io_server_variable])
-
-        if self._cpus_per_proc_variable is not None:
-            if self._cpus_per_proc_variable not in config:
-                raise ValueError(f"Cannot find cpus-per-process key, {self._cpus_per_proc_variable}, in {config_path}.")
-            layout_size *= int(config[self._cpus_per_proc_variable])
-
-        return layout_size
+        return self.application.occupied_cpus(self._parse_rose_conf(config_path), source=str(config_path))
 
     # TODO: use "real" parser from access-config-utils once implemented.
     @staticmethod
@@ -252,12 +172,14 @@ class CylcRoseManager(ProfilingManager, ABC):
                 logger.warning(f"[{name}] {line}")
             exp.status = ProfilingExperimentStatus.RUNNING
 
-    def _delete_experiment(self, name: str, dry_run: bool) -> None:
+    def _delete_experiment(self, name: str, dry_run: bool, **kwargs) -> None:
         """Deletes the experiment and run directories of a single Rose Cylc experiment.
 
         Args:
             name (str): Name of the experiment to delete.
             dry_run (bool): If True, logs what would be deleted without making any changes.
+            **kwargs: Ignored. Accepted so that this stays substitutable for the base method, whose callers
+                may pass options other runners take.
         """
         exp = self.experiments[name]
         exp_path = exp.path
@@ -383,7 +305,7 @@ class CylcRoseManager(ProfilingManager, ABC):
 
         for logfile in possible_component_logs:
             cycle, task = logfile.parts[-4:-2]
-            for parser_name, parser in self.known_parsers.items():
+            for parser_name, parser in self.application.parsers.items():
                 logs[f"{task}_cycle{cycle}_{parser_name}"] = ProfilingLog(logfile, parser, optional=True)
 
         # Cylc workflows have no concept of repeated runs, so every log is registered as the single run 0.

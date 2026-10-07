@@ -4,7 +4,9 @@
 from unittest import mock
 
 import pytest
+from conftest import legend_labels
 from matplotlib.figure import Figure
+from matplotlib.patches import Rectangle
 
 from access.profiling.metrics import tavg
 from access.profiling.plotting_utils import calculate_column_widths, plot_bar_metrics
@@ -106,14 +108,16 @@ def test_plot_bar_metrics_returns_figure():
     assert tick_labels == region_labels
 
     # Check legend shows experiment names
-    legend_labels = [t.get_text() for t in ax.get_legend().get_texts()]
-    assert legend_labels == ["exp_A", "exp_B", "exp_C"]
+    labels = legend_labels(ax)
+    assert labels == ["exp_A", "exp_B", "exp_C"]
 
     # Check correct number of bars: 3 experiments * 4 regions = 12 bars
     assert len(ax.patches) == 12
 
     # matplotlib groups bars by series: first all exp_A bars, then exp_B, then exp_C
-    heights = [p.get_height() for p in ax.patches]
+    # Axes.patches is typed as the Patch base class; the bars a bar chart draws are Rectangles,
+    # which is where get_height lives.
+    heights = [p.get_height() for p in ax.patches if isinstance(p, Rectangle)]
     assert heights == pytest.approx([100.0, 50.0, 75.0, 30.0, 80.0, 40.0, 60.0, 20.0, 90.0, 45.0, 70.0, 25.0])
 
 
@@ -126,8 +130,8 @@ def test_plot_bar_metrics_single_experiment():
     ax = fig.axes[0]
 
     assert len(ax.patches) == 5
-    legend_labels = [t.get_text() for t in ax.get_legend().get_texts()]
-    assert legend_labels == ["exp_A"]
+    labels = legend_labels(ax)
+    assert labels == ["exp_A"]
 
 
 @mock.patch("access.profiling.plotting_utils.plt.show")

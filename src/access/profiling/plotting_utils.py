@@ -7,7 +7,7 @@ from matplotlib.figure import Figure
 from access.profiling.metrics import ProfilingMetric
 
 
-def calculate_column_widths(table_data: list[list], first_col_fraction: float = None) -> list:
+def calculate_column_widths(table_data: list[list], first_col_fraction: float | None = None) -> list:
     """Calculate column widths based on content character length and required width for first column.
 
     Args:

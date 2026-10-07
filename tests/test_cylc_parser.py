@@ -1,9 +1,12 @@
 # Copyright 2025 ACCESS-NRI and contributors. See the top-level COPYRIGHT file for details.
 # SPDX-License-Identifier: Apache-2.0
 
+import sqlite3
+
 import pytest
 
 from access.profiling import CylcProfilingParser
+from access.profiling.cylc_parser import CylcDBReader
 from access.profiling.metrics import tmax
 
 
@@ -76,3 +79,47 @@ def test_cylc_invalid_logs(tmp_path, cylc_parser, cylc_log_text):
         with pytest.raises(ValueError):
             cylc_parser.parse(cylc_log_file)
         cylc_log_file.unlink()
+
+
+class TestFailedTasksAreSkipped:
+    """The Cylc database keeps a row for every task attempt, successful or not. Timings taken from a task that
+    died part way through describe nothing useful, so the reader drops those rows and carries on through the
+    rest of the table.
+    """
+
+    @staticmethod
+    def write_task_jobs(dbpath, rows):
+        """Helper function creating a minimal "task_jobs" table holding the given rows.
+
+        Args:
+            dbpath (Path): The path of the SQLite file to create.
+            rows (list[tuple]): One (cycle, name, time_run, time_run_exit, run_status) tuple per task attempt.
+        """
+        with sqlite3.connect(dbpath) as con:
+            con.execute(
+                "CREATE TABLE task_jobs (cycle TEXT, name TEXT, time_run TEXT, time_run_exit TEXT, run_status INTEGER)"
+            )
+            con.executemany("INSERT INTO task_jobs VALUES (?, ?, ?, ?, ?)", rows)
+            con.commit()
+
+    def test_a_failed_task_between_two_successful_ones_is_left_out(self, tmp_path):
+        """A failure part way through a cycle must neither contribute a region of its own nor stop the tasks
+        recorded after it from being read. Were the reader to give up at the first failure, every task that ran
+        afterwards would be missing from the profile and the run would look far cheaper than it really was.
+        """
+        dbpath = tmp_path / "cylc.db"
+        self.write_task_jobs(
+            dbpath,
+            [
+                ("20250101T0000Z", "before", "2025-01-01T00:00:00Z", "2025-01-01T00:00:30Z", 0),
+                ("20250101T0000Z", "crashed", "2025-01-01T00:00:30Z", "2025-01-01T00:01:30Z", 1),
+                ("20250101T0000Z", "after", "2025-01-01T00:01:30Z", "2025-01-01T00:01:35Z", 0),
+            ],
+        )
+
+        data = CylcDBReader().parse(dbpath)
+
+        assert data["region"] == ["before_cycle20250101T0000Z", "after_cycle20250101T0000Z"], (
+            f"Expected only the two successful tasks, in table order, but found {data['region']}."
+        )
+        assert data[tmax] == [30, 5], f"Incorrect {tmax} for the successful tasks: found {data[tmax]}."

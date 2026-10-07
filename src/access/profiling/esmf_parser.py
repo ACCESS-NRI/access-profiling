@@ -45,7 +45,7 @@ from access.profiling.metrics import (
     tmax,
     tmin,
 )
-from access.profiling.parser import ProfilingParser, _read_text_file
+from access.profiling.parser import ProfilingData, ProfilingParser, _read_text_file
 
 pets = ProfilingMetric("PETs", Unit("dimensionless"), "ESMF Virtual Machine Persistent Execution Threads")
 pes = ProfilingMetric("PEs", Unit("dimensionless"), "Processing Elements")
@@ -74,10 +74,11 @@ class ESMFSummaryProfilingParser(ProfilingParser):
 
         lines = stream.strip().split("\n")
 
-        if self.hierarchical:
-            result = {}
-            stack = [(result, -1)]  # (current_dict, indent_level)
-        else:
+        result: ProfilingData = {}
+        # Only the hierarchical branch walks it, but binding it here keeps it in one place rather than
+        # leaving its existence to depend on a flag read again further down.
+        stack = [(result, -1)]  # (current_dict, indent_level)
+        if not self.hierarchical:
             result = {m: [] for m in self._metrics}
             result["region"] = []
 

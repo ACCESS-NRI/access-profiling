@@ -24,7 +24,7 @@ from datetime import datetime
 from pathlib import Path
 
 from access.profiling.metrics import tmax
-from access.profiling.parser import ProfilingParser, _read_text_file, _test_file
+from access.profiling.parser import ProfilingData, ProfilingParser, _read_text_file, _test_file
 
 
 class CylcProfilingParser(ProfilingParser):
@@ -108,7 +108,7 @@ class CylcDBReader(ProfilingParser):
             table_data = cur.execute(f"SELECT * FROM {self._table}").fetchall()
 
         # turn timestamps into time elapsed (seconds)
-        data = {"region": []}
+        data: ProfilingData = {"region": []}
         for m in self._metrics:
             data[m] = []
         for row in table_data:
