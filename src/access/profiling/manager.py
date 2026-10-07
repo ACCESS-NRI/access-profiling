@@ -15,9 +15,14 @@ from access.config.parallel_component import ComponentLayout, ParallelComponent
 from access.config.parallel_layouts import iter_layouts
 from matplotlib.figure import Figure
 
-from access.profiling.configuration import ExperimentPlan, ModelConfiguration
+from access.profiling.configuration import ModelConfiguration
 from access.profiling.control import ControlSource
-from access.profiling.experiment import ProfilingExperiment, ProfilingExperimentStatus, ProfilingLog
+from access.profiling.experiment import (
+    ExperimentPlan,
+    ProfilingExperiment,
+    ProfilingExperimentStatus,
+    ProfilingLog,
+)
 from access.profiling.metrics import ProfilingMetric
 from access.profiling.plotting_utils import plot_bar_metrics
 from access.profiling.scaling import plot_component_scaling, plot_scaling_metrics

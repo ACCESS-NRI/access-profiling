@@ -7,10 +7,15 @@ import sqlite3
 import subprocess
 from pathlib import Path
 
-from access.profiling.configuration import ExperimentPlan, RoseSuiteConfiguration
+from access.profiling.configuration import RoseSuiteConfiguration
 from access.profiling.control import ControlSource
 from access.profiling.cylc_parser import CylcDBReader, CylcProfilingParser
-from access.profiling.experiment import ProfilingExperiment, ProfilingExperimentStatus, ProfilingLog
+from access.profiling.experiment import (
+    ExperimentPlan,
+    ProfilingExperiment,
+    ProfilingExperimentStatus,
+    ProfilingLog,
+)
 from access.profiling.manager import ProfilingManager
 
 logger = logging.getLogger(__name__)

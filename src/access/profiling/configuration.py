@@ -132,29 +132,6 @@ class LogSpec:
         return ProfilingLog(path, self.parser, optional=self.optional)
 
 
-@dataclass(frozen=True)
-class ExperimentPlan:
-    """One experiment a manager has decided to create, before any engine has touched it.
-
-    Args:
-        name (str): What identifies the experiment. It is the key this manager holds it under, the branch or
-            directory it lives in, and the name written into the experiment's own configuration, so it has to
-            be distinct for every distinct layout and stable from one session to the next.
-        layout (ComponentLayout): The layout the experiment runs.
-        changes (dict): The configuration file changes realising that layout, keyed by the path of each file
-            relative to the control directory.
-        walltime_hours (float): Walltime to request.
-        regenerating (bool): Whether this plan corrects an experiment the manager already holds, rather than
-            describing a new one.
-    """
-
-    name: str
-    layout: ComponentLayout
-    changes: dict
-    walltime_hours: float
-    regenerating: bool = False
-
-
 class ModelConfiguration(ABC):
     """Abstract base class for one configuration of one ACCESS model.
 

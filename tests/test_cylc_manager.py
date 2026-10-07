@@ -9,11 +9,11 @@ from unittest import mock
 
 import pytest
 
-from access.profiling.configuration import ExperimentPlan, RoseSuiteConfiguration
+from access.profiling.configuration import RoseSuiteConfiguration
 from access.profiling.control import ExistingDirectoryControlSource
 from access.profiling.cylc_manager import CylcRoseManager
 from access.profiling.cylc_parser import CylcDBReader, CylcProfilingParser
-from access.profiling.experiment import ProfilingExperiment, ProfilingExperimentStatus
+from access.profiling.experiment import ExperimentPlan, ProfilingExperiment, ProfilingExperimentStatus
 from access.profiling.manager import ProfilingManager
 
 
