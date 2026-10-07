@@ -385,7 +385,7 @@ class TestLatestAttempt:
         latest = write_job_file(tmp_path, 0, self.FINISHED_RUN, job_id="149764670.gadi-pbs")
         (tmp_path / "archive" / "output000").mkdir(parents=True)
 
-        with mock.patch.object(manager.configuration, "component_logs", return_value={}):
+        with mock.patch.object(manager.application, "component_logs", return_value={}):
             logs = manager.profiling_logs(tmp_path)
 
         assert set(logs["payu"]) == {0}
@@ -542,7 +542,7 @@ def test_generate_scaling_experiments_for_a_model_changing_nothing_in_config_yam
 
     # A fresh dictionary per layout, since the changes of one experiment are not those of another.
     with mock.patch.object(
-        manager.configuration, "config_changes", side_effect=lambda layout: {"MOM_input": {"DT": 1800.0}}
+        manager.application, "config_changes", side_effect=lambda layout: {"MOM_input": {"DT": 1800.0}}
     ):
         manager.generate_scaling_experiments(
             num_nodes_list=[1.0],
@@ -589,7 +589,7 @@ def test_generate_scaling_experiments_attaches_the_layout(mock_experiment_genera
     # Every branch is a distinct layout, and the branch is named after it.
     assert len(set(layouts.values())) == len(layouts)
     for branch, layout in layouts.items():
-        assert manager.configuration.experiment_name(layout) == branch
+        assert manager.application.experiment_name(layout) == branch
         assert layout.n_cores == 4
 
 
@@ -1215,7 +1215,7 @@ def test_profiling_logs(mock_glob, mock_is_dir, manager):
     """Test the profiling_logs method of PayuManager."""
 
     with mock.patch.object(
-        manager.configuration, "component_logs", wraps=manager.configuration.component_logs
+        manager.application, "component_logs", wraps=manager.application.component_logs
     ) as mock_get_logs:
         logs = manager.profiling_logs(Path("/fake/path"))
         # Check correct path access

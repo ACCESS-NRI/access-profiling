@@ -14,12 +14,12 @@ from pathlib import Path
 
 from access.config.parallel_component import ComponentLayout, ParallelComponent
 
-from access.profiling.configuration import LogSpec, ModelConfiguration
+from access.profiling.application import Application, LogSpec
 from access.profiling.parser import ProfilingParser
 
 
 @dataclass(frozen=True)
-class RoseSuiteConfiguration(ModelConfiguration):
+class RoseSuiteConfiguration(Application):
     """A configuration of a model driven by a Cylc Rose suite.
 
     What distinguishes one rose suite from another, for profiling purposes, is the names its

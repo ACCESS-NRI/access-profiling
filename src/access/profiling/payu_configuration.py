@@ -17,7 +17,7 @@ from pathlib import Path
 
 from access.config import YAMLParser
 
-from access.profiling.configuration import LogLocator, ModelConfiguration
+from access.profiling.application import Application, LogLocator
 
 
 def payu_model_stdout() -> LogLocator:
@@ -41,7 +41,7 @@ def payu_model_stdout() -> LogLocator:
     return locate
 
 
-class PayuConfiguration(ModelConfiguration):
+class PayuConfiguration(Application):
     """Abstract base class for a configuration of a model driven by Payu."""
 
     @property

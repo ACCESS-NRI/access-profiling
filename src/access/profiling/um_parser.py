@@ -41,7 +41,7 @@ from pathlib import Path
 
 from access.config import YAMLParser
 
-from access.profiling.configuration import LogLocator
+from access.profiling.application import LogLocator
 from access.profiling.metrics import pemax, pemin, tavg, tmax, tmed, tmin, tstd
 from access.profiling.parser import ProfilingParser, _convert_from_string, _read_text_file
 

@@ -44,10 +44,10 @@ class CylcRoseManager(ProfilingManager):
         self,
         work_dir: Path,
         archive_dir: Path,
-        configuration: RoseSuiteConfiguration,
+        application: RoseSuiteConfiguration,
         control: ControlSource | None = None,
     ):
-        super().__init__(work_dir, archive_dir, configuration, control)
+        super().__init__(work_dir, archive_dir, application, control)
 
     def _create_experiments(self, plans: list[ExperimentPlan]) -> dict[str, ProfilingExperiment]:
         """Raises NotImplementedError: layout experiments are not generated for Cylc Rose suites yet.
@@ -102,7 +102,7 @@ class CylcRoseManager(ProfilingManager):
             tried = ", ".join(str(p) for p in config_paths)
             raise FileNotFoundError(f"Could not find suitable config file. Tried: {tried}")
 
-        return self.configuration.occupied_cpus(self._parse_rose_conf(config_path), source=str(config_path))
+        return self.application.occupied_cpus(self._parse_rose_conf(config_path), source=str(config_path))
 
     # TODO: use "real" parser from access-config-utils once implemented.
     @staticmethod
@@ -313,7 +313,7 @@ class CylcRoseManager(ProfilingManager):
 
         for logfile in possible_component_logs:
             cycle, task = logfile.parts[-4:-2]
-            for parser_name, parser in self.configuration.parsers.items():
+            for parser_name, parser in self.application.parsers.items():
                 logs[f"{task}_cycle{cycle}_{parser_name}"] = ProfilingLog(logfile, parser, optional=True)
 
         # Cylc workflows have no concept of repeated runs, so every log is registered as the single run 0.

@@ -9,7 +9,7 @@ import pytest
 import xarray as xr
 from access.config.parallel_component import ComponentLayout
 
-from access.profiling.configuration import LogSpec, ModelConfiguration
+from access.profiling.application import Application, LogSpec
 from access.profiling.control import GitControlSource
 from access.profiling.manager import (
     ProfilingExperiment,
@@ -22,7 +22,7 @@ from access.profiling.manager import (
 from access.profiling.metrics import count, tavg
 
 
-class MockConfiguration(ModelConfiguration):
+class MockConfiguration(Application):
     """The model axis these tests do not exercise, with the one member they do.
 
     What the manager's own tests cover - parsing, archiving, bookkeeping, plotting - takes a configuration
@@ -219,7 +219,7 @@ def test_repr(scaling_data):
     # Test with no data
     manager = MockProfilingManager(paths=[Path("/fake/work_dir")])
     expected = """<MockProfilingManager>
-    Configuration: mock
+    Application: mock
     Working directory: PosixPath('/fake/work_dir')
     Archive directory: PosixPath('/fake/archive_dir')
     Experiments:
@@ -253,7 +253,7 @@ def test_repr_names_the_control_the_study_perturbs():
     manager.control = GitControlSource("https://example.com/configurations.git", "release-2025.01.000")
 
     expected = """<MockProfilingManager>
-    Configuration: mock
+    Application: mock
     Control: release-2025.01.000
     Working directory: PosixPath('/fake/work_dir')
     Archive directory: PosixPath('/fake/archive_dir')
@@ -1335,7 +1335,7 @@ class TestPlotComponentScalingData:
         """First to what the manager associates with the log, and failing that to the log's own name."""
 
         manager, cores = component_scaling_data
-        manager.configuration.log_components = {"a_log": "other"}
+        manager.application.log_components = {"a_log": "other"}
         for exp_name in manager.data:
             manager.data[exp_name]["a_log"] = manager.data[exp_name]["component"]
 
@@ -1373,7 +1373,7 @@ class TestPlotComponentScalingData:
 
         manager, _ = component_scaling_data
         manager.plot_component_scaling_data([RegionGroup("component", ["Region 1"])], tavg)
-        assert manager.configuration.parse_layout_calls == []
+        assert manager.application.parse_layout_calls == []
 
     def test_an_experiment_whose_layout_cannot_be_told(self, component_scaling_data):
         manager, _ = component_scaling_data
@@ -1486,11 +1486,11 @@ class TestLayoutIsReadBackOnce:
 
     def test_it_is_parsed_and_kept(self):
         manager = MockProfilingManager([Path("expt")], ncpus=[8], datasets=[make_component_dataset([1.0, 2.0])])
-        manager.configuration.layouts["expt"] = _layout(component=4)
+        manager.application.layouts["expt"] = _layout(component=4)
 
         assert manager._layout("expt").n_cores == 4
         assert manager._layout("expt").n_cores == 4
-        assert len(manager.configuration.parse_layout_calls) == 1
+        assert len(manager.application.parse_layout_calls) == 1
         assert manager.experiments["expt"].layout is not None
 
     def test_a_layout_that_cannot_be_told_stays_unknown(self):

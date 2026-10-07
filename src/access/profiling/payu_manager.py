@@ -67,10 +67,10 @@ class PayuManager(ProfilingManager):
         self,
         work_dir: Path,
         archive_dir: Path,
-        configuration: PayuConfiguration,
+        application: PayuConfiguration,
         control: ControlSource | None = None,
     ):
-        super().__init__(work_dir, archive_dir, configuration, control)
+        super().__init__(work_dir, archive_dir, application, control)
 
     @property
     def _repository_directory(self) -> str:
@@ -183,7 +183,7 @@ class PayuManager(ProfilingManager):
             )
 
         generator_config = {
-            "model_type": self.configuration.model_type,
+            "model_type": self.application.model_type,
             "repository_url": self.control.origin,
             "start_point": self.control.start_point,
             "test_path": str(self.work_dir),
@@ -625,7 +625,7 @@ class PayuManager(ProfilingManager):
             raise FileNotFoundError(f"No output files found in {path}!")
         for output_dir in output_dirs:
             run = int(output_dir.name.removeprefix("output"))
-            for name, log in self.configuration.component_logs(output_dir).items():
+            for name, log in self.application.component_logs(output_dir).items():
                 logs.setdefault(name, {})[run] = log
 
         return logs

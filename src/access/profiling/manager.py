@@ -15,7 +15,7 @@ from access.config.parallel_component import ComponentLayout, ParallelComponent
 from access.config.parallel_layouts import iter_layouts
 from matplotlib.figure import Figure
 
-from access.profiling.configuration import ModelConfiguration
+from access.profiling.application import Application
 from access.profiling.control import ControlSource
 from access.profiling.experiment import (
     ExperimentPlan,
@@ -156,7 +156,7 @@ class ProfilingManager(ABC):
     for each number of CPUs.
 
     A manager is the workflow engine, and nothing about any one model: what is being profiled arrives as a
-    ModelConfiguration and what it is being profiled against as a ControlSource. So a subclass is written once
+    Application and what it is being profiled against as a ControlSource. So a subclass is written once
     per engine rather than once per model, and a new model or a new configuration of one is data rather than
     code.
 
@@ -167,7 +167,7 @@ class ProfilingManager(ABC):
     Args:
         work_dir (Path): Working directory where profiling experiments will be generated and run.
         archive_dir (Path): Directory where completed experiments will be archived.
-        configuration (ModelConfiguration): The model configuration being profiled, which says how the model
+        configuration (Application): The model configuration being profiled, which says how the model
             is parallelised, what it writes and how a layout is realised in its configuration files.
         control (ControlSource | None): Where the control configuration every experiment perturbs comes from.
             None (the default) is enough to read and plot experiments that already exist, and is rejected by
@@ -185,13 +185,13 @@ class ProfilingManager(ABC):
         self,
         work_dir: Path,
         archive_dir: Path,
-        configuration: ModelConfiguration,
+        application: Application,
         control: ControlSource | None = None,
     ):
         super().__init__()
         self.work_dir = work_dir
         self.archive_dir = archive_dir
-        self._configuration = configuration
+        self._application = application
         self._control = control
         self.experiments = {}
         self.data = {}
@@ -209,7 +209,7 @@ class ProfilingManager(ABC):
 
         indent = "    "
         summary = f"<{type(self).__name__}>\n"
-        summary += indent + f"Configuration: {self.configuration.name}\n"
+        summary += indent + f"Application: {self.application.name}\n"
         if self.control is not None:
             summary += indent + f"Control: {self.control.label}\n"
         summary += indent + f"Working directory: {self.work_dir!r}\n"
@@ -229,13 +229,13 @@ class ProfilingManager(ABC):
         return summary
 
     @property
-    def configuration(self) -> ModelConfiguration:
-        """Returns the model configuration being profiled.
+    def application(self) -> Application:
+        """Returns the application being profiled.
 
         Returns:
-            ModelConfiguration: The configuration.
+            Application: The application.
         """
-        return self._configuration
+        return self._application
 
     @property
     def control(self) -> ControlSource | None:
@@ -321,7 +321,7 @@ class ProfilingManager(ABC):
                 satisfy; requirements specific to a particular study belong in the allocation strategy passed
                 to the layout search instead.
         """
-        return self.configuration.parallel_component
+        return self.application.parallel_component
 
     def select_layouts(
         self,
@@ -432,7 +432,7 @@ class ProfilingManager(ABC):
             walltime_hrs = walltime(num_nodes) if callable(walltime) else walltime
 
             for layout in layouts:
-                name = self.configuration.experiment_name(layout)
+                name = self.application.experiment_name(layout)
                 if name in planned:
                     continue
 
@@ -450,7 +450,7 @@ class ProfilingManager(ABC):
                     ExperimentPlan(
                         name=name,
                         layout=layout,
-                        changes=self.configuration.config_changes(layout),
+                        changes=self.application.config_changes(layout),
                         walltime_hours=walltime_hrs,
                         regenerating=existing is not None,
                     )
@@ -807,7 +807,7 @@ class ProfilingManager(ABC):
         experiment = self.experiments[exp_name]
         if experiment.layout is None:
             with experiment.directory() as (exp_path, _):
-                experiment.layout = self.configuration.parse_layout(exp_path)
+                experiment.layout = self.application.parse_layout(exp_path)
         return experiment.layout
 
     def update_statuses(self) -> None:
@@ -1097,7 +1097,7 @@ class ProfilingManager(ABC):
         # A log the configuration declares a component for is read against that component; one it does not -
         # a coupled profile covering several, or a log of another configuration entirely - is read against
         # its own name, and a caller naming regions says which component each group is.
-        return self.configuration.component_for_log(group.log) or group.log
+        return self.application.component_for_log(group.log) or group.log
 
     def _group_data(self, group: RegionGroup, exp_names: list[str], region_relabel_map: dict | None) -> dict:
         """Returns the regions of a group for each experiment, keyed by experiment.

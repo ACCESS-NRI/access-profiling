@@ -89,7 +89,7 @@ class LogSpec:
         return ProfilingLog(path, self.parser, optional=self.optional)
 
 
-class ModelConfiguration(ABC):
+class Application(ABC):
     """Abstract base class for one configuration of one ACCESS model.
 
     A configuration is a model set up a particular way: which components it runs, on which grids, and what its

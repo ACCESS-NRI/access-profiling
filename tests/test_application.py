@@ -11,7 +11,7 @@ from unittest import mock
 
 import pytest
 
-from access.profiling.configuration import LogSpec, log_at
+from access.profiling.application import LogSpec, log_at
 from access.profiling.parser import ProfilingParser
 
 

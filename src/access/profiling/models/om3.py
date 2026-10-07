@@ -24,8 +24,8 @@ from access.config.parallel_constraints import (
 )
 from access.config.parallel_domain import Domain, DomainDecompositionSpec
 
+from access.profiling.application import LogSpec, log_at
 from access.profiling.cice5_parser import CICE5ProfilingParser
-from access.profiling.configuration import LogSpec, log_at
 from access.profiling.control import GitControlSource
 from access.profiling.esmf_parser import ESMFSummaryProfilingParser
 from access.profiling.fms_parser import FMSProfilingParser

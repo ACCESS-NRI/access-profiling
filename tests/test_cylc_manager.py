@@ -97,13 +97,13 @@ def test_layout_generation_is_unsupported(manager):
     with pytest.raises(NotImplementedError):
         _ = manager.parallel_component
     with pytest.raises(NotImplementedError):
-        manager.configuration.experiment_name(mock.MagicMock())
+        manager.application.experiment_name(mock.MagicMock())
     with pytest.raises(NotImplementedError):
-        manager.configuration.config_changes(mock.MagicMock())
+        manager.application.config_changes(mock.MagicMock())
     with pytest.raises(NotImplementedError):
         manager.select_layouts(4)
     with pytest.raises(NotImplementedError):
-        manager.configuration.parse_layout(Path("/fake/expt"))
+        manager.application.parse_layout(Path("/fake/expt"))
 
 
 @mock.patch("access.profiling.cylc_manager.Path.glob")

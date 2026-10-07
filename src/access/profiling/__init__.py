@@ -9,8 +9,8 @@ __version__ = "unknown"
 with suppress(PackageNotFoundError):
     __version__ = version("access-profiling")
 
+from access.profiling.application import Application
 from access.profiling.cice5_parser import CICE5ProfilingParser
-from access.profiling.configuration import ModelConfiguration
 from access.profiling.control import ControlSource, ExistingDirectoryControlSource, GitControlSource
 from access.profiling.cylc_manager import CylcRoseManager
 from access.profiling.cylc_parser import CylcDBReader, CylcProfilingParser
@@ -39,7 +39,7 @@ __all__ = [
     "ESM16Configuration",
     "ExistingDirectoryControlSource",
     "GitControlSource",
-    "ModelConfiguration",
+    "Application",
     "OM3_MC_25KM",
     "OM3_MC_25KM_SOURCE",
     "PayuConfiguration",
