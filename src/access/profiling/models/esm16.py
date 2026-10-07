@@ -26,11 +26,12 @@ from access.config.parallel_constraints import (
 from access.config.parallel_domain import Domain
 
 from access.profiling.cice5_parser import CICE5ProfilingParser
-from access.profiling.configuration import LogSpec, PayuConfiguration, log_at, payu_model_stdout, um_stdout
+from access.profiling.configuration import LogSpec, log_at
 from access.profiling.control import GitControlSource
 from access.profiling.fms_parser import FMSProfilingParser
 from access.profiling.models.cice import CICEPartitioning
-from access.profiling.um_parser import UMProfilingParser, UMTotalRuntimeParser
+from access.profiling.payu_configuration import PayuConfiguration, payu_model_stdout
+from access.profiling.um_parser import UMProfilingParser, UMTotalRuntimeParser, um_stdout
 
 logger = logging.getLogger(__name__)
 

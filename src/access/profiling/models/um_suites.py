@@ -9,8 +9,8 @@ OpenMP threads besides; ACCESS-rAM3 states its as one comma-separated pair and h
 task logs with the same two UM parsers. None of that is code, so neither suite has any.
 """
 
-from access.profiling.configuration import RoseSuiteConfiguration
 from access.profiling.control import GitControlSource
+from access.profiling.rose_configuration import RoseSuiteConfiguration
 from access.profiling.um_parser import UMProfilingParser, UMTotalRuntimeParser
 
 # The UM writes one profiling log per task, read twice: once for its regions and once for its total run time.

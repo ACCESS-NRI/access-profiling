@@ -1,10 +1,12 @@
 # Copyright 2025 ACCESS-NRI and contributors. See the top-level COPYRIGHT file for details.
 # SPDX-License-Identifier: Apache-2.0
 
+from pathlib import Path
+
 import pytest
 
 from access.profiling.metrics import pemax, pemin, tavg, tmax, tmed, tmin, tstd
-from access.profiling.um_parser import UMProfilingParser, UMTotalRuntimeParser
+from access.profiling.um_parser import UMProfilingParser, UMTotalRuntimeParser, um_stdout
 
 
 @pytest.fixture(scope="module")
@@ -458,3 +460,44 @@ def test_um_total_runtime_parsing_missing_section(tmp_path, um7_raw_profiling_da
     um7_log_file.write_text(um7_raw_profiling_data)
     with pytest.raises(ValueError):
         um_total_runtime_parser.parse(um7_log_file)
+
+
+def write_um_env(output_dir: Path, text: str) -> Path:
+    """Writes the UM's environment file into an output directory, and returns the directory.
+
+    Args:
+        output_dir (Path): The output directory to write into.
+        text (str): Contents of `atmosphere/um_env.yaml`.
+
+    Returns:
+        Path: The output directory.
+    """
+    (output_dir / "atmosphere").mkdir()
+    (output_dir / "atmosphere" / "um_env.yaml").write_text(text)
+    return output_dir
+
+
+class TestUMStdout:
+    """The UM writes one standard output file per rank, under a name its own environment file states."""
+
+    def test_rank_zeros_file_is_the_one_named(self, tmp_path):
+        """The timings are printed by rank 0 alone, so any other rank's file would parse to nothing."""
+
+        write_um_env(tmp_path, "UM_STDOUT_FILE: pe_output/atm.fort6.pe\n")
+
+        assert um_stdout()(tmp_path) == tmp_path / "atmosphere" / "pe_output" / "atm.fort6.pe0"
+
+    def test_an_output_directory_with_no_um_environment_file_names_no_log(self, tmp_path):
+        """A configuration without an atmosphere archives no `um_env.yaml`, and that is not an error."""
+
+        assert um_stdout()(tmp_path) is None
+
+        (tmp_path / "atmosphere").mkdir()
+        assert um_stdout()(tmp_path) is None, "the directory is there, the environment file is not"
+
+    def test_a_um_environment_stating_no_stdout_file_names_no_log(self, tmp_path):
+        """Nothing then says what the per-rank files are called, and guessing a name would read someone else's."""
+
+        write_um_env(tmp_path, "UM_ATM_NPROCX: '16'\n")
+
+        assert um_stdout()(tmp_path) is None

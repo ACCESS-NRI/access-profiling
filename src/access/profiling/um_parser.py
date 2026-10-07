@@ -39,6 +39,9 @@ import os
 import re
 from pathlib import Path
 
+from access.config import YAMLParser
+
+from access.profiling.configuration import LogLocator
 from access.profiling.metrics import pemax, pemin, tavg, tmax, tmed, tmin, tstd
 from access.profiling.parser import ProfilingParser, _convert_from_string, _read_text_file
 
@@ -240,3 +243,28 @@ class UMTotalRuntimeParser(ProfilingParser):
         logger.debug(f"Found total UM runtime: {total_time} seconds")
 
         return {"region": ["um_total_walltime"], tmax: [total_time]}
+
+
+def um_stdout() -> LogLocator:
+    """Returns a locator for the UM's standard output.
+
+    The UM writes one file per rank and names them from `UM_STDOUT_FILE` in its own environment file; the
+    timings are in rank 0's.
+
+    The `atmosphere/` path segment is where a Payu-driven run puts the UM's output. That is a coupling to the
+    runner rather than to the UM, and it is written here rather than hidden: a suite that lays its output out
+    differently needs a locator of its own.
+
+    Returns:
+        LogLocator: The locator.
+    """
+
+    def locate(output_dir: Path) -> Path | None:
+        um_env_path = output_dir / "atmosphere" / "um_env.yaml"
+        if not um_env_path.is_file():
+            return None
+        um_env = YAMLParser().parse(um_env_path.read_text())
+        stem = um_env.get("UM_STDOUT_FILE")
+        return None if stem is None else output_dir / "atmosphere" / f"{stem}0"
+
+    return locate

@@ -10,10 +10,10 @@ from access.config import YAMLParser
 from experiment_generator.experiment_generator import ExperimentGenerator
 from experiment_runner.experiment_runner import ExperimentRunner
 
-from access.profiling.configuration import PayuConfiguration
 from access.profiling.control import ControlSource
 from access.profiling.experiment import ExperimentPlan, ProfilingLog
 from access.profiling.manager import ProfilingExperiment, ProfilingExperimentStatus, ProfilingManager
+from access.profiling.payu_configuration import PayuConfiguration
 from access.profiling.payujson_parser import PayuJSONProfilingParser
 
 logger = logging.getLogger(__name__)

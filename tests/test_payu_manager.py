@@ -14,10 +14,10 @@ from access.config.parallel_component import ParallelComponent
 from access.config.parallel_constraints import FixedThreadsPerRankConstraint
 from access.config.parallel_domain import Domain
 
-from access.profiling.configuration import PayuConfiguration
 from access.profiling.control import GitControlSource
 from access.profiling.experiment import ProfilingLog
 from access.profiling.manager import ProfilingManager
+from access.profiling.payu_configuration import PayuConfiguration
 from access.profiling.payu_manager import (
     PayuManager,
     ProfilingExperiment,

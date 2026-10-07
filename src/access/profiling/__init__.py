@@ -10,7 +10,7 @@ with suppress(PackageNotFoundError):
     __version__ = version("access-profiling")
 
 from access.profiling.cice5_parser import CICE5ProfilingParser
-from access.profiling.configuration import ModelConfiguration, PayuConfiguration, RoseSuiteConfiguration
+from access.profiling.configuration import ModelConfiguration
 from access.profiling.control import ControlSource, ExistingDirectoryControlSource, GitControlSource
 from access.profiling.cylc_manager import CylcRoseManager
 from access.profiling.cylc_parser import CylcDBReader, CylcProfilingParser
@@ -21,8 +21,10 @@ from access.profiling.models.esm16 import ESM16_PI_CONTROL, ESM16_PI_CONTROL_SOU
 from access.profiling.models.om3 import OM3_MC_25KM, OM3_MC_25KM_SOURCE, OM3Configuration
 from access.profiling.models.um_suites import AM3_N96E, AM3_N96E_SOURCE, RAM3
 from access.profiling.parser import ProfilingParser
+from access.profiling.payu_configuration import PayuConfiguration
 from access.profiling.payu_manager import PayuManager
 from access.profiling.payujson_parser import PayuJSONProfilingParser
+from access.profiling.rose_configuration import RoseSuiteConfiguration
 from access.profiling.um_parser import UMProfilingParser
 
 __all__ = [
