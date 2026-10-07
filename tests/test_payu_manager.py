@@ -13,6 +13,7 @@ from access.config.parallel_allocation_strategies import FixedAllocation, RootAl
 from access.config.parallel_component import ParallelComponent
 from access.config.parallel_constraints import FixedThreadsPerRankConstraint
 from access.config.parallel_domain import Domain
+from conftest import grid_of
 
 from access.profiling.control import GitControlSource
 from access.profiling.experiment import ProfilingLog
@@ -58,8 +59,8 @@ class MockPayuConfiguration(PayuConfiguration):
 
     def experiment_name(self, layout) -> str:
         atm, ocn = layout.sub_layouts
-        atm_nx, atm_ny = atm.decomposition.grid.shape
-        ocn_nx, ocn_ny = ocn.decomposition.grid.shape
+        atm_nx, atm_ny = grid_of(atm)
+        ocn_nx, ocn_ny = grid_of(ocn)
         return f"mock_atm_{atm_nx}x{atm_ny}_ocn_{ocn_nx}x{ocn_ny}"
 
     def parse_layout(self, output_dir):

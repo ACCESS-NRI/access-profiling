@@ -702,7 +702,7 @@ class ProfilingManager(ABC, Generic[AppT]):
         if not all_experiments and not experiments:
             raise ValueError("No experiments specified. Pass either experiments=[...] or all_experiments=True.")
         existing = set(self.experiments.keys())
-        names_to_delete = existing if all_experiments else set(experiments)
+        names_to_delete = existing if all_experiments else set(experiments or ())
         unmanaged = names_to_delete - existing
         if unmanaged:
             raise KeyError(
@@ -741,7 +741,7 @@ class ProfilingManager(ABC, Generic[AppT]):
                     # Parse all logs
                     logs = self.profiling_logs(exp_path, run_path)
                     for log_name, run_logs in logs.items():
-                        datasets = {}
+                        datasets: dict[int, xr.Dataset] = {}
                         for run, log in run_logs.items():
                             logger.info(f"Parsing {log_name} profiling log for run {run}: {log.filepath}. ")
                             if log.optional:

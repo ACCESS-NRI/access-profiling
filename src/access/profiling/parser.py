@@ -50,6 +50,12 @@ import xarray as xr
 
 from access.profiling.metrics import ProfilingMetric
 
+# What a parser returns, and what the helpers below pass around. One dict is keyed by BOTH kinds of key, as
+# the Data formats section above describes: str for 'region', 'pe' and child region names, ProfilingMetric
+# for the measurements. The two never collide, which is what makes a single dict workable - but it also
+# means neither dict[str, ...] nor dict[ProfilingMetric, ...] describes it.
+ProfilingData = dict[str | ProfilingMetric, Any]
+
 
 class ProfilingParser(ABC):
     """Abstract parser of profiling data.
@@ -91,7 +97,7 @@ class ProfilingParser(ABC):
         return self._metrics
 
     @abstractmethod
-    def parse(self, file_path: str | Path | os.PathLike) -> dict:
+    def parse(self, file_path: str | Path | os.PathLike) -> ProfilingData:
         """Parse the given file.
 
         Args:
@@ -108,7 +114,7 @@ class ProfilingParser(ABC):
         """
 
 
-def flatten_hierarchical(data: dict, metrics: list[ProfilingMetric]) -> dict:
+def flatten_hierarchical(data: ProfilingData, metrics: list[ProfilingMetric]) -> ProfilingData:
     """Converts a hierarchical (nested dict) parser output into the standard flat format.
 
     Traverses the nested dict depth-first (pre-order: parent before children).
@@ -136,7 +142,10 @@ def flatten_hierarchical(data: dict, metrics: list[ProfilingMetric]) -> dict:
                 _visit(value, key)
 
     for region_name, region_data in data.items():
-        _visit(region_data, region_name)
+        # Top-level keys are region names. A ProfilingMetric here would mean a measurement with no region,
+        # which the hierarchical format has no way to express.
+        if isinstance(region_name, str):
+            _visit(region_data, region_name)
 
     return result
 

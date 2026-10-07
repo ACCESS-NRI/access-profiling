@@ -327,6 +327,27 @@ def test_um7_parser_missing_footer(tmp_path, um_parser, um7_malformed_profiling_
         um_parser.parse(um7_log_file)
 
 
+def test_um7_parser_footer_before_header(tmp_path, um_parser):
+    """A log holding both markers, but in the wrong order, has no section between them.
+
+    Each marker is checked on its own, so both searches succeed; only the combined pattern fails. That is
+    what a truncated or concatenated log looks like, and it used to raise AttributeError from deep inside
+    the parser rather than the ValueError the docstring promises.
+    """
+    um7_log_file = tmp_path / "um7.log"
+    um7_log_file.write_text(
+        " CPU TIMES (sorted by wallclock times)\n"
+        "\n"
+        " MPP : Inclusive timer summary\n"
+        "\n"
+        " WALLCLOCK  TIMES\n"
+        "    ROUTINE                   MEAN   MEDIAN       SD   % of mean      MAX   (PE)      MIN   (PE)\n"
+    )
+
+    with pytest.raises(ValueError, match="No profiling section found"):
+        um_parser.parse(um7_log_file)
+
+
 def test_um7_parser_missing_section(tmp_path, um_parser, um7_malformed_profiling_data_missing_profiling_section):
     """Test that UM7 parsing fails when the profiling section is empty (but both header and footer are present)"""
     um7_log_file = tmp_path / "um7.log"

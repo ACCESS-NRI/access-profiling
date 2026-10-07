@@ -43,7 +43,7 @@ from access.config import YAMLParser
 
 from access.profiling.application import LogLocator
 from access.profiling.metrics import pemax, pemin, tavg, tmax, tmed, tmin, tstd
-from access.profiling.parser import ProfilingParser, _convert_from_string, _read_text_file
+from access.profiling.parser import ProfilingData, ProfilingParser, _convert_from_string, _read_text_file
 
 logger = logging.getLogger(__name__)
 
@@ -145,9 +145,15 @@ class UMProfilingParser(ProfilingParser):
 
         # Match *everything* between the header and footer (the match could be 0 characters)
         profiling_section_p = re.compile(header + r"(.*)" + footer, re.MULTILINE | re.DOTALL)
-        profiling_section = profiling_section_p.search(stream)
+        section_match = profiling_section_p.search(stream)
+        if not section_match:
+            # Both parts were found on their own, so this means they are not in the order the section needs -
+            # a truncated or concatenated log can put a footer before its header.
+            logger.debug("Section pattern: %s", profiling_section_p.pattern)
+            logger.debug("Input string: %s", stream)
+            raise ValueError(f"No profiling section found between the header and the footer in {file_path}.")
 
-        profiling_section = profiling_section.group(1)
+        profiling_section = section_match.group(1)
         logger.debug("Found section: %s", profiling_section)
 
         # This is regex dark arts - seems to work, I roughly understood when I
@@ -177,7 +183,7 @@ class UMProfilingParser(ProfilingParser):
         profile_line += r"$"  # the regex should match till the end of line.
         profiling_region_p = re.compile(profile_line, re.MULTILINE)
 
-        stats = {"region": []}
+        stats: ProfilingData = {"region": []}
         stats.update({m: [] for m in self.metrics})
         for line in profiling_region_p.finditer(profiling_section):
             logger.debug(f"Matched line: {line.group(0)}")

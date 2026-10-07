@@ -312,7 +312,7 @@ class PayuManager(ProfilingManager[PayuConfiguration]):
         for branch in runner_config["running_branches"]:
             self.experiments[branch].status = ProfilingExperimentStatus.RUNNING
 
-    def delete_experiments(
+    def delete_experiments(  # pyright: ignore[reportIncompatibleMethodOverride]
         self,
         experiments: list[str] | None = None,
         all_experiments: bool = False,
@@ -329,7 +329,9 @@ class PayuManager(ProfilingManager[PayuConfiguration]):
         """
         # remove_repo_dir would already be forwarded to _delete_experiment via the base class **kwargs, but this
         # override declares it explicitly so it stays a documented, discoverable and typo-checked argument of the
-        # public Payu API rather than a hidden keyword convention.
+        # public Payu API rather than a hidden keyword convention. That deliberately narrows the base method,
+        # which accepts any keyword: widening it back would let a misspelled one through to be swallowed, so
+        # the narrowing is the point and the type checker is told to allow it.
         super().delete_experiments(
             experiments=experiments,
             all_experiments=all_experiments,
@@ -337,13 +339,15 @@ class PayuManager(ProfilingManager[PayuConfiguration]):
             remove_repo_dir=remove_repo_dir,
         )
 
-    def _delete_experiment(self, name: str, dry_run: bool, remove_repo_dir: bool = False) -> None:
+    def _delete_experiment(self, name: str, dry_run: bool, remove_repo_dir: bool = False, **kwargs) -> None:
         """Deletes a single Payu experiment (branch) via the experiment runner.
 
         Args:
             name (str): Name of the experiment (branch) to delete.
             dry_run (bool): If True, performs a dry run without deleting files.
             remove_repo_dir (bool): If True, removes the base repository directory if no branches are using it.
+            **kwargs: Ignored. Accepted so that this stays substitutable for the base method, whose callers
+                may pass options other runners take.
         """
         runner_config = {
             "test_path": self.work_dir,

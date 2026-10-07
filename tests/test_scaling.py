@@ -8,6 +8,7 @@ import numpy as np
 import pint
 import pytest
 import xarray as xr
+from conftest import legend_labels
 from matplotlib.figure import Figure
 from matplotlib.ticker import LogLocator
 
@@ -159,7 +160,7 @@ def test_plot_scaling_metrics_efficiency_ylim_covers_superlinear_efficiency(mock
     previously dropped when computing the default axis limit.
     """
     ncpus = [1, 2]
-    datasets = []
+    datasets: list[xr.Dataset] = []
     for n, val in zip(ncpus, [1000, 400], strict=True):  # superlinear: 2 cpus is >2x faster than 1 cpu
         datasets.append(
             xr.Dataset(
@@ -173,6 +174,37 @@ def test_plot_scaling_metrics_efficiency_ylim_covers_superlinear_efficiency(mock
     ax2 = fig.axes[1]
 
     assert ax2.get_ylim()[1] >= 1.1 * 125  # true max efficiency is 125%; default ylim must cover it
+
+
+@mock.patch("matplotlib.pyplot.show", autospec=True)
+def test_plot_scaling_metrics_efficiency_ylim_covers_every_dataset(mock_plt):
+    """The ylim must span all the datasets, not whichever one happened to be plotted last.
+
+    Regression test: max_eff used to be initialised inside the loop over datasets, so it ended up holding
+    the maximum of the last one alone. A caller passing a superlinear dataset first and a linear one second
+    got an axis fitted to the second, with the first one's curve clipped off it - exactly the silent drop
+    the dequantify above guards against, reintroduced one level up.
+    """
+
+    def dataset(times: list[float]) -> xr.Dataset:
+        return xr.concat(
+            [
+                xr.Dataset(
+                    data_vars={tavg: xr.DataArray([[t]], dims=["ncpus", "region"]).pint.quantify("seconds")},
+                    coords={"region": ["R1"], "ncpus": [n]},
+                )
+                for n, t in zip([1, 2], times, strict=True)
+            ],
+            dim="ncpus",
+        )
+
+    superlinear = dataset([1000, 400])  # 125% efficiency at 2 cpus
+    linear = dataset([1000, 500])  # 100% efficiency at 2 cpus
+
+    fig = plot_scaling_metrics(stats=[superlinear, linear], metric=tavg, xcoordinate="ncpus")
+
+    assert fig.axes[1].get_ylim()[1] >= 1.1 * 125, "the first dataset's 125% must still be on the axis"
+    plt.close(fig)
 
 
 class TestPlotScalingMetricsIsShownOnlyWhenAsked:
@@ -338,7 +370,7 @@ class TestIdealScaling:
         """They say the same thing about every curve, so saying it three times would only crowd it."""
 
         fig = plot_component_scaling(component_scaling_data, tavg, show=False)
-        labels = [text.get_text() for text in fig.axes[0].get_legend().get_texts()]
+        labels = legend_labels(fig.axes[0])
         assert labels == ["MOM6: Ocean dynamics", "MOM6: Ocean", "CICE6: Total", "Ideal"]
 
     def test_an_ideal_meets_its_curve_at_the_fewest_cores(self, component_scaling_data):
@@ -346,8 +378,8 @@ class TestIdealScaling:
         for measured, ideal in zip(
             [line for line in fig.axes[0].lines if line.get_color() != "k"], _ideals(fig), strict=True
         ):
-            assert list(ideal.get_xdata()) == list(measured.get_xdata())
-            assert ideal.get_ydata()[0] == pytest.approx(measured.get_ydata()[0])
+            assert list(np.asarray(ideal.get_xdata())) == list(np.asarray(measured.get_xdata()))
+            assert np.asarray(ideal.get_ydata())[0] == pytest.approx(np.asarray(measured.get_ydata())[0])
 
     def test_it_halves_as_the_cores_double(self, component_scaling_data):
         """The sea ice only scales as the square root of its cores, so its ideal is what it did not manage."""
@@ -360,7 +392,7 @@ class TestIdealScaling:
         fig = plot_component_scaling(component_scaling_data, tavg, show=False)
         measured = [line for line in fig.axes[0].lines if line.get_color() != "k"][0]
         ideal = _ideals(fig)[0]
-        assert list(ideal.get_ydata()) == pytest.approx(list(measured.get_ydata()))
+        assert list(np.asarray(ideal.get_ydata())) == pytest.approx(list(np.asarray(measured.get_ydata())))
 
     def test_a_curve_of_a_single_point(self):
         """One core count is one point, and its ideal is that same point rather than an error."""

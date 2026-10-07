@@ -182,7 +182,7 @@ Region                         PETs   PEs    Count    Mean (s)    Min (s)     Mi
 def check_nested_dict(
     input_dict: dict,
     correct_dict: dict,
-    metric_keys: set = None,
+    metric_keys: set | None = None,
     region: str = "[ESMF]",
     depth: int = 1,
 ):

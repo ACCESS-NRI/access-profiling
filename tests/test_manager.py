@@ -8,6 +8,7 @@ from unittest import mock
 import pytest
 import xarray as xr
 from access.config.parallel_component import ComponentLayout
+from conftest import component_of, layout_of
 
 from access.profiling.application import Application, LogSpec
 from access.profiling.control import GitControlSource
@@ -709,7 +710,7 @@ def test_scaling_data_missing_experiment_data_raises_value_error(scaling_data):
     paths, ncpus, datasets = scaling_data
     manager = MockProfilingManager(paths, ncpus, datasets)
 
-    with pytest.raises(ValueError, match="No parsed profiling data found for experiment\(s\)") as exc_info:
+    with pytest.raises(ValueError, match=r"No parsed profiling data found for experiment\(s\)") as exc_info:
         manager.plot_scaling_data(
             components=["component"],
             regions=[["Region 1"]],
@@ -1189,7 +1190,7 @@ class TestFindComponent:
 
     def test_it_finds_a_component_beside_the_others(self):
         layout = _layout(ocn=240, ice=120)
-        assert find_component(layout, "ice").n_cores == 120
+        assert component_of(layout, "ice").n_cores == 120
 
     def test_it_finds_the_layout_itself(self):
         layout = _layout(ocn=240)
@@ -1214,7 +1215,7 @@ class TestFindComponent:
             decomposition=None,
             sub_layouts=(shared, _leaf("ocn", 240)),
         )
-        assert find_component(layout, "ice").n_cores == 120
+        assert component_of(layout, "ice").n_cores == 120
 
     def test_a_component_that_is_not_there(self):
         assert find_component(_layout(ocn=240), "atm") is None
@@ -1483,8 +1484,8 @@ class TestLayoutIsReadBackOnce:
         manager = MockProfilingManager([Path("expt")], ncpus=[8], datasets=[make_component_dataset([1.0, 2.0])])
         manager.application.layouts["expt"] = _layout(component=4)
 
-        assert manager._layout("expt").n_cores == 4
-        assert manager._layout("expt").n_cores == 4
+        assert layout_of(manager._layout("expt")).n_cores == 4
+        assert layout_of(manager._layout("expt")).n_cores == 4
         assert len(manager.application.parse_layout_calls) == 1
         assert manager.experiments["expt"].layout is not None
 

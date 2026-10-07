@@ -72,3 +72,17 @@ def grid_of(sub_layout: ComponentLayout) -> tuple[int, ...]:
         tuple[int, ...]: The extents of its process grid.
     """
     return tuple(decomposition_of(sub_layout).grid)
+
+
+def legend_labels(ax) -> list[str]:
+    """Returns the labels of an axes' legend, asserting there is one.
+
+    Args:
+        ax (Axes): The axes to read.
+
+    Returns:
+        list[str]: The labels, in the order the legend lists them.
+    """
+    legend = ax.get_legend()
+    assert legend is not None, "the axes carries no legend"
+    return [text.get_text() for text in legend.get_texts()]
