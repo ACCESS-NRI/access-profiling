@@ -121,11 +121,8 @@ class OM3Configuration(PayuConfiguration):
             shared range.
     """
 
-    # These three are dataclass fields rather than properties because that is all it takes to satisfy the
-    # abstract properties of the base class: a field with a default leaves a value in the class namespace, and
-    # a plain value is not a data descriptor, so each instance reads back its own. A field with no default
-    # would leave the member abstract and the class uninstantiable, which is why name is defaulted and then
-    # checked below rather than simply required.
+    # name is defaulted because every field after it is, not because it is optional: __post_init__ refuses
+    # an empty one.
     name: str = ""
     ocean: Domain | None = None
     sea_ice: CICEPartitioning | None = None
@@ -551,7 +548,7 @@ def _om3_leaf(name: str, n_cores: int, core_offset: int = 0) -> ComponentLayout:
 # could express anyway - so the search chooses how many ranks the sea ice gets and nothing else, and nothing
 # is written into ice_in. That is the whole of what the release leaves open.
 OM3_25KM_CICE6: CICEPartitioning = CICEPartitioning(
-    grid=OM3_25KM_GRID.shape,
+    grid=(OM3_25KM_GRID.shape[0], OM3_25KM_GRID.shape[1]),
     distribution_type="roundrobin",
     processor_shape="square-ice",
     nghost=OM3_CICE6_GHOST_WIDTH,

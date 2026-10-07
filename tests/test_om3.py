@@ -9,11 +9,11 @@ from access.config.parallel_allocation_strategies import FixedAllocation, FreeAl
 from access.config.parallel_component import ComponentLayout
 from access.config.parallel_constraints import DomainDivisibleByRanksConstraint, EqualCoresGroupConstraint
 from access.config.parallel_domain import Domain
+from conftest import component_of, layout_of
 
 from access.profiling.cice5_parser import CICE5ProfilingParser
 from access.profiling.esmf_parser import ESMFSummaryProfilingParser
 from access.profiling.fms_parser import FMSProfilingParser
-from access.profiling.manager import find_component
 from access.profiling.models.cice import CICEPartitioning
 from access.profiling.models.om3 import (
     OM3_ATMOSPHERE_NAME,
@@ -36,7 +36,7 @@ OM3_100KM_GRID = Domain(shape=(360, 324))
 # dev-MC_100km_jra_ryf distributes its blocks cartesian with one block row, so the search chooses how the x
 # extent is split and each rank takes one block spanning the full y extent. The released 25 km configuration
 # does not, which is what OM3_25KM_CICE6 says and what every test below that expects no sea ice grid is about.
-OM3_100KM_CICE6 = CICEPartitioning(grid=OM3_100KM_GRID.shape)
+OM3_100KM_CICE6 = CICEPartitioning(grid=(OM3_100KM_GRID.shape[0], OM3_100KM_GRID.shape[1]))
 OM3_MC_100KM = OM3Configuration(
     name="MC-100km",
     ocean=OM3_100KM_GRID,
@@ -371,6 +371,7 @@ def test_om3_assigns_the_domains_it_records():
         realms = component.subcomponents if component.name == OM3_SHARED_NAME else (component,)
         leaves.update({realm.name: realm for realm in realms})
 
+    assert OM3_MCW_100KM.sea_ice is not None, "this configuration runs a sea ice"
     assert leaves[OM3_SEA_ICE_NAME].domain == OM3_MCW_100KM.sea_ice.domain, (
         "CICE6 carries what its own partitioning leaves the search to choose"
     )
@@ -393,7 +394,8 @@ def test_om3_rejects_a_grid_it_cannot_decompose():
     with pytest.raises(ValueError, match="1-dimensional grid"):
         OM3Configuration(name="flat", ocean=Domain(shape=(360,)))
     with pytest.raises(ValueError, match="two positive extents"):
-        CICEPartitioning(grid=(360,))
+        # A one-dimensional grid is the point of the test, so the wrong type is deliberate.
+        CICEPartitioning(grid=(360,))  # pyright: ignore[reportArgumentType]
 
 
 def test_om3_needs_a_name():
@@ -642,11 +644,11 @@ class TestOM3ParseLayout:
         (generated,) = _select(configuration, 240, allocations=_om3_pinned(cpl=24, atm=24, ice=24, rof=24, ocn=216))
         path = _write_runconfig(tmp_path, _pelayout(configuration, generated))
 
-        parsed = configuration.parse_layout(path)
+        parsed = layout_of(configuration.parse_layout(path))
 
         assert _om3_ranges(parsed) == _om3_ranges(generated)
         assert parsed.n_cores == generated.n_cores
-        assert find_component(parsed, OM3_OCEAN_NAME).n_cores == 216
+        assert component_of(parsed, OM3_OCEAN_NAME).n_cores == 216
 
     def test_the_shared_realms_keep_their_places_on_the_range(self, om3, tmp_path):
         """Their offsets are what a shared range is, and the range has to be covered exactly."""
@@ -667,7 +669,7 @@ class TestOM3ParseLayout:
             },
         )
 
-        parsed = om3.parse_layout(path)
+        parsed = layout_of(om3.parse_layout(path))
 
         (shared, ocean) = parsed.sub_layouts
         assert shared.name == OM3_SHARED_NAME
@@ -701,7 +703,7 @@ class TestOM3ParseLayout:
             },
         )
 
-        assert find_component(om3.parse_layout(path), OM3_SEA_ICE_NAME).n_cores == 48
+        assert component_of(layout_of(om3.parse_layout(path)), OM3_SEA_ICE_NAME).n_cores == 48
 
     def test_cores_between_the_ranges_that_belong_to_nothing(self, om3, tmp_path):
         """The shared range ends at 24 and the ocean starts at 48, so 24 cores answer to no component."""
@@ -759,14 +761,14 @@ class TestOM3ParseLayout:
         assert om3.parse_layout(path) is None
 
     def test_a_configuration_without_an_ocean(self, tmp_path):
-        ice_only = OM3Configuration(name="ice-only", sea_ice=OM3_100KM_GRID, atmosphere=OM3_100KM_GRID)
+        ice_only = OM3Configuration(name="ice-only", sea_ice=OM3_100KM_CICE6, atmosphere=OM3_100KM_GRID)
         manager = ice_only
         path = _write_runconfig(
             tmp_path,
             {"cpl_ntasks": 24, "cpl_rootpe": 0, "atm_ntasks": 24, "atm_rootpe": 0, "ice_ntasks": 24, "ice_rootpe": 0},
         )
 
-        parsed = manager.parse_layout(path)
+        parsed = layout_of(manager.parse_layout(path))
 
         assert [sub.name for sub in parsed.sub_layouts] == [OM3_SHARED_NAME]
         assert parsed.n_cores == 24
@@ -793,8 +795,8 @@ class TestOM3ParseLayout:
             },
         )
 
-        parsed = manager.parse_layout(path)
+        parsed = layout_of(manager.parse_layout(path))
 
         assert [sub.name for sub in parsed.sub_layouts] == [OM3_SHARED_NAME, OM3_OCEAN_NAME, OM3_WAVE_NAME]
-        assert find_component(parsed, OM3_WAVE_NAME).n_cores == 24
+        assert component_of(parsed, OM3_WAVE_NAME).n_cores == 24
         assert parsed.n_cores == 240

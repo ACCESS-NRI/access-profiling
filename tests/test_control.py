@@ -20,7 +20,8 @@ class TestTheSourcesAreControls:
         runner with no repository to clone and a study with nothing to say it ran against."""
 
         with pytest.raises(TypeError, match="abstract"):
-            ControlSource()
+            # Instantiating the ABC is the point of the test.
+            ControlSource()  # pyright: ignore[reportAbstractUsage]
 
     def test_both_sources_are_control_sources(self, tmp_path):
         assert isinstance(GitControlSource(ESM16_CONFIGS, PI_CONTROL_RELEASE), ControlSource)
@@ -202,10 +203,12 @@ class TestBothSourcesAreValues:
         control = GitControlSource(ESM16_CONFIGS, PI_CONTROL_RELEASE)
 
         with pytest.raises(dataclasses.FrozenInstanceError):
-            control.start_point = "release-piControl-2.0"
+            # Assigning to a frozen dataclass is the point of the test.
+            control.start_point = "release-piControl-2.0"  # pyright: ignore[reportAttributeAccessIssue]
 
     def test_an_existing_directory_control_cannot_be_moved_either(self, tmp_path):
         control = ExistingDirectoryControlSource(tmp_path / "u-dg768")
 
         with pytest.raises(dataclasses.FrozenInstanceError):
-            control.path = tmp_path / "u-dg769"
+            # Assigning to a frozen dataclass is the point of the test.
+            control.path = tmp_path / "u-dg769"  # pyright: ignore[reportAttributeAccessIssue]

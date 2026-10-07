@@ -40,13 +40,8 @@ class MockConfiguration(Application):
         self.log_components = log_components if log_components is not None else {}
         self.parse_layout_calls: list[Path] = []
 
-    @property
-    def name(self):
-        return "mock"
-
-    @property
-    def experiment_prefix(self):
-        return "mock-layout"
+    name = "mock"
+    experiment_prefix = "mock-layout"
 
     @property
     def parallel_component(self):
@@ -70,7 +65,7 @@ class MockConfiguration(Application):
         return self.layouts.get(output_dir.name)
 
 
-class MockProfilingManager(ProfilingManager):
+class MockProfilingManager(ProfilingManager[MockConfiguration]):
     """Test class inheriting from ProfilingManager to test its methods.
 
     This class will simulate parsing of some profiling data.

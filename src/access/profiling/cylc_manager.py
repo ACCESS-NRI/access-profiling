@@ -7,7 +7,6 @@ import sqlite3
 import subprocess
 from pathlib import Path
 
-from access.profiling.control import ControlSource
 from access.profiling.cylc_parser import CylcDBReader, CylcProfilingParser
 from access.profiling.experiment import (
     ExperimentPlan,
@@ -21,7 +20,7 @@ from access.profiling.rose_configuration import RoseSuiteConfiguration
 logger = logging.getLogger(__name__)
 
 
-class CylcRoseManager(ProfilingManager):
+class CylcRoseManager(ProfilingManager[RoseSuiteConfiguration]):
     """Profiling of any ACCESS model driven by a Cylc Rose suite.
 
     One class for every rose suite: what tells ACCESS-AM3 from ACCESS-rAM3 is the names their
@@ -40,20 +39,13 @@ class CylcRoseManager(ProfilingManager):
             a credentials prompt can be answered. None (the default) records nothing.
     """
 
-    def __init__(
-        self,
-        work_dir: Path,
-        archive_dir: Path,
-        application: RoseSuiteConfiguration,
-        control: ControlSource | None = None,
-    ):
-        super().__init__(work_dir, archive_dir, application, control)
-
-    def _create_experiments(self, plans: list[ExperimentPlan]) -> dict[str, ProfilingExperiment]:
+    def _create_experiments(self, plans: list[ExperimentPlan], **runner_options) -> dict[str, ProfilingExperiment]:
         """Raises NotImplementedError: layout experiments are not generated for Cylc Rose suites yet.
 
         Args:
             plans (list[ExperimentPlan]): Unused.
+            **runner_options: Ignored. Accepted so that this stays substitutable for the base method, whose
+                callers may pass options other runners take.
 
         Raises:
             NotImplementedError: Always. Unreachable in practice, generate_scaling_experiments asking the

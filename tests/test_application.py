@@ -65,6 +65,7 @@ class TestLogSpecResolve:
         spec = LogSpec("MOM5", log_at("access.out"), parser, component="ocean", optional=optional)
 
         log = spec.resolve(tmp_path)
+        assert log is not None
 
         assert log.filepath == tmp_path / "access.out"
         assert log.parser is parser

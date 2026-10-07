@@ -125,6 +125,18 @@ def test_generation_without_a_control_is_refused():
         manager.generate_scaling_experiments(num_nodes_list=[1.0], cores_per_node=4, walltime=2.0)
 
 
+def test_creating_experiments_without_a_control_is_refused():
+    """generate_scaling_experiments refuses it first, but the hook is reachable on its own.
+
+    `control` is a settable property, deliberately, so a manager can be pointed at a second control without
+    being rebuilt - which means the hook cannot assume the public entry point checked for it.
+    """
+    manager = PayuManager(Path("/fake/test_path"), Path("/fake/archive_path"), MockPayuConfiguration())
+
+    with pytest.raises(ValueError, match="without a control"):
+        manager._create_experiments([])
+
+
 @mock.patch("access.profiling.payu_manager.ExperimentGenerator")
 def test_generation_needs_the_control_to_state_a_start_point(mock_experiment_generator, manager):
     """The generator branches every experiment from a particular state of the control."""

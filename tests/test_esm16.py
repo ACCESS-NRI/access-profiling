@@ -13,6 +13,7 @@ from access.config.parallel_constraints import (
 )
 from access.config.parallel_domain import Domain, DomainDecompositionSpec
 from access.config.parallel_mpi_grid import MPICartesianGrid
+from conftest import decomposition_of, grid_of
 
 from access.profiling.cice5_parser import CICE5ProfilingParser
 from access.profiling.control import GitControlSource
@@ -94,7 +95,7 @@ def pi_control_layout(esm16):
     released = [
         layout
         for layout in layouts
-        if (layout.sub_layouts[0].decomposition.grid.shape, layout.sub_layouts[1].decomposition.grid.shape)
+        if (grid_of(layout.sub_layouts[0]), grid_of(layout.sub_layouts[1]))
         == (PI_CONTROL_UM7_GRID, PI_CONTROL_MOM5_GRID)
     ]
     assert len(released) == 1, "The layout search should find the released PI control layout exactly once."
@@ -223,9 +224,9 @@ def test_esm16_caller_supplied_allocations(esm16, total_cores):
         # Executables are only available for an exact number of CICE5 blocks per rank
         assert ESM16_CICE5_NX_GLOBAL % cice5.n_ranks == 0
         # The UM requires an even number of processes along x
-        assert um7.decomposition.grid.shape[0] % 2 == 0
+        assert grid_of(um7)[0] % 2 == 0
         # UM_NPES is written from n_ranks and must match the process grid, or the UM hangs at startup
-        atm_nx, atm_ny = um7.decomposition.grid.shape
+        atm_nx, atm_ny = grid_of(um7)
         assert um7.n_ranks == atm_nx * atm_ny
 
 
@@ -242,7 +243,7 @@ def test_esm16_component_tree_bounds_layouts_on_its_own(esm16):
     for layout in layouts:
         assert layout.idle_cores / layout.n_cores <= ESM16_MAX_WASTED_CORE_FRACTION
         for component in (layout.sub_layouts[0], layout.sub_layouts[1]):
-            local_shape = component.decomposition.mean_local_shape
+            local_shape = decomposition_of(component).mean_local_shape
             assert max(local_shape) / min(local_shape) <= ESM16_MAX_SUBDOMAIN_ASPECT_RATIO
         assert ESM16_CICE5_NX_GLOBAL % layout.sub_layouts[2].n_ranks == 0
 
@@ -441,7 +442,7 @@ class TestESM16AMIP:
         assert layouts
         for layout in layouts:
             (um7,) = layout.sub_layouts
-            assert um7.decomposition.grid.shape[0] % 2 == 0, "the UM still needs an even x"
+            assert grid_of(um7)[0] % 2 == 0, "the UM still needs an even x"
 
     def test_it_changes_the_one_submodel_it_has(self, amip):
         layout = _select(amip, 208, max_layouts=50)[0]
@@ -528,9 +529,7 @@ class TestESM16WithoutAnAtmosphere:
         """A layout of it, picked by the ocean grid so that what it comes to can be written out in full."""
 
         layouts = _select(ocean_ice, self.OCEAN_ICE_TOTAL_CORES, allocations=self.OCEAN_ICE_ALLOCATIONS)
-        picked = [
-            layout for layout in layouts if layout.sub_layouts[0].decomposition.grid.shape == PI_CONTROL_MOM5_GRID
-        ]
+        picked = [layout for layout in layouts if grid_of(layout.sub_layouts[0]) == PI_CONTROL_MOM5_GRID]
         assert len(picked) == 1, "The layout search should find the released ocean grid exactly once."
         return picked[0]
 
@@ -574,6 +573,7 @@ class TestESM16SeaIceThatDecomposesNothing:
     decomposition, and a rank count is what distinguishes the layouts in the first place.
     """
 
+    assert ESM16_PI_CONTROL.sea_ice is not None, "the released configuration has a sea ice"
     OPAQUE_CICE5 = dataclasses.replace(ESM16_PI_CONTROL.sea_ice, distribution_type="roundrobin")
     # Not a divisor of 360, so no sea ice that tiles the x extent could ever be given it. It is reachable only
     # because this one tiles nothing.
@@ -601,7 +601,7 @@ class TestESM16SeaIceThatDecomposesNothing:
         picked = [
             layout
             for layout in layouts
-            if (layout.sub_layouts[0].decomposition.grid.shape, layout.sub_layouts[1].decomposition.grid.shape)
+            if (grid_of(layout.sub_layouts[0]), grid_of(layout.sub_layouts[1]))
             == (PI_CONTROL_UM7_GRID, PI_CONTROL_MOM5_GRID)
         ]
         assert len(picked) == 1, "The layout search should find the released process grids exactly once."
@@ -627,3 +627,24 @@ class TestESM16SeaIceThatDecomposesNothing:
         changes = roundrobin.config_changes(roundrobin_layout)
 
         assert changes["ice/cice_in.nml"] == {"domain_nml": {"nprocs": "7", "nx_global": "360", "ny_global": "300"}}
+
+
+def test_esm16_config_changes_refuses_a_layout_that_states_no_decomposition(esm16, tmp_path):
+    """parse_layout states cores and not grids, so what it returns cannot be written straight back out.
+
+    config_changes used to reach through the missing decomposition and die on an AttributeError, although
+    its docstring promises a ValueError. The two are documented as inverses over the same files, so the
+    round trip is the obvious thing for a caller to try.
+    """
+    (tmp_path / "config.yaml").write_text(
+        "model: access\n"
+        "submodels:\n"
+        "  - name: atmosphere\n    ncpus: 256\n"
+        "  - name: ocean\n    ncpus: 240\n"
+        "  - name: ice\n    ncpus: 12\n"
+    )
+    parsed = esm16.parse_layout(tmp_path)
+    assert parsed is not None
+
+    with pytest.raises(ValueError, match="states no decomposition"):
+        esm16.config_changes(parsed)

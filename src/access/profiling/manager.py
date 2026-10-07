@@ -8,6 +8,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Generic, TypeVar
 
 import xarray as xr
 from access.config.parallel_allocation_strategies import RootAllocation
@@ -28,6 +29,11 @@ from access.profiling.plotting_utils import plot_bar_metrics
 from access.profiling.scaling import plot_component_scaling, plot_scaling_metrics
 
 logger = logging.getLogger(__name__)
+
+# What a manager is profiling. A manager is written once per workflow engine, and each engine drives a
+# particular kind of application - Payu drives a PayuConfiguration, a Cylc Rose suite a
+# RoseSuiteConfiguration - so the engine knows the concrete type and should not have to rediscover it.
+AppT = TypeVar("AppT", bound=Application)
 
 _RUN_DIM_ERROR = (
     "Profiling data still has a 'run' dimension. Use select_best_run() to keep the best run of each experiment, "
@@ -147,7 +153,7 @@ def _component_names(layout: ComponentLayout) -> list[str]:
     return names
 
 
-class ProfilingManager(ABC):
+class ProfilingManager(ABC, Generic[AppT]):
     """Abstract base class to handle profiling data and workflows.
 
     This high-level class defines methods to parse different types of profiling data. Currently,
@@ -166,8 +172,8 @@ class ProfilingManager(ABC):
     Args:
         work_dir (Path): Working directory where profiling experiments will be generated and run.
         archive_dir (Path): Directory where completed experiments will be archived.
-        application (Application): The application being profiled, which says how it is parallelised, what
-            it writes and how a layout is realised in its own input files.
+        application (AppT): The application being profiled, which says how it is parallelised, what it
+            writes and how a layout is realised in its own input files.
         control (ControlSource | None): Where the control every experiment perturbs comes from.
             None (the default) is enough to read and plot experiments that already exist, and is rejected by
             generate_scaling_experiments, which has nothing to perturb without it.
@@ -184,7 +190,7 @@ class ProfilingManager(ABC):
         self,
         work_dir: Path,
         archive_dir: Path,
-        application: Application,
+        application: AppT,
         control: ControlSource | None = None,
     ):
         super().__init__()
@@ -228,11 +234,11 @@ class ProfilingManager(ABC):
         return summary
 
     @property
-    def application(self) -> Application:
+    def application(self) -> AppT:
         """Returns the application being profiled.
 
         Returns:
-            Application: The application.
+            AppT: The application, as the concrete type this manager's runner drives.
         """
         return self._application
 

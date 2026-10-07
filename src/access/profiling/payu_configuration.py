@@ -12,7 +12,6 @@ experiment runner, and so for Payu itself; an application only describes what is
 not have to import a job-submission stack to do it.
 """
 
-from abc import abstractmethod
 from pathlib import Path
 
 from access.config import YAMLParser
@@ -42,13 +41,11 @@ def payu_model_stdout() -> LogLocator:
 
 
 class PayuConfiguration(Application):
-    """Abstract base class for a configuration of a model driven by Payu."""
+    """Abstract base class for a configuration of a model driven by Payu.
 
-    @property
-    @abstractmethod
-    def model_type(self) -> str:
-        """Returns the model type identifier, as Payu defines it.
+    Attributes:
+        model_type (str): The model type identifier, as Payu defines it, e.g. "access-esm1.6". Declared as
+            an attribute for the same reason as Application's own two.
+    """
 
-        Returns:
-            str: The identifier, e.g. "access-esm1.6".
-        """
+    model_type: str

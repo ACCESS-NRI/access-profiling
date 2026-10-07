@@ -19,7 +19,7 @@ input nobody can give it.
 """
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 
@@ -60,18 +60,12 @@ class ControlSource(ABC):
             str: The origin.
         """
 
-    @property
-    @abstractmethod
-    def start_point(self) -> str | None:
-        """Returns the revision of the control to start the experiments from.
-
-        None means the control is taken as it stands, which is what an already checked-out directory of
-        unknown revision amounts to. A runner that has to start branches from somewhere needs a value here
-        and should say so rather than guess one.
-
-        Returns:
-            str | None: A tag, branch, commit or revision, or None if the control states none.
-        """
+    # The revision of the control to start the experiments from: a tag, a branch, a commit or a revision.
+    # None means the control is taken as it stands, which is what an already checked-out directory of
+    # unknown revision amounts to; a runner that has to start branches from somewhere needs a value here and
+    # should say so rather than guess one. Declared as an attribute rather than an abstract property so that
+    # a subclass can satisfy it with a plain dataclass field.
+    start_point: str | None
 
     @abstractmethod
     def provenance(self) -> dict[str, str]:
@@ -104,10 +98,11 @@ class GitControlSource(ControlSource):
     """
 
     repository: str
-    # Defaulted only so that this satisfies the abstract start_point of the base class: a dataclass field
-    # with no default leaves nothing in the class namespace, and the member would stay abstract. Omitting it
-    # is still refused, by __post_init__ below.
-    start_point: str = ""
+    # Narrower than the str | None the base class declares, because a git control always has one: omitting
+    # it is refused by __post_init__ below. Narrowing a mutable attribute is unsound in general, since a
+    # writer holding the base type could assign None through it, but this class is frozen so there is no
+    # such writer.
+    start_point: str = ""  # pyright: ignore[reportIncompatibleVariableOverride]
     _directory: str = "config"
     _label: str | None = None
 
@@ -160,6 +155,10 @@ class ExistingDirectoryControlSource(ControlSource):
     path: Path
     _label: str | None = None
     revision: str | None = None
+    # Derived from revision rather than taken from the caller: for a directory that is already checked out,
+    # the revision it holds is the only thing a runner could start from. Kept as a field rather than a
+    # property so that it declares the same kind of member as the base class.
+    start_point: str | None = field(init=False, default=None)
 
     def __post_init__(self) -> None:
         if not self.path.is_absolute():
@@ -168,6 +167,7 @@ class ExistingDirectoryControlSource(ControlSource):
                 "found again from wherever a study runs, so a relative path would name different directories "
                 "at different times."
             )
+        object.__setattr__(self, "start_point", self.revision)
 
     @property
     def directory(self) -> str:
@@ -180,10 +180,6 @@ class ExistingDirectoryControlSource(ControlSource):
     @property
     def origin(self) -> str:
         return str(self.path)
-
-    @property
-    def start_point(self) -> str | None:
-        return self.revision
 
     def provenance(self) -> dict[str, str]:
         record = {"path": str(self.path)}

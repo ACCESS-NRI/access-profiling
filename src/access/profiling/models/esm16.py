@@ -114,11 +114,8 @@ class ESM16Configuration(PayuConfiguration):
             grid is not two-dimensional, or if the submodels name a component the configuration does not run.
     """
 
-    # These three are dataclass fields rather than properties because that is all it takes to satisfy the
-    # abstract properties of the base class: a field with a default leaves a value in the class namespace, and
-    # a plain value is not a data descriptor, so each instance reads back its own. A field with no default
-    # would leave the member abstract and the class uninstantiable, which is why name is defaulted and then
-    # checked below rather than simply required.
+    # name is defaulted because every field after it is, not because it is optional: __post_init__ refuses
+    # an empty one.
     name: str = ""
     atmosphere: Domain | None = None
     ocean: Domain | None = None
@@ -297,14 +294,16 @@ class ESM16Configuration(PayuConfiguration):
                 directory.
 
         Raises:
-            ValueError: If the layout is not a layout of this configuration.
+            ValueError: If the layout is not a layout of this configuration, or if a component that writes
+                a process grid carries no decomposition - which is what a layout read back from a
+                configuration looks like, since those state cores and not grids.
         """
         layouts = self._component_layouts(layout)
         changes: dict = {"config.yaml": {"submodels": [self._submodel_changes(layouts)]}}
 
         atmosphere = layouts.get(ESM16_UM7_NAME)
         if atmosphere is not None:
-            nx, ny = atmosphere.decomposition.grid
+            nx, ny = _process_grid(ESM16_UM7_NAME, atmosphere)
             changes["atmosphere/um_env.yaml"] = {
                 "UM_ATM_NPROCX": str(nx),
                 "UM_ATM_NPROCY": str(ny),
@@ -313,11 +312,13 @@ class ESM16Configuration(PayuConfiguration):
 
         ocean = layouts.get(ESM16_MOM5_NAME)
         if ocean is not None:
-            nx, ny = ocean.decomposition.grid
+            nx, ny = _process_grid(ESM16_MOM5_NAME, ocean)
             changes["ocean/input.nml"] = {"ocean_model_nml": {"layout": [f"{nx},{ny}"]}}
 
-        sea_ice = layouts.get(ESM16_CICE5_NAME)
-        if sea_ice is not None:
+        # The configuration decides whether there is a sea ice at all, and _component_layouts takes the keys
+        # of `layouts` from the same field, so narrowing the partitioning narrows the layout with it.
+        if self.sea_ice is not None:
+            sea_ice = layouts[ESM16_CICE5_NAME]
             changes[self.sea_ice.namelist_path] = {
                 self.sea_ice.namelist_group: self.sea_ice.namelist_changes(sea_ice.n_ranks, sea_ice.decomposition)
             }
@@ -342,7 +343,7 @@ class ESM16Configuration(PayuConfiguration):
             if sub_layout is None:
                 slots.append(_PRESERVE)
                 continue
-            slot = {"ncpus": sub_layout.n_cores}
+            slot: dict = {"ncpus": sub_layout.n_cores}
             if component == ESM16_CICE5_NAME and self.sea_ice_executable is not None:
                 slot["exe"] = [self.sea_ice_executable]
             slots.append(slot)
@@ -401,6 +402,34 @@ class ESM16Configuration(PayuConfiguration):
             decomposition=None,
             sub_layouts=tuple(sub_layouts),
         )
+
+
+def _process_grid(component: str, sub_layout: ComponentLayout) -> tuple[int, int]:
+    """Returns the process grid a component was given, refusing a layout that states none.
+
+    Only a layout the search produced carries a decomposition. One read back from a configuration states
+    what each component was given and not how it divided its domain, so it cannot be written out again -
+    see Application.parse_layout. Saying so here keeps config_changes raising the ValueError its docstring
+    promises rather than an AttributeError from deep inside it.
+
+    Args:
+        component (str): The component, for the error message.
+        sub_layout (ComponentLayout): What that component was given.
+
+    Returns:
+        tuple[int, int]: The two extents of its process grid.
+
+    Raises:
+        ValueError: If the layout states no decomposition for this component.
+    """
+    if sub_layout.decomposition is None:
+        raise ValueError(
+            f"The layout of {component!r} states no decomposition, so there is no process grid to write "
+            "into its configuration files. Only a layout the search produced carries one; a layout read "
+            "back from a configuration does not."
+        )
+    nx, ny = sub_layout.decomposition.grid
+    return nx, ny
 
 
 # The one ACCESS-ESM1.6 configuration this package ships. The other released configurations - historical,

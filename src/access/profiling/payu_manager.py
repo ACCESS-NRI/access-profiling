@@ -10,7 +10,6 @@ from access.config import YAMLParser
 from experiment_generator.experiment_generator import ExperimentGenerator
 from experiment_runner.experiment_runner import ExperimentRunner
 
-from access.profiling.control import ControlSource
 from access.profiling.experiment import ExperimentPlan, ProfilingLog
 from access.profiling.manager import ProfilingExperiment, ProfilingExperimentStatus, ProfilingManager
 from access.profiling.payu_configuration import PayuConfiguration
@@ -44,7 +43,7 @@ def _walltime_string(hours: float) -> str:
     return f"{hours_part}:{minutes:02d}:{seconds:02d}"
 
 
-class PayuManager(ProfilingManager):
+class PayuManager(ProfilingManager[PayuConfiguration]):
     """Profiling of any ACCESS model driven by Payu.
 
     One class for every Payu model: what is being profiled arrives as a PayuConfiguration, so ACCESS-ESM1.6
@@ -62,15 +61,6 @@ class PayuManager(ProfilingManager):
 
     _nruns: int = 1  # Number of repetitions for the Payu experiments.
     _startfrom_restart: str = "cold"  # Restart option for the Payu experiments.
-
-    def __init__(
-        self,
-        work_dir: Path,
-        archive_dir: Path,
-        application: PayuConfiguration,
-        control: ControlSource | None = None,
-    ):
-        super().__init__(work_dir, archive_dir, application, control)
 
     @property
     def _repository_directory(self) -> str:
@@ -154,7 +144,7 @@ class PayuManager(ProfilingManager):
         return pert_config
 
     def _create_experiments(
-        self, plans: list[ExperimentPlan], control_options: dict | None = None
+        self, plans: list[ExperimentPlan], control_options: dict | None = None, **runner_options
     ) -> dict[str, ProfilingExperiment]:
         """Creates the planned experiments as branches of a Payu control clone.
 
@@ -167,25 +157,37 @@ class PayuManager(ProfilingManager):
             plans (list[ExperimentPlan]): The experiments to create.
             control_options (dict | None): Options of the control experiment, passed to the experiment
                 generator. None (the default) passes none.
+            **runner_options: Ignored. Accepted so that this stays substitutable for the base method, whose
+                callers may pass options other runners take.
 
         Returns:
             dict[str, ProfilingExperiment]: The experiments new to this manager, keyed by branch name.
 
         Raises:
-            ValueError: If the control states no start point, which the generator needs to branch from.
+            ValueError: If this manager has no control, or if the control states no start point, which the
+                generator needs to branch from.
             Exception: Whatever the experiment generator raises, unchanged.
         """
-        if self.control.start_point is None:
+        # Bound once, and checked before anything is read off it. generate_scaling_experiments refuses a
+        # missing control before it ever gets here, but this hook is callable on its own and `control` is a
+        # settable property, so the check belongs where the attribute is actually used.
+        control = self.control
+        if control is None:
             raise ValueError(
-                f"The control {self.control.label!r} states no start point. The Payu experiment generator "
+                "Cannot create experiments without a control: every experiment is a branch of one, so there "
+                "is nothing to clone. Pass a ControlSource to this manager."
+            )
+        if control.start_point is None:
+            raise ValueError(
+                f"The control {control.label!r} states no start point. The Payu experiment generator "
                 "clones the control and branches every experiment from a particular state of it, so it has "
                 "to be told which: give the control a tag, a branch, a commit or a revision."
             )
 
         generator_config = {
             "model_type": self.application.model_type,
-            "repository_url": self.control.origin,
-            "start_point": self.control.start_point,
+            "repository_url": control.origin,
+            "start_point": control.start_point,
             "test_path": str(self.work_dir),
             "repository_directory": self._repository_directory,
             "control_branch_name": "ctrl",

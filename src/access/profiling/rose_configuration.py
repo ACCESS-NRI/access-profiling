@@ -42,11 +42,8 @@ class RoseSuiteConfiguration(Application):
         ValueError: If no name or no layout variable is given.
     """
 
-    # These three are dataclass fields rather than properties because that is all it takes to satisfy the
-    # abstract properties of the base class: a field with a default leaves a value in the class namespace, and
-    # a plain value is not a data descriptor, so each instance reads back its own. A field with no default
-    # would leave the member abstract and the class uninstantiable, which is why name is defaulted and then
-    # checked below rather than simply required.
+    # name is defaulted because every field after it is, not because it is optional: __post_init__ refuses
+    # an empty one.
     name: str = ""
     layout_variable: str | tuple[str, str] = ""
     parsers: Mapping[str, ProfilingParser] = field(default_factory=dict)

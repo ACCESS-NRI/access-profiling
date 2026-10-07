@@ -97,31 +97,22 @@ class Application(ABC):
     An application states which components it runs, over which domains, and what its own input files have to
     say for a given layout. It is deliberately not a subclass of anything that runs experiments - the same
     application can be profiled by any manager whose runner drives it.
+
+    Attributes:
+        name (str): A short name for this setup, distinguishing it from others of the same application. It
+            appears in the name of every experiment generated for it, which is how two setups sharing a
+            domain and a component set stay apart on disk.
+        experiment_prefix (str): The prefix every experiment of this application is named with. Shared by
+            every setup of one application, so that a working directory holding several applications can
+            tell which experiments are whose.
+
+    These two are declared as attributes rather than abstract properties so that a subclass can satisfy them
+    with a plain dataclass field, which is what every one of them does. The cost is that nothing refuses a
+    subclass that forgets one until something reads it.
     """
 
-    @property
-    @abstractmethod
-    def name(self) -> str:
-        """Returns a short name for this setup, distinguishing it from others of the same application.
-
-        It appears in the name of every experiment generated for it, which is how two setups sharing a domain
-        and a component set stay apart on disk.
-
-        Returns:
-            str: The name.
-        """
-
-    @property
-    @abstractmethod
-    def experiment_prefix(self) -> str:
-        """Returns the prefix every experiment of this application is named with.
-
-        Shared by every setup of one application, so that a working directory holding several applications
-        can tell which experiments are whose.
-
-        Returns:
-            str: The prefix.
-        """
+    name: str
+    experiment_prefix: str
 
     @property
     @abstractmethod
