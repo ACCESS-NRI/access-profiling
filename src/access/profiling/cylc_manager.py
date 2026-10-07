@@ -33,7 +33,7 @@ class CylcRoseManager(ProfilingManager):
     Args:
         work_dir (Path): Working directory where profiling experiments will be generated and run.
         archive_dir (Path): Directory where completed experiments will be archived.
-        configuration (RoseSuiteConfiguration): The suite configuration being profiled.
+        application (RoseSuiteConfiguration): The suite being profiled.
         control (ControlSource | None): Where the control suite comes from. Recorded rather than acted on:
             unlike the Payu side, nothing here clones or checks out, so the suite is expected to be in the
             working directory already - `rosie checkout` or `git clone` having been run in a terminal, where

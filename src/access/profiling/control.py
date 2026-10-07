@@ -1,22 +1,21 @@
 # Copyright 2025 ACCESS-NRI and contributors. See the top-level COPYRIGHT file for details.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Where a profiling study's control configuration comes from.
+"""Where a profiling study's control comes from.
 
-A study perturbs a control: one configuration of one model, from which every experiment is derived. Which
-control that is belongs neither to the model being profiled nor to the engine running it. The same
-ACCESS-ESM1.6 configuration can be profiled from the released tag, from a fork, or from a directory already on
-disk, and none of those change what the model is or how it is run.
+A study perturbs a control: one setup of one application, from which every experiment is derived. Which
+control that is belongs neither to the application being profiled nor to the engine running it. The same
+setup can be profiled from a released tag, from a fork, or from a directory already on disk, and none of
+those change what the application is or how it is run.
 
 So a control is its own thing, and the axis it varies on is how it is *retrieved* rather than which runner
-uses it. ACCESS-AM3 is driven by Cylc and takes its control from git, exactly as the Payu-driven models do,
-while ACCESS-rAM3 is driven by the same runner and takes its control from a directory checked out beforehand.
-Both runners accept both sources.
+uses it. Two studies of the same application may take their controls from different places, and one runner
+may drive both; retrieval and runner vary independently, so every runner accepts every source here.
 
-A control source records coordinates; it does not fetch anything. For Payu the fetching is the experiment
-generator's, which clones the repository itself, and for Cylc the directory is expected to exist already. That
-keeps credentials - ssh keys, MOSRS passphrases - outside this package, where a prompt cannot hang a notebook
-kernel waiting for input nobody can give it.
+A control source records coordinates; it does not fetch anything. Some runners fetch for themselves, and
+others expect the directory to be there already. Keeping the fetch out of this package keeps credentials -
+ssh keys, repository passphrases - out of it too, where a prompt cannot hang a notebook kernel waiting for
+input nobody can give it.
 """
 
 from abc import ABC, abstractmethod
@@ -54,8 +53,8 @@ class ControlSource(ABC):
         """Returns where the control is obtained from.
 
         A repository URL or a path on disk, depending on how the control is retrieved. A runner that fetches
-        the control itself - the Payu experiment generator does - is given this; one that expects it to be
-        there already ignores it and keeps it only as provenance.
+        the control itself is given this; one that expects it to be there already ignores it and keeps it
+        only as provenance.
 
         Returns:
             str: The origin.
@@ -86,19 +85,19 @@ class ControlSource(ABC):
 
 @dataclass(frozen=True)
 class GitControlSource(ControlSource):
-    """A control configuration held in a git repository.
+    """A control held in a git repository.
 
-    This is what every released ACCESS configuration uses, whichever runner drives it: the configurations of
-    ACCESS-ESM1.6, ACCESS-OM3 and ACCESS-AM3 are all git repositories whose releases are tags.
+    This is what a published setup normally uses, whichever runner drives it: its releases are tags, and a
+    study names the tag it was run against.
 
     Args:
         repository (str): Repository URL, or the path of one on disk.
-        start_point (str): What to start the experiments from: a tag, a branch or a commit. Released
-            configurations are tagged, so this is usually a tag.
+        start_point (str): What to start the experiments from: a tag, a branch or a commit. Published setups
+            are tagged, so this is usually a tag.
         directory (str): Name the clone takes under the working directory. Defaults to "config", which is
-            what Payu-driven studies use.
+            the name studies in this package conventionally use.
         label (str | None): Short identifier for this control. Defaults to the start point, which for a
-            released configuration is the release.
+            published setup is the release.
 
     Raises:
         ValueError: If the repository or the start point is empty.
@@ -139,12 +138,12 @@ class GitControlSource(ControlSource):
 
 @dataclass(frozen=True)
 class ExistingDirectoryControlSource(ControlSource):
-    """A control configuration already checked out on disk.
+    """A control already checked out on disk.
 
-    The control is wherever the caller put it, and this package does not put it there. ACCESS-rAM3 works this
-    way today: `rosie checkout` runs in a terminal, after `mosrs-auth`, and the suite is on disk before any
-    manager is built. The revision is recorded rather than acted on, so that a study can still say which
-    control it used.
+    The control is wherever the caller put it, and this package does not put it there. That is what a
+    credential-protected repository needs: the checkout runs in a terminal, where whatever it asks for can be
+    answered, and the directory is on disk before any manager is built. The revision is recorded rather than
+    acted on, so that a study can still say which control it used.
 
     Args:
         path (Path): The control directory, which must already exist when a study runs.

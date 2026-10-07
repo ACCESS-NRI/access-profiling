@@ -40,16 +40,15 @@ class RegionGroup:
     """Regions of one profiling log, to be read against the cores one component was given.
 
     A log and a component are not the same thing, which is why both are said here. One log can hold the
-    regions of several components - the ACCESS-OM3 ESMF summary is the whole model in one file, and its
-    mediator, atmosphere, runoff and waves appear nowhere else - and one component can be spread over
-    several logs, as the ACCESS-ESM1.6 atmosphere is over the two the UM file is read into, and as the
-    ACCESS-OM3 sea ice is over its own log and the ESMF summary. So a group names the log its regions come
-    from and, where it is not the obvious one, the component whose cores they are to be read against.
+    regions of several components - a coupled framework often writes one summary covering the whole run,
+    and some components appear nowhere else - and one component can be spread over several logs, either
+    because its single file is read by two parsers or because it also appears in such a summary. So a group
+    names the log its regions come from and, where it is not the obvious one, the component whose cores
+    they are to be read against.
 
-    Which component a region belongs to cannot be worked out from its name. A bracketed realm like
-    "[OCN] RunPhase1" says one thing, but "[OCN-TO-MED] RunPhase1" is a coupler between two and looks the
-    same; "cice_run_total" says nothing at all; and the call stack that would settle it is not kept. Hence
-    this.
+    Which component a region belongs to cannot be worked out from its name. A name prefixed with one
+    component says one thing, but a name prefixed with a pair of them is a coupler between two and looks the
+    same; many names say nothing at all; and the call stack that would settle it is not kept. Hence this.
 
     Args:
         log (str): Name of the profiling log the regions come from, as the configuration's LogSpec names it.
@@ -71,9 +70,9 @@ class RegionGroup:
 def find_component(layout: ComponentLayout, name: str) -> ComponentLayout | None:
     """Returns the part of a layout belonging to the named component, wherever it sits in it.
 
-    A component is looked for at any depth, since a tree groups its components as the model runs them
-    rather than as a reader asks about them: the ACCESS-OM3 sea ice, for one, sits under the range it
-    shares with the mediator and the atmosphere rather than beside the ocean.
+    A component is looked for at any depth, since a tree groups its components as the application runs them
+    rather than as a reader asks about them: a component that takes its turn on a range of cores shared with
+    others sits under that range, not beside the components running concurrently with it.
 
     Args:
         layout (ComponentLayout): Layout to look in, itself included.
@@ -155,21 +154,21 @@ class ProfilingManager(ABC):
     it supports parsing and plotting scaling data, including selecting the best performing experiment
     for each number of CPUs.
 
-    A manager is the workflow engine, and nothing about any one model: what is being profiled arrives as a
-    Application and what it is being profiled against as a ControlSource. So a subclass is written once
-    per engine rather than once per model, and a new model or a new configuration of one is data rather than
-    code.
+    A manager is the workflow engine, and nothing about any one application: what is being profiled arrives
+    as an Application and what it is profiled against as a ControlSource. So a subclass is written once
+    per engine rather than once per application, and a new application, or a new setup of one, is data rather
+    than code.
 
     Which of the two answers a question is decided by what wrote the thing being read: the manager reads what
     the engine and the scheduler wrote - the logs, the job records, the CPU count the scheduler charged for -
-    and the configuration reads what the model's own configuration files say.
+    and the application reads what its own input files say.
 
     Args:
         work_dir (Path): Working directory where profiling experiments will be generated and run.
         archive_dir (Path): Directory where completed experiments will be archived.
-        configuration (Application): The model configuration being profiled, which says how the model
-            is parallelised, what it writes and how a layout is realised in its configuration files.
-        control (ControlSource | None): Where the control configuration every experiment perturbs comes from.
+        application (Application): The application being profiled, which says how it is parallelised, what
+            it writes and how a layout is realised in its own input files.
+        control (ControlSource | None): Where the control every experiment perturbs comes from.
             None (the default) is enough to read and plot experiments that already exist, and is rejected by
             generate_scaling_experiments, which has nothing to perturb without it.
     """
@@ -276,7 +275,8 @@ class ProfilingManager(ABC):
         """Parses the number of CPUs a given experiment occupied.
 
         This is what the experiment cost, not what it put to work: schedulers hand out whole compute nodes, so
-        a run that gives its components 402 cores on 104 core nodes still occupies, and is charged for, all 416.
+        a run that gives its components 402 cores on 104 core nodes still occupies, and is charged for, all
+        416.
         Two layouts that fill the same nodes are the same size for the purposes of a scaling study, however
         differently they divide the cores among the components.
 
@@ -573,7 +573,7 @@ class ProfilingManager(ABC):
         """Creates the planned experiments with this manager's workflow engine.
 
         Called once with everything generate_scaling_experiments decided to create, so that an engine which
-        sets up many experiments in one invocation - the Payu experiment generator does - is invoked once.
+        sets up many experiments in one invocation is invoked once.
         Raising abandons the whole call and registers nothing.
 
         Args:
@@ -1151,20 +1151,20 @@ class ProfilingManager(ABC):
 
         Where plot_scaling_data reads every component against the whole job, this reads each against its
         own cores. That is the question to ask of a component whose share of the budget is what changed:
-        an ocean given half again as many cores either ran faster for it or did not, and the total the job
-        occupied says nothing about which.
+        a component given half again as many cores either ran faster for it or did not, and the total the
+        job occupied says nothing about which.
 
         Each group names the log its regions come from and the component they belong to, because the two
         are not the same: one log can hold several components' regions and one component can be spread over
         several logs. See RegionGroup.
 
-        The regions of a group are plotted as their own lines rather than added together, since the timers
-        most of these models write are inclusive - a region and the region it sits inside both count the
-        same seconds, and adding them would count them twice.
+        The regions of a group are plotted as their own lines rather than added together, since timers are
+        usually inclusive - a region and the region it sits inside both count the same seconds, and adding
+        them would count them twice.
 
-        Note that a region can be a wait rather than work, and will scale backwards if it is. MOM5's
-        oasis_recv and the ACCESS-OM3 couplers go up as their component is given more cores, because it
-        finishes its own work sooner and waits longer on the components that have not.
+        Note that a region can be a wait rather than work, and will scale backwards if it is. A region that
+        receives from a coupled peer goes up as its own component is given more cores, because it finishes
+        its own work sooner and waits longer on the components that have not.
 
         A study readily measures one component twice on the same number of cores, since a layout giving it
         a certain share says nothing about the size of the job around it. Where it has, the fastest of
@@ -1194,8 +1194,9 @@ class ProfilingManager(ABC):
                 data, if no profiling data is found for a group's log, if a requested region is missing, if
                 the profiling data still has a 'run' dimension, or if an experiment's layout cannot be told
                 or names no such component.
-            NotImplementedError: If this manager's configurations have no layout to read, as Cylc Rose ones
-                do not. There is nothing for this plot to put on its x-axis in that case.
+            NotImplementedError: If the application being profiled states no layout, so that what each
+                component was given cannot be told. There is nothing for this plot to put on its x-axis
+                in that case.
         """
         exp_names = experiments if experiments is not None else list(self.data.keys())
         if not exp_names:

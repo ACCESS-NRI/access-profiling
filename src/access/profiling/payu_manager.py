@@ -55,8 +55,8 @@ class PayuManager(ProfilingManager):
     Args:
         work_dir (Path): Working directory where profiling experiments will be generated and run.
         archive_dir (Path): Directory where completed experiments will be archived.
-        configuration (PayuConfiguration): The model configuration being profiled.
-        control (ControlSource | None): Where the control configuration every experiment perturbs comes from.
+        application (PayuConfiguration): The application being profiled.
+        control (ControlSource | None): Where the control every experiment perturbs comes from.
             None (the default) is enough to read and plot experiments that already exist.
     """
 

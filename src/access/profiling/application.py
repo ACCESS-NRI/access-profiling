@@ -3,23 +3,25 @@
 
 """What is being profiled, as opposed to what runs it.
 
-A profiling study varies along two axes that are not the same kind of thing. How a model is *run* - where the
-engine puts its output, what the scheduler recorded, how a job is submitted - is behaviour, and it belongs to a
-manager. What is being run - which components exist, on which grids, which files state the parallelism, which
-logs to read - is data, and it belongs here.
+A profiling study varies along two axes that are not the same kind of thing. How an application is *run* -
+where the engine puts its output, what the scheduler recorded, how a job is submitted - is behaviour, and it
+belongs to a manager. What is being run - which components exist, over which domains, which files state the
+parallelism, which logs to read - is data, and it belongs here.
 
 The rule that places a member is which side of that line it reads from:
 
     The manager reads what the engine and the scheduler wrote.
-    The configuration reads what the model's own configuration files say.
+    The application reads what its own input files say.
 
-So finding `archive/output000` is the manager's, because the engine chose that name, while reading
-`nuopc.runconfig` is the configuration's, because the model chose what that file means. The pair that writes a
-layout into the model's files and reads one back out of them therefore lives here, together: they are inverses
-over the same text, and keeping them apart is how they drift.
+So finding an engine's output directory is the manager's, because the engine chose that name, while reading
+the file that states how the work is divided is the application's, because the application chose what that
+file means. The pair that writes a layout into those files and reads one back out of them therefore lives
+here, together: they are inverses over the same text, and keeping them apart is how they drift.
 
-A model is a *value* of this type, not a subclass of a manager. Two configurations of one model differ in data,
-and a new model is a new module of data rather than a new class in the hierarchy.
+Nothing here knows which engine runs the application, and nothing here names a particular application. An
+application is a *value* of this type, not a subclass of a manager: two setups of one application differ in
+data, and a new application is a new module of data rather than a new class in the hierarchy. Anything that
+has to know what a particular runner or code writes belongs in a module named for it.
 """
 
 from abc import ABC, abstractmethod
@@ -90,20 +92,20 @@ class LogSpec:
 
 
 class Application(ABC):
-    """Abstract base class for one configuration of one ACCESS model.
+    """Abstract base class for one application, set up one particular way.
 
-    A configuration is a model set up a particular way: which components it runs, on which grids, and what its
-    own configuration files have to say for a given layout. It is deliberately not a subclass of anything that
-    runs experiments - the same configuration can be profiled by any manager whose runner drives it.
+    An application states which components it runs, over which domains, and what its own input files have to
+    say for a given layout. It is deliberately not a subclass of anything that runs experiments - the same
+    application can be profiled by any manager whose runner drives it.
     """
 
     @property
     @abstractmethod
     def name(self) -> str:
-        """Returns a short name for this configuration, distinguishing it from others of the same model.
+        """Returns a short name for this setup, distinguishing it from others of the same application.
 
-        It appears in the name of every experiment generated for it, which is how two configurations sharing a
-        grid and a component set stay apart on disk.
+        It appears in the name of every experiment generated for it, which is how two setups sharing a domain
+        and a component set stay apart on disk.
 
         Returns:
             str: The name.
@@ -112,10 +114,10 @@ class Application(ABC):
     @property
     @abstractmethod
     def experiment_prefix(self) -> str:
-        """Returns the prefix every experiment of this configuration's model is named with.
+        """Returns the prefix every experiment of this application is named with.
 
-        Shared by every configuration of one model, so that a working directory holding several models can
-        tell which experiments are whose.
+        Shared by every setup of one application, so that a working directory holding several applications
+        can tell which experiments are whose.
 
         Returns:
             str: The prefix.
@@ -124,22 +126,22 @@ class Application(ABC):
     @property
     @abstractmethod
     def parallel_component(self) -> ParallelComponent:
-        """Returns the component tree describing how this configuration is parallelised.
+        """Returns the component tree describing how this application is parallelised.
 
         Returns:
-            ParallelComponent: Root of the tree, holding the domains and the requirements every valid layout of
-                this configuration must satisfy. What a particular study wants belongs in the allocation
+            ParallelComponent: Root of the tree, holding the domains and the requirements every valid layout
+                of this application must satisfy. What a particular study wants belongs in the allocation
                 strategy passed to the layout search instead.
         """
 
     @property
     @abstractmethod
     def logs(self) -> tuple[LogSpec, ...]:
-        """Returns the profiling logs this configuration's components write.
+        """Returns the profiling logs this application's components write.
 
         Returns:
-            tuple[LogSpec, ...]: One entry per log. A configuration without a component writes none of its
-                logs, so this follows the components rather than the model.
+            tuple[LogSpec, ...]: One entry per log. An application without a component writes none of its
+                logs, so this follows the components rather than the application as a whole.
         """
 
     @abstractmethod
