@@ -21,8 +21,8 @@ from access.profiling.fms_parser import FMSProfilingParser
 from access.profiling.models.esm16 import (
     ESM16_1DEG_OCEAN,
     ESM16_AMIP_SUBMODELS,
+    ESM16_CICE5,
     ESM16_CICE5_NAME,
-    ESM16_CICE5_NX_GLOBAL,
     ESM16_MAX_SUBDOMAIN_ASPECT_RATIO,
     ESM16_MAX_WASTED_CORE_FRACTION,
     ESM16_MOM5_NAME,
@@ -184,9 +184,9 @@ def _esm16_scaling_allocations(atm_ocn_tolerance: float = 0.05, ice_tolerance: f
     count of a scaling study - which is the whole reason the layout search understands fractions.
 
     CICE5 gets a wider band than the other two. Each of its ranks takes one block spanning the full y extent, so
-    the core counts it admits are the divisors of ESM16_CICE5_NX_GLOBAL, and they thin out as the count grows: a
-    +/-5% band around its proportional share is [142, 158] at 5200 cores, which contains no divisor of 360 at all,
-    and no layout would be found.
+    the core counts it admits are the divisors of the CICE5 grid's x extent, and they thin out as the count
+    grows: a +/-5% band around its proportional share is [142, 158] at 5200 cores, which contains no divisor
+    of 360 at all, and no layout would be found.
     """
     pi_control_cores = sum(ESM16_PI_CONTROL_CORES.values())
 
@@ -222,7 +222,7 @@ def test_esm16_caller_supplied_allocations(esm16, total_cores):
     for layout in layouts:
         um7, _, cice5 = layout.sub_layouts
         # Executables are only available for an exact number of CICE5 blocks per rank
-        assert ESM16_CICE5_NX_GLOBAL % cice5.n_ranks == 0
+        assert ESM16_CICE5.grid[0] % cice5.n_ranks == 0
         # The UM requires an even number of processes along x
         assert grid_of(um7)[0] % 2 == 0
         # UM_NPES is written from n_ranks and must match the process grid, or the UM hangs at startup
@@ -245,7 +245,7 @@ def test_esm16_component_tree_bounds_layouts_on_its_own(esm16):
         for component in (layout.sub_layouts[0], layout.sub_layouts[1]):
             local_shape = decomposition_of(component).mean_local_shape
             assert max(local_shape) / min(local_shape) <= ESM16_MAX_SUBDOMAIN_ASPECT_RATIO
-        assert ESM16_CICE5_NX_GLOBAL % layout.sub_layouts[2].n_ranks == 0
+        assert ESM16_CICE5.grid[0] % layout.sub_layouts[2].n_ranks == 0
 
 
 @mock.patch("access.profiling.payu_manager.ExperimentGenerator")
@@ -494,8 +494,8 @@ def test_a_configuration_refuses_submodels_for_components_it_does_not_run():
 def test_the_released_ocean_grid_is_the_sea_ice_grid(esm16):
     """CICE5 runs on the ocean's grid, which is what lets one number describe both."""
 
+    assert esm16.sea_ice is not None
     assert esm16.sea_ice.grid == ESM16_1DEG_OCEAN.shape
-    assert esm16.sea_ice.grid[0] == ESM16_CICE5_NX_GLOBAL
 
 
 class TestESM16WithoutAnAtmosphere:

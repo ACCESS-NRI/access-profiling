@@ -53,10 +53,6 @@ ESM16_CICE5: CICEPartitioning = CICEPartitioning(
     namelist_path="ice/cice_in.nml",
 )
 
-# Kept for callers that wrote them out before CICEPartitioning held them.
-ESM16_CICE5_NX_GLOBAL: int = ESM16_CICE5.grid[0]
-ESM16_CICE5_NY_GLOBAL: int = ESM16_CICE5.grid[1]
-
 # Cores each component receives in the released pre-industrial control configuration. These are not used to
 # build any layout, and are provided as the reference a caller writing an allocation strategy is usually
 # working from. Note that the other coupled releases run on the same counts, which is the whole difficulty.
