@@ -199,6 +199,21 @@ class CICEPartitioning:
         return _ceil_div(self.grid[0], self.block_shape[0])
 
     @property
+    def n_block_rows(self) -> int:
+        """Returns how many block rows cover the grid, where the control pins a block size.
+
+        CICE rounds up here too. Under a single-row processor shape every rank holds every one of them, so
+        this is what a rank's block columns are multiplied by to count its blocks.
+
+        Returns:
+            int: The number of block rows, or 1 where no block size is pinned, each block then spanning the
+                full y extent.
+        """
+        if self.block_shape is None:
+            return 1
+        return _ceil_div(self.grid[1], self.block_shape[1])
+
+    @property
     def domain(self) -> Domain | None:
         """Returns the domain this component carries into the component tree.
 
@@ -292,7 +307,7 @@ class CICEPartitioning:
             return
         if self.block_shape is None:
             return
-        n_blocks = self.n_block_columns * _ceil_div(self.grid[1], self.block_shape[1])
+        n_blocks = self.n_block_columns * self.n_block_rows
         if n_ranks > n_blocks:
             raise ValueError(
                 f"A CICE component on the {self.grid} grid with {self.block_shape} blocks has {n_blocks} of "
@@ -355,8 +370,9 @@ class CICEPartitioning:
             changes["block_size_y"] = str(self.grid[1])
             changes["max_blocks"] = "1"
         else:
-            # The control pinned the block size, so only how many of them a rank holds is left to say.
-            changes["max_blocks"] = str(self.n_block_columns // decomposition.grid[0])
+            # The control pinned the block size, so only how many of them a rank holds is left to say: its
+            # share of the block columns, each of them every block row deep, as there is one processor row.
+            changes["max_blocks"] = str(self.n_block_columns // decomposition.grid[0] * self.n_block_rows)
         return changes
 
 
