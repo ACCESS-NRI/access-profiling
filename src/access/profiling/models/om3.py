@@ -58,6 +58,10 @@ OM3_MAX_WASTED_CORE_FRACTION: float = 0.1
 OM3_MOM6_HALO_WIDTH: int = 4
 OM3_CICE6_GHOST_WIDTH: int = 1
 
+# How many blocks each CICE6 rank should hold, land blocks included. Several per rank is how CICE6 balances
+# its work, and the 25 km release holds about 7.5 of its 30 x 27 blocks on each of its 275 ranks.
+OM3_CICE6_BLOCKS_PER_RANK: tuple[int, int] = (5, 8)
+
 # The 25 km tripolar grid every ACCESS-OM3 configuration released so far runs every component on.
 OM3_25KM_GRID: Domain = Domain(shape=(1440, 1152))
 
@@ -66,17 +70,18 @@ OM3_25KM_GRID: Domain = Domain(shape=(1440, 1152))
 class OM3Configuration(PayuConfiguration):
     """One configuration of ACCESS-OM3: which components it runs, and the grid each one runs on.
 
-    Of those grids, only the ones a control directory states as a process grid reach the component tree and
-    are decomposed by the layout search, since a decomposition nothing reads is not one a search can be said
-    to have chosen. The sea ice's does where it is CICE6 *and* the scheme its ice_in configures forms a
-    process grid at all, which is what its CICEPartitioning says; a configuration running CDEPS's data sea ice
-    instead says so with data_sea_ice, and then it does not. The ocean's does only where the configuration
-    pins MOM6's LAYOUT: MOM6 otherwise works its own decomposition out from the ranks it is given, which is
-    what auto_ocean_layout says and what ACCESS-OM3 does. The mediator, the data components - the data sea ice
-    among them when there is one - and the waves are handed their meshes by ESMF, which decomposes them over
-    whatever ranks they are given, and state no process grid either. Every grid is recorded whether or not it
-    reaches the tree, because the configuration files state them, and because a grid is how this class says
-    which components a configuration runs.
+    Of those grids, only the ones a control directory states as a process grid reach the component tree and are
+    decomposed by the layout search, since a decomposition nothing reads is not one a search can be said to have
+    chosen. The sea ice's does where it is CICE6 *and* the scheme its ice_in configures forms a process grid at all,
+    which is what its CICEPartitioning says - and where that partitioning chooses the block size from the rank count
+    instead, nothing reaches the tree, though ice_in is still written; a configuration running CDEPS's data sea ice
+    instead says so with data_sea_ice, and then it does not. The ocean's does only where the configuration pins
+    MOM6's LAYOUT: MOM6 otherwise works its own decomposition out from the ranks it is given, which is what
+    auto_ocean_layout says and what ACCESS-OM3 does. The mediator, the data components - the data sea ice among them
+    when there is one - and the waves are handed their meshes by ESMF, which decomposes them over whatever ranks
+    they are given, and state no process grid either. Every grid is recorded whether or not it reaches the tree,
+    because the configuration files state them, and because a grid is how this class says which components a
+    configuration runs.
 
     Args:
         name (str): Identifies the configuration in the names of the experiments generated for it.
@@ -545,12 +550,14 @@ def _om3_leaf(name: str, n_cores: int, core_offset: int = 0) -> ComponentLayout:
 
 # CICE6 as the 25 km releases configure it: square-ice blocks distributed roundrobin. Neither forms a process
 # grid - roundrobin maps blocks to ranks without one, and square-ice is not a shape a one-dimensional domain
-# could express anyway - so the search chooses how many ranks the sea ice gets and nothing else, and nothing
-# is written into ice_in. That is the whole of what the release leaves open.
+# could express anyway - so the search chooses how many ranks the sea ice gets and nothing else. The block
+# size follows from that rank count, so that each rank keeps holding several blocks as the count changes,
+# and is written into ice_in with max_blocks left for CICE6 to work out.
 OM3_25KM_CICE6: CICEPartitioning = CICEPartitioning(
     grid=(OM3_25KM_GRID.shape[0], OM3_25KM_GRID.shape[1]),
     distribution_type="roundrobin",
     processor_shape="square-ice",
+    blocks_per_rank=OM3_CICE6_BLOCKS_PER_RANK,
     nghost=OM3_CICE6_GHOST_WIDTH,
 )
 
