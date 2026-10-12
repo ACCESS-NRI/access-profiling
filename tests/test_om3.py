@@ -17,7 +17,7 @@ from access.profiling.fms_parser import FMSProfilingParser
 from access.profiling.models.cice import CICEPartitioning
 from access.profiling.models.om3 import (
     OM3_ATMOSPHERE_NAME,
-    OM3_CICE6_BLOCKS_PER_RANK,
+    OM3_CICE6_BLOCKS_PER_RANK_RANGE,
     OM3_MC_25KM,
     OM3_MC_25KM_RELEASE_CORES,
     OM3_MEDIATOR_NAME,
@@ -480,14 +480,14 @@ def test_om3_writes_the_blocks_its_rank_count_calls_for(om3):
 
 
 def test_om3_searches_only_sea_ice_rank_counts_some_block_size_suits():
-    """A rank count no block size gives OM3_CICE6_BLOCKS_PER_RANK blocks each is never a layout at all.
+    """A rank count no block size gives OM3_CICE6_BLOCKS_PER_RANK_RANGE blocks each is never a layout at all.
 
     A cartesian distribution is where that bites: the blocks have to split evenly over the process grid CICE
     forms, and with one processor row 29 ranks would need 29 block columns or 29 block rows, which no block
     size on this grid gives.
     """
 
-    sea_ice = dataclasses.replace(OM3_100KM_CICE6, blocks_per_rank=OM3_CICE6_BLOCKS_PER_RANK)
+    sea_ice = dataclasses.replace(OM3_100KM_CICE6, blocks_per_rank_range=OM3_CICE6_BLOCKS_PER_RANK_RANGE)
     configuration = dataclasses.replace(OM3_MC_100KM, name="MC-100km-blocks", sea_ice=sea_ice)
     leaves = {sub.name: sub for sub in configuration.parallel_component.subcomponents[0].subcomponents}
     assert leaves[OM3_SEA_ICE_NAME].domain is None, "the search chooses a rank count and nothing else"

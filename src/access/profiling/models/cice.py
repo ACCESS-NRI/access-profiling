@@ -12,9 +12,9 @@ sets, and the modes below are what those come to.
 
 Except where the configuration asks for a number of blocks per rank instead. Several blocks per rank is how
 CICE6 is meant to be run - small blocks balance the work and keep the cache warm - and the block size that
-gives a rank count so many of them depends on that count. So a partitioning given `blocks_per_rank` chooses
-the block size itself, from the rank count the search chose and whatever scheme the control configures, and
-the search is left to choose that rank count alone.
+gives a rank count so many of them depends on that count. So a partitioning given `blocks_per_rank_range`
+chooses the block size itself, from the rank count the search chose and whatever scheme the control
+configures, and the search is left to choose that rank count alone.
 
 This matters because the domain, the constraints and the namelist writer have to agree, and until now they
 agreed only by hand: ACCESS-ESM1.6 hard-codes a one-dimensional domain on the grounds that the component is
@@ -107,8 +107,8 @@ class CICEPartitioning:
             roundrobin, which is what the ACCESS-OM3 25 km release runs, would otherwise be inexpressible.
         block_shape (tuple[int, int] | None): The block size the control pins, if it pins one. None (the
             default) leaves the block size to follow from the rank count.
-        blocks_per_rank (tuple[int, int] | None): The fewest and the most blocks each rank should hold, both
-            inclusive, counting land blocks too. Given, the block size is chosen from the rank count to fall
+        blocks_per_rank_range (tuple[int, int] | None): The fewest and the most blocks each rank should hold,
+            both inclusive, counting land blocks too. Given, the block size is chosen from the rank count to fall
             in this range, whatever the distribution, and the rank counts no block size can give so many
             blocks are refused. None (the default) leaves the blocks per rank to the other modes. Meant for
             CICE6, which works out max_blocks itself: that is what lets it be written as -1.
@@ -132,7 +132,7 @@ class CICEPartitioning:
     distribution_type: str = "cartesian"
     processor_shape: str = "slenderX1"
     block_shape: tuple[int, int] | None = None
-    blocks_per_rank: tuple[int, int] | None = None
+    blocks_per_rank_range: tuple[int, int] | None = None
     nghost: int = 1
     writes_nprocs: bool = False
     grid_is_runtime: bool = False
@@ -153,16 +153,19 @@ class CICEPartitioning:
                 raise ValueError(
                     f"CICEPartitioning.block_shape {self.block_shape} does not fit inside the grid {self.grid}."
                 )
-        if self.blocks_per_rank is not None:
-            if len(self.blocks_per_rank) != 2 or not 0 < self.blocks_per_rank[0] <= self.blocks_per_rank[1]:
+        if self.blocks_per_rank_range is not None:
+            if (
+                len(self.blocks_per_rank_range) != 2
+                or not 0 < self.blocks_per_rank_range[0] <= self.blocks_per_rank_range[1]
+            ):
                 raise ValueError(
-                    "CICEPartitioning.blocks_per_rank must be the fewest and the most blocks per rank, both "
-                    f"positive and in that order. Got {self.blocks_per_rank}."
+                    "CICEPartitioning.blocks_per_rank_range must be the fewest and the most blocks per rank, both "
+                    f"positive and in that order. Got {self.blocks_per_rank_range}."
                 )
             if self.block_shape is not None:
                 raise ValueError(
                     f"CICEPartitioning pins the block size {self.block_shape} and asks for "
-                    f"{self.blocks_per_rank} blocks per rank. A pinned size leaves how many blocks a rank holds "
+                    f"{self.blocks_per_rank_range} blocks per rank. A pinned size leaves how many blocks a rank holds "
                     "to the rank count, so the blocks cannot be chosen as well."
                 )
 
@@ -174,7 +177,7 @@ class CICEPartitioning:
             CICEPartitioningMode: The mode, as the distribution type, the processor shape, whether the
                 control pins a block size and whether blocks per rank are asked for decide it between them.
         """
-        if self.blocks_per_rank is not None:
+        if self.blocks_per_rank_range is not None:
             return CICEPartitioningMode.CHOSEN_BLOCKS
         if self.distribution_type not in _CARTESIAN_DISTRIBUTIONS or self.processor_shape != _SINGLE_ROW_SHAPE:
             return CICEPartitioningMode.OPAQUE
@@ -192,7 +195,7 @@ class CICEPartitioning:
         """
         if self.block_shape is None:
             return self.grid[0]
-        return -(-self.grid[0] // self.block_shape[0])
+        return _ceil_div(self.grid[0], self.block_shape[0])
 
     @property
     def domain(self) -> Domain | None:
@@ -245,7 +248,7 @@ class CICEPartitioning:
         """Returns the blocks this component is divided into for a given rank count, where it chooses them.
 
         Every block size covering the grid is a candidate, each count of blocks along an axis taken at the
-        smallest size that gives it. The ones giving each rank as many blocks as blocks_per_rank asks for are
+        smallest size that gives it. The ones giving each rank as many blocks as blocks_per_rank_range asks for are
         kept: under cartesian and rake, on the process grid CICE itself would form for them, and only where
         their blocks split evenly over it, since otherwise some rank holds fewer than its share or none at all;
         under every other scheme, which hands blocks out one at a time, by the average. Of those, the one
@@ -258,7 +261,7 @@ class CICEPartitioning:
             CICEBlocks | None: The blocks, or None where no block size gives that many ranks so many blocks
                 each, or where this partitioning does not choose its blocks at all.
         """
-        if self.blocks_per_rank is None or n_ranks <= 0:
+        if self.blocks_per_rank_range is None or n_ranks <= 0:
             return None
         return _choose_blocks(self, n_ranks)
 
@@ -282,13 +285,13 @@ class CICEPartitioning:
             if self.blocks(n_ranks) is None:
                 raise ValueError(
                     f"No block size gives the {n_ranks} ranks of a CICE component on the {self.grid} grid "
-                    f"{self.blocks_per_rank} blocks each under a {self.distribution_type} distribution with "
+                    f"{self.blocks_per_rank_range} blocks each under a {self.distribution_type} distribution with "
                     f"processor shape {self.processor_shape}."
                 )
             return
         if self.block_shape is None:
             return
-        n_blocks = self.n_block_columns * -(-self.grid[1] // self.block_shape[1])
+        n_blocks = self.n_block_columns * _ceil_div(self.grid[1], self.block_shape[1])
         if n_ranks > n_blocks:
             raise ValueError(
                 f"A CICE component on the {self.grid} grid with {self.block_shape} blocks has {n_blocks} of "
@@ -373,6 +376,11 @@ class CICEBlocksPerRankConstraint(LocalConstraint):
         return self.partitioning.blocks(layout.n_ranks) is not None
 
 
+def _ceil_div(numerator: int, denominator: int) -> int:
+    """Returns the quotient rounded up, as CICE counts the blocks covering an extent, in integers throughout."""
+    return -(-numerator // denominator)
+
+
 def _block_sizes(extent: int, min_size: int) -> dict[int, int]:
     """Returns every count of blocks that can cover an extent, with the smallest block size giving each.
 
@@ -385,8 +393,11 @@ def _block_sizes(extent: int, min_size: int) -> dict[int, int]:
     """
     sizes = {}
     for count in range(1, extent + 1):
-        size = -(-extent // count)
-        if size >= min_size and -(-extent // size) == count:
+        # The smallest size that covers the extent in this many blocks. It may cover it in fewer - 10 points
+        # in 6 blocks takes size 2, which is 5 blocks - and does exactly when the last of the blocks would be
+        # left empty, so that count is not one any block size gives.
+        size = _ceil_div(extent, count)
+        if size >= min_size and (count - 1) * size < extent:
             sizes[count] = size
     return sizes
 
@@ -456,8 +467,8 @@ def _cice_process_grid(n_ranks: int, n_blocks_x: int, n_blocks_y: int, processor
 def _choose_blocks(partitioning: CICEPartitioning, n_ranks: int) -> CICEBlocks | None:
     """Returns the blocks CICEPartitioning.blocks describes, memoised: a search asks once per candidate."""
 
-    assert partitioning.blocks_per_rank is not None
-    fewest, most = partitioning.blocks_per_rank
+    assert partitioning.blocks_per_rank_range is not None
+    fewest, most = partitioning.blocks_per_rank_range
     nx, ny = partitioning.grid
     min_size = max(1, partitioning.nghost)
     forms_grid = partitioning.distribution_type in _CARTESIAN_DISTRIBUTIONS
@@ -478,7 +489,7 @@ def _choose_blocks(partitioning: CICEPartitioning, n_ranks: int) -> CICEBlocks |
             else:
                 if not fewest * n_ranks <= n_blocks <= most * n_ranks:
                     continue
-                per_rank = -(-n_blocks // n_ranks)
+                per_rank = _ceil_div(n_blocks, n_ranks)  # the ranks holding one more than the rest
             key = (
                 n_blocks_x * size_x * n_blocks_y * size_y - nx * ny,
                 abs(math.log(size_x / size_y)),

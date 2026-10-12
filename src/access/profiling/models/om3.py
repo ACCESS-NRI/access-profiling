@@ -60,7 +60,7 @@ OM3_CICE6_GHOST_WIDTH: int = 1
 
 # How many blocks each CICE6 rank should hold, land blocks included. Several per rank is how CICE6 balances
 # its work, and the 25 km release holds about 7.5 of its 30 x 27 blocks on each of its 275 ranks.
-OM3_CICE6_BLOCKS_PER_RANK: tuple[int, int] = (5, 8)
+OM3_CICE6_BLOCKS_PER_RANK_RANGE: tuple[int, int] = (5, 8)
 
 # The 25 km tripolar grid every ACCESS-OM3 configuration released so far runs every component on.
 OM3_25KM_GRID: Domain = Domain(shape=(1440, 1152))
@@ -557,7 +557,7 @@ OM3_25KM_CICE6: CICEPartitioning = CICEPartitioning(
     grid=(OM3_25KM_GRID.shape[0], OM3_25KM_GRID.shape[1]),
     distribution_type="roundrobin",
     processor_shape="square-ice",
-    blocks_per_rank=OM3_CICE6_BLOCKS_PER_RANK,
+    blocks_per_rank_range=OM3_CICE6_BLOCKS_PER_RANK_RANGE,
     nghost=OM3_CICE6_GHOST_WIDTH,
 )
 

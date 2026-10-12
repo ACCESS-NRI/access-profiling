@@ -229,8 +229,12 @@ class TestCICEsOwnProcessGrid:
         ("n_ranks", "n_blocks", "processor_shape", "expected"),
         [
             (4, (8, 3), "slenderX1", (4, 1)),
-            (4, (3, 8), "slenderX1", (1, 4)),  # either way round, where only the other way divides
-            (4, (3, 3), "slenderX1", (4, 1)),  # nothing divides, so the first factorisation met
+            # The guess is 4 x 1, whose 4 ranks along x do not divide 3 block columns. Turned round, 1 x 4 does
+            # divide 3 x 8 blocks, so that is the grid CICE takes.
+            (4, (3, 8), "slenderX1", (1, 4)),
+            # Neither 4 x 1 nor 1 x 4 divides 3 x 3 blocks, and there is no other guess to step down to, so CICE
+            # settles for the first factorisation it met.
+            (4, (3, 3), "slenderX1", (4, 1)),
             (6, (6, 4), "slenderX2", (3, 2)),
             (12, (12, 12), "square-ice", (4, 3)),  # the guess is along y for square-ice ...
             (12, (12, 12), "square-pop", (3, 4)),  # ... and along x for square-pop
@@ -250,33 +254,52 @@ class TestBlocksChosenForTheRankCount:
 
     @pytest.mark.parametrize(
         ("distribution_type", "processor_shape"),
-        [("cartesian", "slenderX1"), ("rake", "slenderX2"), ("roundrobin", "square-ice"), ("spacecurve", "")],
+        [
+            ("cartesian", "slenderX1"),
+            ("rake", "slenderX2"),
+            ("roundrobin", "square-ice"),
+            ("sectrobin", "square-ice"),
+            ("spacecurve", ""),
+        ],
     )
     def test_asking_for_blocks_per_rank_leaves_only_the_rank_count(self, distribution_type, processor_shape):
         partitioning = CICEPartitioning(
-            grid=GRID, distribution_type=distribution_type, processor_shape=processor_shape, blocks_per_rank=(5, 8)
+            grid=GRID,
+            distribution_type=distribution_type,
+            processor_shape=processor_shape,
+            blocks_per_rank_range=(5, 8),
         )
 
         assert partitioning.mode is CICEPartitioningMode.CHOSEN_BLOCKS
         assert partitioning.domain is None
         assert partitioning.local_constraints == (CICEBlocksPerRankConstraint(partitioning=partitioning),)
 
-    def test_the_25km_release_grid_divides_into_square_blocks(self):
-        partitioning = CICEPartitioning(grid=(1440, 1152), distribution_type="roundrobin", blocks_per_rank=(5, 8))
+    @pytest.mark.parametrize("distribution_type", ["roundrobin", "sectrobin"])
+    def test_a_distribution_forming_no_process_grid_goes_by_the_average(self, distribution_type):
+        """1620 blocks over 275 ranks is 5.9 each on average, the ranks handed one more than the rest holding 6."""
+
+        partitioning = CICEPartitioning(
+            grid=(1440, 1152), distribution_type=distribution_type, blocks_per_rank_range=(5, 8)
+        )
 
         assert partitioning.blocks(275) == CICEBlocks(block_shape=(32, 32), block_counts=(45, 36), blocks_per_rank=6)
 
     def test_a_grid_no_block_size_tiles_is_padded_as_little_as_can_be(self):
-        """101 is prime, so 10 to 16 blocks cover it only if the last column is narrower than the rest."""
+        """Two ranks holding 5 to 8 blocks each need 10 to 16 blocks between them.
 
-        partitioning = CICEPartitioning(grid=(101, 7), distribution_type="roundrobin", blocks_per_rank=(5, 8))
+        Both 101 and 7 are prime, so the block sizes that tile the 101 x 7 grid exactly give 1, 7, 101 or 707
+        blocks and nothing in between. Some block column has to be padded, and the least padding is two columns
+        51 points wide, the second of them one point short.
+        """
+
+        partitioning = CICEPartitioning(grid=(101, 7), distribution_type="roundrobin", blocks_per_rank_range=(5, 8))
 
         assert partitioning.blocks(2) == CICEBlocks(block_shape=(51, 1), block_counts=(2, 7), blocks_per_rank=7)
 
     @pytest.mark.parametrize("processor_shape", ["slenderX1", "slenderX2", "square-ice", "square-pop"])
     @pytest.mark.parametrize("n_ranks", [1, 6, 12, 24, 60])
     def test_cartesian_blocks_split_evenly_over_the_grid_cice_forms(self, processor_shape, n_ranks):
-        partitioning = CICEPartitioning(grid=GRID, processor_shape=processor_shape, blocks_per_rank=(5, 8))
+        partitioning = CICEPartitioning(grid=GRID, processor_shape=processor_shape, blocks_per_rank_range=(5, 8))
 
         blocks = partitioning.blocks(n_ranks)
         assert blocks is not None
@@ -291,7 +314,7 @@ class TestBlocksChosenForTheRankCount:
 
     def test_blocks_are_never_thinner_than_their_ghost_cells(self):
         partitioning = CICEPartitioning(
-            grid=(12, 12), distribution_type="roundrobin", blocks_per_rank=(1, 144), nghost=4
+            grid=(12, 12), distribution_type="roundrobin", blocks_per_rank_range=(1, 144), nghost=4
         )
 
         blocks = partitioning.blocks(1)
@@ -301,7 +324,7 @@ class TestBlocksChosenForTheRankCount:
     def test_a_rank_count_no_block_size_suits(self):
         """With one processor row, 29 ranks need 29 block columns or 29 block rows, which this grid never has."""
 
-        partitioning = CICEPartitioning(grid=GRID, blocks_per_rank=(5, 8))
+        partitioning = CICEPartitioning(grid=GRID, blocks_per_rank_range=(5, 8))
 
         assert partitioning.blocks(29) is None
         assert not CICEBlocksPerRankConstraint(partitioning=partitioning).is_satisfied(_ice_layout(29))
@@ -311,23 +334,27 @@ class TestBlocksChosenForTheRankCount:
         partitioning.check(12)
 
     def test_more_ranks_than_could_each_hold_enough_blocks(self):
-        roundrobin = CICEPartitioning(grid=GRID, distribution_type="roundrobin", blocks_per_rank=(5, 8))
+        roundrobin = CICEPartitioning(grid=GRID, distribution_type="roundrobin", blocks_per_rank_range=(5, 8))
 
         assert roundrobin.blocks(360 * 300 // 5) is not None, "every block one point wide"
         assert roundrobin.blocks(360 * 300 // 5 + 1) is None
 
     def test_nothing_is_chosen_where_nothing_was_asked_for(self):
         assert CICEPartitioning(grid=GRID).blocks(12) is None
-        assert CICEPartitioning(grid=GRID, blocks_per_rank=(5, 8)).blocks(0) is None
+        assert CICEPartitioning(grid=GRID, blocks_per_rank_range=(5, 8)).blocks(0) is None
 
     def test_the_chosen_blocks_are_written_and_max_blocks_left_to_cice6(self):
-        partitioning = CICEPartitioning(grid=GRID, blocks_per_rank=(5, 8))
+        partitioning = CICEPartitioning(grid=GRID, blocks_per_rank_range=(5, 8))
 
         assert partitioning.namelist_changes(12) == {"block_size_x": "30", "block_size_y": "50", "max_blocks": "-1"}
 
     def test_the_rank_count_and_the_grid_are_written_with_them_where_they_are_stated(self):
         partitioning = CICEPartitioning(
-            grid=GRID, distribution_type="roundrobin", blocks_per_rank=(5, 8), writes_nprocs=True, grid_is_runtime=True
+            grid=GRID,
+            distribution_type="roundrobin",
+            blocks_per_rank_range=(5, 8),
+            writes_nprocs=True,
+            grid_is_runtime=True,
         )
 
         changes = partitioning.namelist_changes(12)
@@ -341,15 +368,15 @@ class TestBlocksChosenForTheRankCount:
 
     def test_a_rank_count_no_block_size_suits_is_never_written(self):
         with pytest.raises(ValueError, match="No block size gives the 29 ranks"):
-            CICEPartitioning(grid=GRID, blocks_per_rank=(5, 8)).namelist_changes(29)
+            CICEPartitioning(grid=GRID, blocks_per_rank_range=(5, 8)).namelist_changes(29)
 
     @pytest.mark.parametrize(
         ("kwargs", "match"),
         [
-            ({"blocks_per_rank": (0, 8)}, "both positive and in that order"),
-            ({"blocks_per_rank": (8, 5)}, "both positive and in that order"),
-            ({"blocks_per_rank": (5,)}, "both positive and in that order"),
-            ({"blocks_per_rank": (5, 8), "block_shape": (30, 300)}, "cannot be chosen as well"),
+            ({"blocks_per_rank_range": (0, 8)}, "both positive and in that order"),
+            ({"blocks_per_rank_range": (8, 5)}, "both positive and in that order"),
+            ({"blocks_per_rank_range": (5,)}, "both positive and in that order"),
+            ({"blocks_per_rank_range": (5, 8), "block_shape": (30, 300)}, "cannot be chosen as well"),
         ],
     )
     def test_blocks_per_rank_that_describe_nothing(self, kwargs, match):
