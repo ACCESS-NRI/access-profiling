@@ -164,9 +164,9 @@ class CICEPartitioning:
                 )
             if self.block_shape is not None:
                 raise ValueError(
-                    f"CICEPartitioning pins the block size {self.block_shape} and asks for "
-                    f"{self.blocks_per_rank_range} blocks per rank. A pinned size leaves how many blocks a rank holds "
-                    "to the rank count, so the blocks cannot be chosen as well."
+                    f"CICEPartitioning pins the block size {self.block_shape} and asks for a range of "
+                    f"{self.blocks_per_rank_range} blocks per rank. A pinned size leaves how many blocks a rank "
+                    "holds to the rank count, so the blocks cannot be chosen as well."
                 )
 
     @property
@@ -175,7 +175,8 @@ class CICEPartitioning:
 
         Returns:
             CICEPartitioningMode: The mode, as the distribution type, the processor shape, whether the
-                control pins a block size and whether blocks per rank are asked for decide it between them.
+                control pins a block size, and whether a range of blocks per rank is asked for, decide it
+                between them.
         """
         if self.blocks_per_rank_range is not None:
             return CICEPartitioningMode.CHOSEN_BLOCKS
