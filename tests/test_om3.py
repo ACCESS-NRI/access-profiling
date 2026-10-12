@@ -17,6 +17,7 @@ from access.profiling.fms_parser import FMSProfilingParser
 from access.profiling.models.cice import CICEPartitioning
 from access.profiling.models.om3 import (
     OM3_ATMOSPHERE_NAME,
+    OM3_CICE6_BLOCKS_PER_RANK_RANGE,
     OM3_MC_25KM,
     OM3_MC_25KM_RELEASE_CORES,
     OM3_MEDIATOR_NAME,
@@ -461,18 +462,43 @@ def test_om3_writes_the_chosen_decomposition():
     assert changes["ice_in"] == {"domain_nml": {"block_size_x": "15", "block_size_y": "324", "max_blocks": "1"}}
 
 
-def test_om3_writes_nothing_for_a_sea_ice_that_decomposes_itself(om3):
-    """The released configuration distributes square-ice blocks roundrobin, so there is nothing to write.
+def test_om3_writes_the_blocks_its_rank_count_calls_for(om3):
+    """The released configuration distributes square-ice blocks roundrobin, so there is no process grid to write.
 
-    A process grid chosen here would mean nothing to a scheme that never forms one, and a block size derived
-    from it would change how the sea ice is divided on no evidence at all. The search picks its rank count,
-    which is the thing a scaling study is after, and leaves ice_in alone.
+    The search picks the sea ice's rank count, which is the thing a scaling study is after, and the block size
+    follows from it, so that each rank holds several blocks whatever that count is.
     """
 
     layout = _om3_layout(om3, 2704, OM3_MC_25KM_RELEASE_CORES)
 
-    assert "ice_in" not in om3.config_changes(layout)
-    assert _pelayout(om3, layout)["ice_ntasks"] == 275, "though it still receives the cores it was given"
+    # 45 x 36 blocks of 32 x 32 tile the 1440 x 1152 grid exactly, 1620 of them over 275 ranks.
+    assert om3.config_changes(layout)["ice_in"] == {
+        "domain_nml": {"block_size_x": "32", "block_size_y": "32", "max_blocks": "-1"}
+    }
+    assert _pelayout(om3, layout)["ice_ntasks"] == 275
+    assert OM3_SEA_ICE_NAME not in _om3_grids(layout), "and the search chose no process grid for it"
+
+
+def test_om3_searches_only_sea_ice_rank_counts_some_block_size_suits():
+    """A rank count no block size gives OM3_CICE6_BLOCKS_PER_RANK_RANGE blocks each is never a layout at all.
+
+    A cartesian distribution is where that bites: the blocks have to split evenly over the process grid CICE
+    forms, and with one processor row 29 ranks would need 29 block columns or 29 block rows, which no block
+    size on this grid gives.
+    """
+
+    sea_ice = dataclasses.replace(OM3_100KM_CICE6, blocks_per_rank_range=OM3_CICE6_BLOCKS_PER_RANK_RANGE)
+    configuration = dataclasses.replace(OM3_MC_100KM, name="MC-100km-blocks", sea_ice=sea_ice)
+    leaves = {sub.name: sub for sub in configuration.parallel_component.subcomponents[0].subcomponents}
+    assert leaves[OM3_SEA_ICE_NAME].domain is None, "the search chooses a rank count and nothing else"
+
+    assert not _select(configuration, 240, allocations=_om3_pinned(cpl=29, atm=29, ice=29, rof=29, ocn=211))
+
+    (layout,) = _select(configuration, 240, allocations=_om3_pinned(cpl=24, atm=24, ice=24, rof=24, ocn=216))
+    domain_nml = configuration.config_changes(layout)["ice_in"]["domain_nml"]
+    n_blocks = (360 // int(domain_nml["block_size_x"])) * (324 // int(domain_nml["block_size_y"]))
+    assert 5 * 24 <= n_blocks <= 8 * 24
+    assert domain_nml["max_blocks"] == "-1"
 
 
 def test_om3_blocks_tile_the_grid_wherever_the_search_chooses_them():
