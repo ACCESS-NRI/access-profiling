@@ -51,6 +51,11 @@ class TestTheModeFollowsFromTheNamelist:
 
         assert CICEPartitioning(grid=GRID, block_shape=(50, 300)).n_block_columns == 8
 
+    def test_block_rows_are_counted_the_same_way(self):
+        assert CICEPartitioning(grid=GRID, block_shape=(30, 300)).n_block_rows == 1
+        assert CICEPartitioning(grid=GRID, block_shape=(30, 140)).n_block_rows == 3
+        assert CICEPartitioning(grid=GRID).n_block_rows == 1, "each block spans the full y extent"
+
     @pytest.mark.parametrize(
         ("distribution_type", "processor_shape"),
         [
@@ -153,6 +158,13 @@ class TestWhatIsWritten:
         partitioning = CICEPartitioning(grid=GRID, block_shape=(30, 300))
 
         assert partitioning.namelist_changes(4, _decomposition(4, extent=12)) == {"max_blocks": "3"}
+
+    def test_pinned_blocks_count_every_block_row_a_rank_holds(self):
+        """With one processor row, a rank holds each of its block columns all the way down the grid."""
+
+        partitioning = CICEPartitioning(grid=GRID, block_shape=(90, 150))  # 4 x 2 blocks
+
+        assert partitioning.namelist_changes(2, _decomposition(2, extent=4)) == {"max_blocks": "4"}
 
     def test_an_opaque_sea_ice_writes_nothing_but_its_rank_count(self):
         """And not even that, where the configuration does not state one."""
