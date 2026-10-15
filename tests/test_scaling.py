@@ -251,9 +251,9 @@ def component_scaling_data():
     so by bending, which is what the axis is laid out to show.
     """
     stats = []
-    for component, cores, regions, seconds in [
-        ("MOM6", [60, 120, 240], ["MOM6: Ocean dynamics", "MOM6: Ocean"], lambda n: 600.0 * 60 / n),
-        ("CICE6", [30, 60, 120], ["CICE6: Total"], lambda n: 100.0 * (30 / n) ** 0.5),
+    for cores, regions, seconds in [
+        ([60, 120, 240], ["MOM6: Ocean dynamics", "MOM6: Ocean"], lambda n: 600.0 * 60 / n),
+        ([30, 60, 120], ["CICE6: Total"], lambda n: 100.0 * (30 / n) ** 0.5),
     ]:
         datasets = [
             xr.Dataset(
@@ -266,7 +266,7 @@ def component_scaling_data():
             )
             for n in cores
         ]
-        stats.append((component, xr.concat(datasets, dim="ncpus")))
+        stats.append(xr.concat(datasets, dim="ncpus"))
     return stats
 
 
@@ -341,8 +341,8 @@ class TestPlotComponentScaling:
     def test_one_log_read_twice_keeps_both(self, component_scaling_data):
         """A log holding two components' regions is read once per component, and neither is dropped."""
 
-        (mom6, ocean), _ = component_scaling_data
-        repeated = [(mom6, ocean), (mom6, ocean.isel(region=[0]))]
+        ocean, _ = component_scaling_data
+        repeated = [ocean, ocean.isel(region=[0])]
 
         fig = plot_component_scaling(repeated, tavg, show=False)
 
@@ -402,7 +402,7 @@ class TestIdealScaling:
             coords={"region": ["Only"], "ncpus": [48]},
         )
 
-        fig = plot_component_scaling([("log", dataset)], tavg, show=False)
+        fig = plot_component_scaling([dataset], tavg, show=False)
 
         (ideal,) = _ideals(fig)
         assert list(ideal.get_xdata()) == [48]
@@ -503,7 +503,7 @@ def _one_group(cores: list[int]):
         )
         for n in cores
     ]
-    return [("log", xr.concat(datasets, dim="ncpus"))]
+    return [xr.concat(datasets, dim="ncpus")]
 
 
 class TestTheAxesHoldThePoints:

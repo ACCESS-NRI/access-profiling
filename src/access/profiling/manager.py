@@ -5,8 +5,7 @@ import itertools
 import logging
 import textwrap
 from abc import ABC, abstractmethod
-from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from collections.abc import Callable
 from pathlib import Path
 from typing import Generic, TypeVar
 
@@ -25,7 +24,7 @@ from access.profiling.experiment import (
     ProfilingLog,
 )
 from access.profiling.metrics import ProfilingMetric
-from access.profiling.plotting_utils import plot_bar_metrics
+from access.profiling.plotting_utils import RegionGroup, plot_bar_metrics
 from access.profiling.scaling import plot_component_scaling, plot_scaling_metrics
 
 logger = logging.getLogger(__name__)
@@ -39,38 +38,6 @@ _RUN_DIM_ERROR = (
     "Profiling data still has a 'run' dimension. Use select_best_run() to keep the best run of each experiment, "
     "or aggregate_runs() to reduce over runs."
 )
-
-
-@dataclass(frozen=True)
-class RegionGroup:
-    """Regions of one profiling log, to be read against the cores one component was given.
-
-    A log and a component are not the same thing, which is why both are said here. One log can hold the
-    regions of several components - a coupled framework often writes one summary covering the whole run,
-    and some components appear nowhere else - and one component can be spread over several logs, either
-    because its single file is read by two parsers or because it also appears in such a summary. So a group
-    names the log its regions come from and, where it is not the obvious one, the component whose cores
-    they are to be read against.
-
-    Which component a region belongs to cannot be worked out from its name. A name prefixed with one
-    component says one thing, but a name prefixed with a pair of them is a coupler between two and looks the
-    same; many names say nothing at all; and the call stack that would settle it is not kept. Hence this.
-
-    Args:
-        log (str): Name of the profiling log the regions come from, as the configuration's LogSpec names it.
-        regions (Sequence[str]): Regions of that log to plot, each of which becomes a line.
-        component (str | None): Component whose cores these regions are read against, named as the layout
-            names it. None (the default) takes the component the manager associates with this log, and
-            failing that the log's own name - which is enough for a log that is one component's alone.
-    """
-
-    log: str
-    regions: Sequence[str] = ()
-    component: str | None = None
-
-    def __post_init__(self) -> None:
-        # Kept as a tuple, so that a group given a list is still the frozen thing it claims to be.
-        object.__setattr__(self, "regions", tuple(self.regions))
 
 
 def find_component(layout: ComponentLayout, name: str) -> ComponentLayout | None:
@@ -124,26 +91,6 @@ def _note_shared_core_counts(component: str, cores: dict[str, int]) -> None:
             )
 
 
-def _region_label(log: str, region: str, region_relabel_map: dict | None) -> str:
-    """Returns the label a region is to be plotted under.
-
-    A region is named after the log it came from, since region names are only made unique within one log
-    and two components may each have a "Total". A caller who relabels one has said what they want it
-    called, though, so that name is left to stand on its own.
-
-    Args:
-        log (str): Name of the log the region came from.
-        region (str): Name of the region.
-        region_relabel_map (dict | None): Optional mapping from region name to the label to plot it under.
-
-    Returns:
-        str: The label.
-    """
-    if region_relabel_map is not None and region in region_relabel_map:
-        return region_relabel_map[region]
-    return f"{log}: {region}"
-
-
 def _component_names(layout: ComponentLayout) -> list[str]:
     """Returns the name of every component in a layout, itself included, for saying what it does hold."""
 
@@ -182,9 +129,7 @@ class ProfilingManager(ABC, Generic[AppT]):
     work_dir: Path  # Working directory where profiling experiments will be generated and run.
     archive_dir: Path  # Directory where completed experiments will be archived.
     experiments: dict[str, ProfilingExperiment]  # Dictionary storing ProfilingExperiment instances.
-    data: dict[
-        str, dict[str, xr.Dataset]
-    ]  # Dictionary mapping experiments to component names and their profiling datasets.
+    data: dict[str, dict[str, xr.Dataset]]  # Dictionary mapping experiments to log names and their profiling datasets.
 
     def __init__(
         self,
@@ -849,7 +794,7 @@ class ProfilingManager(ABC, Generic[AppT]):
 
     def select_best_experiments(
         self,
-        component: str,
+        log: str,
         region: str,
         metric: ProfilingMetric,
         experiments: list[str] | None = None,
@@ -860,7 +805,7 @@ class ProfilingManager(ABC, Generic[AppT]):
         domain decomposition layouts of the same total core count. Plotting all of them produces duplicated ncpus
         coordinates and meaningless speedup and efficiency curves. This method keeps a single experiment per CPU
         count: the one with the smallest value of the given metric, measured on the given region of the given
-        component. Smaller is always better.
+        log. Smaller is always better.
 
         Experiments are grouped by the number of CPUs they occupied, which is what parse_ncpus reports, so two
         layouts that fill the same compute nodes compete with each other even when they hand different numbers of
@@ -871,7 +816,7 @@ class ProfilingManager(ABC, Generic[AppT]):
         is logged.
 
         Args:
-            component (str): Name of the component holding the region used to rank experiments.
+            log (str): Name of the profiling log holding the region used to rank experiments.
             region (str): Name of the region used to rank experiments.
             metric (ProfilingMetric): Metric used to rank experiments. The smallest value wins.
             experiments (list[str] | None): Optional list of experiment names to select from. If None, all
@@ -882,7 +827,7 @@ class ProfilingManager(ABC, Generic[AppT]):
                 number of CPUs.
 
         Raises:
-            KeyError: If an experiment has no parsed profiling data, or if the component, region or metric is not
+            KeyError: If an experiment has no parsed profiling data, or if the log, region or metric is not
                 available in one of them.
             ValueError: If the profiling data still has a 'run' dimension.
         """
@@ -890,7 +835,7 @@ class ProfilingManager(ABC, Generic[AppT]):
 
         best: dict[int, tuple[str, float]] = {}
         for exp_name in exp_names:
-            ds = self.data[exp_name][component]
+            ds = self.data[exp_name][log]
             if "run" in ds.dims:
                 raise ValueError(_RUN_DIM_ERROR)
             value = float(ds[metric].sel(region=region).pint.dequantify().values)
@@ -901,13 +846,13 @@ class ProfilingManager(ABC, Generic[AppT]):
             elif value == incumbent[1]:
                 logger.warning(
                     f"Experiments '{incumbent[0]}' and '{exp_name}' have the same {metric} ({value} "
-                    f"{metric.units}) for region '{region}' of component '{component}' at {ncpus} CPUs. "
+                    f"{metric.units}) for region '{region}' of log '{log}' at {ncpus} CPUs. "
                     f"Keeping '{incumbent[0]}'."
                 )
 
         return [name for _, (name, _) in sorted(best.items())]
 
-    def select_best_run(self, component: str, region: str, metric: ProfilingMetric) -> None:
+    def select_best_run(self, log: str, region: str, metric: ProfilingMetric) -> None:
         """Keeps only the best performing run of each experiment, discarding the others.
 
         Configurations that can be run several times produce profiling data with a 'run' dimension. This method
@@ -922,7 +867,7 @@ class ProfilingManager(ABC, Generic[AppT]):
         is destructive: call parse_profiling_data() again to recover the individual runs.
 
         Args:
-            component (str): Name of the component holding the region used to rank runs.
+            log (str): Name of the profiling log holding the region used to rank runs.
             region (str): Name of the region used to rank runs.
             metric (ProfilingMetric): Metric used to rank runs. The smallest value wins.
 
@@ -930,15 +875,15 @@ class ProfilingManager(ABC, Generic[AppT]):
             KeyError: If the component, region or metric is not available in one of the experiments, or if the
                 chosen run is missing from one of the components of that experiment.
         """
-        for exp_name, components in self.data.items():
-            ranking = components[component]
+        for exp_name, logs in self.data.items():
+            ranking = logs[log]
             if "run" not in ranking.dims:
                 continue
             values = ranking[metric].sel(region=region).pint.dequantify()
             run = int(values.run.values[int(values.argmin("run"))])
             logger.info(f"Keeping run {run} of experiment '{exp_name}'.")
             self.data[exp_name] = {
-                name: ds.sel(run=run, drop=True) if "run" in ds.dims else ds for name, ds in components.items()
+                name: ds.sel(run=run, drop=True) if "run" in ds.dims else ds for name, ds in logs.items()
             }
 
     def aggregate_runs(self, how: str = "min") -> None:
@@ -970,48 +915,38 @@ class ProfilingManager(ABC, Generic[AppT]):
 
     def plot_scaling_data(
         self,
-        components: list[str],
-        regions: list[list[str]],
+        groups: list[RegionGroup],
         metric: ProfilingMetric,
-        region_relabel_map: dict | None = None,
         experiments: list[str] | None = None,
         xlabel: str | None = None,
+        show: bool = True,
     ) -> Figure:
-        """Plots scaling data for the specified components, regions and metric.
+        """Plots speedup and efficiency of the given regions against the cores the whole job occupied.
+
+        This is what a scaling study costs: every region is read against what the scheduler charged for,
+        whatever share of it the region's own component was given. Each group's `component` is therefore
+        ignored here; plot_component_scaling_data is the one that reads it.
 
         Args:
-            components (list[str]): List of component names to plot.
-            regions (list[list[str]]): List of regions to plot for each component.
+            groups (list[RegionGroup]): Regions to plot, and the logs they come from. Each region becomes
+                one line, labelled as its group says.
             metric (ProfilingMetric): Metric to use for the scaling plots.
-            region_relabel_map (dict | None): Optional mapping to relabel regions in the plots.
-            experiments (list[str] | None): Optional list of experiment names to include. If None, all experiments
-                with parsed profiling data are included.
+            experiments (list[str] | None): Optional list of experiment names to include. If None, all
+                experiments with parsed profiling data are included.
             xlabel (str | None): Optional custom label for the x-axis of both subplots. If None, the
                 default label derived from the x-coordinate is kept.
+            show (bool): Whether to show the generated plot. Default: True.
 
         Returns:
             Figure: The Matplotlib figure containing the scaling plots.
 
         Raises:
-            ValueError: If no experiments are selected, if a selected experiment has no parsed profiling data, if no
-                profiling data is found for a specified component, if a requested region is missing, if the
-                profiling data still has a 'run' dimension, or if several of the selected experiments use the same
-                number of CPUs.
+            ValueError: If no experiments are selected, if a selected experiment has no parsed profiling
+                data, if no profiling data is found for a group's log, if a requested region is missing, if
+                the profiling data still has a 'run' dimension, or if several of the selected experiments
+                use the same number of CPUs.
         """
-
-        exp_names = experiments if experiments is not None else list(self.data.keys())
-        if not exp_names:
-            raise ValueError("No experiments selected for scaling plot.")
-
-        missing_experiments = [exp_name for exp_name in exp_names if exp_name not in self.data]
-        if missing_experiments:
-            raise ValueError(
-                f"No parsed profiling data found for experiment(s): {missing_experiments}. "
-                f"Available experiments: {list(self.data.keys())}."
-            )
-
-        if any("run" in ds.dims for exp_name in exp_names for ds in self.data[exp_name].values()):
-            raise ValueError(_RUN_DIM_ERROR)
+        exp_names = self._selected_experiments(experiments)
 
         # Find number of cpus used for each experiment
         ncpus = {exp_name: self._ncpus(exp_name) for exp_name in exp_names}
@@ -1028,44 +963,22 @@ class ProfilingManager(ABC, Generic[AppT]):
                 "experiment for each number of CPUs, or restrict the selection with experiments=[...]."
             )
 
-        # Gather scaling data for each component
         scaling_data = []
-        for component, component_regions in zip(components, regions, strict=True):
-            component_data = []
-            for exp_name in exp_names:
-                ds = self.data[exp_name].get(component)
-                if ds is None:
-                    raise ValueError(f"No profiling data found for component '{component}' in experiment '{exp_name}'.")
+        for group in groups:
+            selected = self._group_data(group, exp_names)
+            group_data = [ds.expand_dims({"ncpus": [ncpus[exp_name]]}) for exp_name, ds in selected.items()]
+            scaling_data.append(xr.concat(group_data, dim="ncpus", join="outer").sortby("ncpus"))
 
-                available_regions = ds.coords["region"].values.tolist()
-                missing_regions = [region for region in component_regions if region not in available_regions]
-                if missing_regions:
-                    raise ValueError(
-                        f"Requested region(s) {missing_regions} not found for component '{component}' "
-                        f"in experiment '{exp_name}'. Available regions: {available_regions}."
-                    )
-
-                # Select only the desired regions
-                ds = ds.sel(region=component_regions)
-
-                # Relabel regions if a relabel map is provided
-                if region_relabel_map is not None:
-                    ds = ds.assign_coords(region=[region_relabel_map.get(n, n) for n in ds.region.values])
-
-                # Add ncpus dimension
-                component_data.append(ds.expand_dims({"ncpus": [ncpus[exp_name]]}))
-
-            # Concatenate data along ncpus dimension
-            scaling_data.append(xr.concat(component_data, dim="ncpus", join="outer").sortby("ncpus"))
-
-        return plot_scaling_metrics(scaling_data, metric, xlabel=xlabel)
+        return plot_scaling_metrics(scaling_data, metric, xlabel=xlabel, show=show)
 
     def _component_cores(self, exp_name: str, component: str) -> int:
         """Returns the cores an experiment gave one of its components.
 
+        The one method here that genuinely takes a component: everything else that names data takes a log.
+
         Args:
             exp_name (str): Name of the experiment.
-            component (str): Name of the component, as the layout names it.
+            component (str): Name of the component, as the layout names it - never a log name.
 
         Returns:
             int: Number of cores that component was given.
@@ -1105,16 +1018,49 @@ class ProfilingManager(ABC, Generic[AppT]):
         # its own name, and a caller naming regions says which component each group is.
         return self.application.component_for_log(group.log) or group.log
 
-    def _group_data(self, group: RegionGroup, exp_names: list[str], region_relabel_map: dict | None) -> dict:
+    def _selected_experiments(self, experiments: list[str] | None) -> list[str]:
+        """Returns the experiments a plot is to read, having checked there is something to read.
+
+        Held here rather than written out per plot: the three ask the same three questions, and the one
+        that did not ask them failed obscurely instead - a bare KeyError for an unknown name, and a
+        division by zero inside the bar plotter for an empty selection.
+
+        Args:
+            experiments (list[str] | None): Experiments asked for, or None for every one with parsed data.
+
+        Returns:
+            list[str]: Their names.
+
+        Raises:
+            ValueError: If none are selected, if one of them has no parsed profiling data, or if that data
+                still has a 'run' dimension.
+        """
+        exp_names = experiments if experiments is not None else list(self.data.keys())
+        if not exp_names:
+            raise ValueError("No experiments selected for plotting.")
+
+        missing_experiments = [exp_name for exp_name in exp_names if exp_name not in self.data]
+        if missing_experiments:
+            raise ValueError(
+                f"No parsed profiling data found for experiment(s): {missing_experiments}. "
+                f"Available experiments: {list(self.data.keys())}."
+            )
+
+        if any("run" in ds.dims for exp_name in exp_names for ds in self.data[exp_name].values()):
+            raise ValueError(_RUN_DIM_ERROR)
+
+        return exp_names
+
+    def _group_data(self, group: RegionGroup, exp_names: list[str]) -> dict:
         """Returns the regions of a group for each experiment, keyed by experiment.
 
         Args:
-            group (RegionGroup): Regions to select, and the log to select them from.
+            group (RegionGroup): Regions to select, the log to select them from, and what to call them.
             exp_names (list[str]): Experiments to select them for.
-            region_relabel_map (dict | None): Optional mapping from region name to the label to plot it under.
 
         Returns:
-            dict: The selected data, keyed by experiment name.
+            dict: The selected data, keyed by experiment name, its region coordinate being the label each
+                region is to be plotted under.
 
         Raises:
             ValueError: If an experiment has no data for the group's log, or lacks one of its regions.
@@ -1137,9 +1083,7 @@ class ProfilingManager(ABC, Generic[AppT]):
             # From here the coordinate is the label the curve will carry rather than the name of a region:
             # the dataset exists only to be plotted, and settling the label here is what lets a relabelled
             # region stand on its own, which the plot could not know to do.
-            ds = ds.assign_coords(
-                region=[_region_label(group.log, region, region_relabel_map) for region in ds.region.values]
-            )
+            ds = ds.assign_coords(region=[group.label(region) for region in ds.region.values])
             selected[exp_name] = ds
         return selected
 
@@ -1147,7 +1091,6 @@ class ProfilingManager(ABC, Generic[AppT]):
         self,
         groups: list[RegionGroup],
         metric: ProfilingMetric,
-        region_relabel_map: dict | None = None,
         experiments: list[str] | None = None,
         xlabel: str | None = None,
         ylabel: str | None = None,
@@ -1183,9 +1126,6 @@ class ProfilingManager(ABC, Generic[AppT]):
         Args:
             groups (list[RegionGroup]): Regions to plot, and what to read each of them against.
             metric (ProfilingMetric): The metric to plot.
-            region_relabel_map (dict | None): Optional mapping from region name to the label to plot it
-                under. A region named here is plotted under that label alone; one left out is plotted as
-                "<log>: <region>", since region names are only made unique within one log.
             experiments (list[str] | None): Experiments to plot. None (the default) plots all of those
                 with parsed profiling data.
             xlabel (str | None): Optional label for the x-axis.
@@ -1204,16 +1144,7 @@ class ProfilingManager(ABC, Generic[AppT]):
                 component was given cannot be told. There is nothing for this plot to put on its x-axis
                 in that case.
         """
-        exp_names = experiments if experiments is not None else list(self.data.keys())
-        if not exp_names:
-            raise ValueError("No experiments selected for scaling plot.")
-
-        missing_data = [exp_name for exp_name in exp_names if exp_name not in self.data]
-        if missing_data:
-            raise ValueError(f"No parsed profiling data for experiments: {sorted(missing_data)}.")
-
-        if any("run" in ds.dims for exp_name in exp_names for ds in self.data[exp_name].values()):
-            raise ValueError(_RUN_DIM_ERROR)
+        exp_names = self._selected_experiments(experiments)
 
         # A list rather than a mapping: neither the log nor the component is unique across groups, since
         # one of each is exactly what the other kind of group is for.
@@ -1221,7 +1152,7 @@ class ProfilingManager(ABC, Generic[AppT]):
         for group in groups:
             # What was asked for is settled first, since a log or a region this manager holds nothing for
             # is a plainer thing to be told than anything about cores.
-            selected = self._group_data(group, exp_names, region_relabel_map)
+            selected = self._group_data(group, exp_names)
 
             # Then where each of them goes: the cores this group's component was given are its x axis.
             component = self._group_component(group)
@@ -1231,64 +1162,53 @@ class ProfilingManager(ABC, Generic[AppT]):
             # Grouping by the cores is what reduces the experiments that share a count to the fastest of
             # them, and it orders the result as it goes, so there is nothing left to sort.
             group_data = [ds.expand_dims({"ncpus": [cores[exp_name]]}) for exp_name, ds in selected.items()]
-            scaling_data.append((group.log, xr.concat(group_data, dim="ncpus", join="outer").groupby("ncpus").min()))
+            scaling_data.append(xr.concat(group_data, dim="ncpus", join="outer").groupby("ncpus").min())
 
         return plot_component_scaling(scaling_data, metric, xlabel=xlabel, ylabel=ylabel, show=show)
 
     def plot_bar_chart(
         self,
-        components: list[str],
-        regions: list[list[str]],
+        groups: list[RegionGroup],
         metric: ProfilingMetric,
-        region_relabel_map: dict | None = None,
         experiment_relabel_map: dict | None = None,
         experiments: list[str] | None = None,
         show: bool = True,
     ) -> Figure:
         """Plots a bar chart of a profiling metric over regions, grouped by experiment.
 
-        Regions are placed along the x-axis. Within each region group, there is one bar per
-        experiment, coloured by experiment name.
+        Regions are placed along the x-axis, in the order the groups give them, with one bar per
+        experiment within each. No cores appear on either axis, so each group's `component` is ignored
+        here, as it is by plot_scaling_data.
 
         Args:
-            components (list[str]): List of component names to include.
-            regions (list[list[str]]): List of regions to include for each component.
+            groups (list[RegionGroup]): Regions to plot, and the logs they come from. Each region becomes
+                one position on the x-axis, labelled as its group says.
             metric (ProfilingMetric): Metric to plot.
-            region_relabel_map (dict | None): Optional mapping to relabel regions in the plot.
             experiment_relabel_map (dict | None): Optional mapping to relabel experiments in the plot.
-            experiments (list[str] | None): Optional list of experiment names to include. If None, all experiments
-                are included.
+                Experiments are named by this manager rather than enumerated by the caller, so unlike the
+                regions they have no group to carry their labels.
+            experiments (list[str] | None): Optional list of experiment names to include. If None, all
+                experiments are included.
             show (bool): Whether to show the generated plot. Default: True.
 
         Returns:
             Figure: The Matplotlib figure containing the bar chart.
 
         Raises:
-            ValueError: If no profiling data is found for a specified component in any experiment, or if the
-                profiling data still has a 'run' dimension.
+            ValueError: If no experiments are selected, if a selected experiment has no parsed profiling
+                data, if no profiling data is found for a group's log, if a requested region is missing, or
+                if the profiling data still has a 'run' dimension.
         """
-        exp_names = experiments if experiments is not None else list(self.data.keys())
-        relabel = region_relabel_map or {}
+        exp_names = self._selected_experiments(experiments)
 
-        # Build a lookup from display label to (component, original_region) and preserve input order.
-        region_info: list[tuple[str, str, str]] = []  # (component, original_region, display_label)
-        for component, component_regions in zip(components, regions, strict=True):
-            for region in component_regions:
-                region_info.append((component, region, relabel.get(region, region)))
-        region_labels = [label for _, _, label in region_info]
-
-        # Extract metric values per experiment, reading directly from the datasets
-        bar_data: dict[str, list[float]] = {}
-        for exp_name in exp_names:
-            values = []
-            for component, region, _ in region_info:
-                ds = self.data[exp_name].get(component)
-                if ds is None:
-                    raise ValueError(f"No profiling data found for component '{component}' in experiment '{exp_name}'.")
-                if "run" in ds.dims:
-                    raise ValueError(_RUN_DIM_ERROR)
-                values.append(float(ds[metric].sel(region=region).pint.dequantify().values))
-            bar_data[exp_name] = values
+        region_labels: list[str] = []
+        bar_data: dict[str, list[float]] = {exp_name: [] for exp_name in exp_names}
+        for group in groups:
+            region_labels.extend(group.label(region) for region in group.regions)
+            for exp_name, ds in self._group_data(group, exp_names).items():
+                # By position rather than by label: the selection is already in the order the group asked
+                # for, and two regions a caller chose to label the same way would make a lookup ambiguous.
+                bar_data[exp_name].extend(float(value) for value in ds[metric].pint.dequantify().values)
 
         exp_relabel = experiment_relabel_map or {}
         relabelled_bar_data = {exp_relabel.get(k, k): v for k, v in bar_data.items()}
