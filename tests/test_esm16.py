@@ -122,6 +122,8 @@ def test_esm16_config_changes(esm16, pi_control_layout):
     """What the released layout comes to in the configuration files."""
 
     changes = esm16.config_changes(pi_control_layout)
+    # The whole budget, including the cores the submodels leave idle.
+    assert changes["config.yaml"]["ncpureq"] == PI_CONTROL_TOTAL_CORES
     assert changes["config.yaml"]["submodels"] == [
         [
             {"ncpus": 256},
@@ -452,6 +454,21 @@ class TestESM16AMIP:
         assert len(submodels) == 1, "a one-submodel control is merged against a one-element list"
         assert "ocean/input.nml" not in changes
         assert "ice/cice_in.nml" not in changes
+
+    def test_every_layout_of_one_node_asks_for_the_whole_node(self, amip):
+        """Payu does not round a job within one node up, so the submodels alone would ask for less.
+
+        The layouts of one node leave different numbers of cores idle, and would otherwise run as jobs of as
+        many different sizes, which parse_ncpus would then report and select_best_experiments set apart.
+        """
+        layouts = _select(amip, 104)
+        assert len({layout.idle_cores for layout in layouts}) > 1, "layouts using different numbers of cores"
+
+        for layout in layouts:
+            changes = amip.config_changes(layout)["config.yaml"]
+            (submodels,) = changes["submodels"]
+            config = {"platform": {"nodesize": 104}, "ncpureq": changes["ncpureq"], "submodels": submodels}
+            assert PayuManager._requested_ncpus(config) == 104
 
     def test_its_experiments_are_not_the_coupled_ones(self, amip, pi_control_layout, esm16):
         """Which is the whole point of the configuration being in the name."""

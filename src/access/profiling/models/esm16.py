@@ -282,6 +282,12 @@ class ESM16Configuration(PayuConfiguration):
         with a slot for every one of them, and each component that decomposes a grid additionally has the
         decomposition the search chose written into its own configuration file.
 
+        The job is asked for the whole budget of the layout, idle cores included, through ncpureq. Payu would
+        otherwise request what the submodels sum to, and only rounds that up to whole nodes past the first
+        one: two layouts of the same single node budget would then run as jobs of different sizes, and
+        parse_ncpus, which reads back what the job was given, would set them apart. Asking for the budget is
+        what makes the job occupy what the study meant it to, as the OM3 configuration does with ncpus.
+
         Args:
             layout (ComponentLayout): Layout of the components, as returned by the layout search.
 
@@ -295,7 +301,7 @@ class ESM16Configuration(PayuConfiguration):
                 configuration looks like, since those state cores and not grids.
         """
         layouts = self._component_layouts(layout)
-        changes: dict = {"config.yaml": {"submodels": [self._submodel_changes(layouts)]}}
+        changes: dict = {"config.yaml": {"ncpureq": layout.n_cores, "submodels": [self._submodel_changes(layouts)]}}
 
         atmosphere = layouts.get(ESM16_UM7_NAME)
         if atmosphere is not None:

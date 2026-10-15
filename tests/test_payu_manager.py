@@ -484,6 +484,46 @@ class TestParseNcpus:
         assert manager.parse_ncpus(full) == manager.parse_ncpus(wasteful) == 416
 
 
+class TestArchivedNcpus:
+    """What an archived experiment reports, read back from its tarball by a session that never saw it run."""
+
+    @staticmethod
+    def _experiment(work_dir: Path, scratch: Path, name: str, used_cores: int, recorded: bool) -> ProfilingExperiment:
+        """A finished experiment asking for one 104 core node, of which its submodels use used_cores."""
+
+        path = work_dir / name
+        path.mkdir(parents=True)
+        # Payu keeps the archive outside the control directory, and links to it.
+        archive = scratch / name
+        (archive / "output000").mkdir(parents=True)
+        (path / "archive").symlink_to(archive)
+        (path / "config.yaml").write_text(
+            f"ncpureq: 104\nplatform:\n  nodesize: 104\nsubmodels:\n  - ncpus: {used_cores - 2}\n  - ncpus: 2\n"
+        )
+        if recorded:
+            write_job_file(path, 0, {**pbs_job_info(104), "payu_run_status": 0})
+
+        experiment = ProfilingExperiment(path)
+        experiment.status = ProfilingExperimentStatus.DONE
+        return experiment
+
+    @pytest.mark.parametrize("recorded", [True, False], ids=["job-file", "configuration"])
+    def test_layouts_of_one_node_report_the_whole_node(self, tmp_path, recorded):
+        work_dir, archive_dir = tmp_path / "work", tmp_path / "archive"
+        manager = PayuManager(work_dir, archive_dir, MockPayuConfiguration())
+        manager.experiments = {
+            name: self._experiment(work_dir, tmp_path / "scratch", name, used_cores, recorded)
+            for name, used_cores in (("full", 104), ("idle", 100))
+        }
+        manager.archive_experiments()
+
+        rediscovered = PayuManager(work_dir, archive_dir, MockPayuConfiguration())
+        assert rediscovered.experiments.keys() == {"full", "idle"}
+        assert all(exp.status == ProfilingExperimentStatus.ARCHIVED for exp in rediscovered.experiments.values())
+        assert all(exp.ncpus is None for exp in rediscovered.experiments.values()), "nothing carried over"
+        assert {name: rediscovered._ncpus(name) for name in rediscovered.experiments} == {"full": 104, "idle": 104}
+
+
 def test_select_layouts(manager):
     """Test the select_layouts method of PayuManager."""
     layouts = manager.select_layouts(4, allocations=MOCK_ALLOCATIONS)
