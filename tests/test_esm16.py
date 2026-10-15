@@ -135,7 +135,7 @@ def test_esm16_config_changes(esm16, pi_control_layout):
         "UM_ATM_NPROCY": "16",
         "UM_NPES": "256",
     }
-    assert changes["ocean/input.nml"] == {"ocean_model_nml": {"layout": ["16,15"]}}
+    assert changes["ocean/input.nml"] == {"ocean_model_nml": {"layout": "16, 15"}}
     assert changes["ice/cice_in.nml"] == {
         "domain_nml": {
             "nprocs": "12",
@@ -557,7 +557,7 @@ class TestESM16WithoutAnAtmosphere:
         assert changes["config.yaml"]["submodels"] == [
             [{"ncpus": 240}, {"ncpus": 12, "exe": ["cice_access.exe"]}, "PRESERVE"]
         ]
-        assert changes["ocean/input.nml"] == {"ocean_model_nml": {"layout": ["16,15"]}}
+        assert changes["ocean/input.nml"] == {"ocean_model_nml": {"layout": "16, 15"}}
 
     def test_its_experiments_name_the_two_components_it_runs(self, ocean_ice, ocean_ice_layout):
         assert ocean_ice.experiment_name(ocean_ice_layout) == "esm1p6-layout_ocean-ice_mom_16x15_ice_12"

@@ -309,7 +309,10 @@ class ESM16Configuration(PayuConfiguration):
         ocean = layouts.get(ESM16_MOM5_NAME)
         if ocean is not None:
             nx, ny = _process_grid(ESM16_MOM5_NAME, ocean)
-            changes["ocean/input.nml"] = {"ocean_model_nml": {"layout": [f"{nx},{ny}"]}}
+            # A string holding the whole right-hand side, not a list of the two extents: the experiment
+            # generator renders a namelist value by str(), so a Python list writes its own brackets into the
+            # file and MOM5 is handed `layout = [16, 15]`, which is not Fortran.
+            changes["ocean/input.nml"] = {"ocean_model_nml": {"layout": f"{nx}, {ny}"}}
 
         # The configuration decides whether there is a sea ice at all, and _component_layouts takes the keys
         # of `layouts` from the same field, so narrowing the partitioning narrows the layout with it.
