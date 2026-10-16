@@ -17,10 +17,10 @@ from access.profiling.manager import (
     ProfilingExperimentStatus,
     ProfilingLog,
     ProfilingManager,
-    RegionGroup,
     find_component,
 )
 from access.profiling.metrics import count, tavg
+from access.profiling.plotting_utils import RegionGroup
 
 
 class MockConfiguration(Application):
@@ -639,17 +639,14 @@ def test_scaling_data(mock_plot, scaling_data):
     # Test plotting scaling data for non-existing component
     with pytest.raises(ValueError):
         manager.plot_scaling_data(
-            components=["non_existing_component"],
-            regions=[["Region 1"]],
+            [RegionGroup("non_existing_component", ["Region 1"])],
             metric=tavg,
         )
 
     # Test plotting scaling data
     manager.plot_scaling_data(
-        components=["component"],
-        regions=[["Region 1"]],
+        [RegionGroup("component", ["Region 1"], relabel={"Region 1": "Total"})],
         metric=tavg,
-        region_relabel_map={"Region 1": "Total"},
         experiments=["1cpu", "4cpu"],
         xlabel="Number of CPUs",
     )
@@ -675,17 +672,16 @@ def test_scaling_data_missing_region_raises_value_error(scaling_data):
     paths, ncpus, datasets = scaling_data
     manager = MockProfilingManager(paths, ncpus, datasets)
 
-    with pytest.raises(ValueError, match="Requested region\\(s\\)") as exc_info:
+    with pytest.raises(ValueError, match="not found in") as exc_info:
         manager.plot_scaling_data(
-            components=["component"],
-            regions=[["Missing Region"]],
+            [RegionGroup("component", ["Missing Region"])],
             metric=tavg,
             experiments=["1cpu"],
         )
 
     message = str(exc_info.value)
     assert "Missing Region" in message
-    assert "component 'component'" in message
+    assert "'component'" in message
     assert "experiment '1cpu'" in message
 
 
@@ -695,10 +691,9 @@ def test_scaling_data_no_selected_experiments_raises_value_error(scaling_data):
     paths, ncpus, datasets = scaling_data
     manager = MockProfilingManager(paths, ncpus, datasets)
 
-    with pytest.raises(ValueError, match="No experiments selected for scaling plot"):
+    with pytest.raises(ValueError, match="No experiments selected for plotting"):
         manager.plot_scaling_data(
-            components=["component"],
-            regions=[["Region 1"]],
+            [RegionGroup("component", ["Region 1"])],
             metric=tavg,
             experiments=[],
         )
@@ -712,8 +707,7 @@ def test_scaling_data_missing_experiment_data_raises_value_error(scaling_data):
 
     with pytest.raises(ValueError, match=r"No parsed profiling data found for experiment\(s\)") as exc_info:
         manager.plot_scaling_data(
-            components=["component"],
-            regions=[["Region 1"]],
+            [RegionGroup("component", ["Region 1"])],
             metric=tavg,
             experiments=["missing_exp"],
         )
@@ -736,17 +730,14 @@ def test_bar_chart_data(mock_plot, scaling_data):
     # Test plotting bar chart for non-existing component
     with pytest.raises(ValueError):
         manager.plot_bar_chart(
-            components=["non_existing_component"],
-            regions=[["Region 1"]],
+            [RegionGroup("non_existing_component", ["Region 1"])],
             metric=tavg,
         )
 
     # Test plotting bar chart with region selection, relabelling, and experiment filtering
     manager.plot_bar_chart(
-        components=["component"],
-        regions=[["Region 1", "Region 2"]],
+        [RegionGroup("component", ["Region 1", "Region 2"], relabel={"Region 1": "Total"})],
         metric=tavg,
-        region_relabel_map={"Region 1": "Total"},
         experiments=["1cpu", "4cpu"],
     )
     assert mock_plot.call_count == 1
@@ -760,7 +751,7 @@ def test_bar_chart_data(mock_plot, scaling_data):
 
     # Verify region labels
     region_labels = mock_plot.call_args.args[1]
-    assert region_labels == ["Total", "Region 2"]
+    assert region_labels == ["Total", "component: Region 2"]
 
     # Verify metric
     assert mock_plot.call_args.args[2] == tavg
@@ -771,8 +762,7 @@ def test_bar_chart_data(mock_plot, scaling_data):
     # Test experiment relabelling
     mock_plot.reset_mock()
     manager.plot_bar_chart(
-        components=["component"],
-        regions=[["Region 1"]],
+        [RegionGroup("component", ["Region 1"])],
         metric=tavg,
         experiment_relabel_map={"1cpu": "1 CPU", "4cpu": "4 CPUs"},
         experiments=["1cpu", "4cpu"],
@@ -790,8 +780,7 @@ def test_bar_chart_all_experiments(mock_plot, scaling_data):
     manager = MockProfilingManager(paths, ncpus, datasets)
 
     manager.plot_bar_chart(
-        components=["component"],
-        regions=[["Region 1"]],
+        [RegionGroup("component", ["Region 1"])],
         metric=tavg,
         show=False,
     )
@@ -935,15 +924,17 @@ def test_scaling_data_with_best_experiments(mock_plot, layout_scaling_data):
     manager = MockProfilingManager(paths, ncpus, datasets)
 
     manager.plot_scaling_data(
-        components=["component"],
-        regions=[["Region 1"]],
+        [RegionGroup("component", ["Region 1"])],
         metric=tavg,
         experiments=manager.select_best_experiments("component", "Region 1", tavg),
     )
 
     component_data = mock_plot.call_args.args[0][0]
     assert component_data.coords["ncpus"].values.tolist() == [1, 2]  # No duplicated CPU counts
-    assert component_data[tavg].sel(region="Region 1").values.tolist() == [800.0, 300.0]  # Fastest 2 CPU layout
+    assert component_data[tavg].sel(region="component: Region 1").values.tolist() == [
+        800.0,
+        300.0,
+    ]  # Fastest 2 CPU layout
 
     assert len(manager._parse_ncpus_calls) == 3  # Selecting and plotting does not parse an experiment twice
 
@@ -956,8 +947,7 @@ def test_scaling_data_duplicate_ncpus_raises_value_error(layout_scaling_data):
 
     with pytest.raises(ValueError, match="same number of CPUs") as exc_info:
         manager.plot_scaling_data(
-            components=["component"],
-            regions=[["Region 1"]],
+            [RegionGroup("component", ["Region 1"])],
             metric=tavg,
         )
 
@@ -1138,7 +1128,7 @@ def test_select_best_run_then_plot(mock_plot, run_data):
     """Once the runs are reduced, the plotting methods work unchanged."""
 
     run_data.select_best_run("component", "Region 1", tavg)
-    run_data.plot_bar_chart(components=["component"], regions=[["Region 1"]], metric=tavg, show=False)
+    run_data.plot_bar_chart([RegionGroup("component", ["Region 1"])], metric=tavg, show=False)
 
     assert mock_plot.call_args.args[0] == {"exp1": pytest.approx([200.0])}
 
@@ -1154,14 +1144,14 @@ def test_scaling_data_run_dim_raises_value_error(run_data):
     """plot_scaling_data refuses unreduced data instead of silently plotting it."""
 
     with pytest.raises(ValueError, match="'run' dimension"):
-        run_data.plot_scaling_data(components=["component"], regions=[["Region 1"]], metric=tavg)
+        run_data.plot_scaling_data([RegionGroup("component", ["Region 1"])], metric=tavg)
 
 
 def test_bar_chart_run_dim_raises_value_error(run_data):
     """plot_bar_chart refuses unreduced data instead of failing obscurely."""
 
     with pytest.raises(ValueError, match="'run' dimension"):
-        run_data.plot_bar_chart(components=["component"], regions=[["Region 1"]], metric=tavg)
+        run_data.plot_bar_chart([RegionGroup("component", ["Region 1"])], metric=tavg)
 
 
 def _leaf(name: str, n_cores: int) -> ComponentLayout:
@@ -1242,10 +1232,10 @@ class TestPlotComponentScalingData:
     """Plotting a metric against the cores the component itself was given."""
 
     @staticmethod
-    def _plotted(mock_plot) -> dict[str, list]:
-        """The x values of each group handed to the plot, keyed by the label it carries."""
+    def _plotted(mock_plot) -> list[list]:
+        """The x values of each group handed to the plot, in the order the groups were given."""
 
-        return {label: list(stat["ncpus"].values) for label, stat in mock_plot.call_args.args[0]}
+        return [list(stat["ncpus"].values) for stat in mock_plot.call_args.args[0]]
 
     @mock.patch("access.profiling.manager.plot_component_scaling")
     def test_the_x_axis_is_the_components_cores(self, mock_plot, component_scaling_data):
@@ -1254,14 +1244,14 @@ class TestPlotComponentScalingData:
         manager, cores = component_scaling_data
         manager.plot_component_scaling_data([RegionGroup("component", ["Region 1"])], tavg)
 
-        assert self._plotted(mock_plot) == {"component": sorted(cores)}
+        assert self._plotted(mock_plot) == [sorted(cores)]
 
     @mock.patch("access.profiling.manager.plot_component_scaling")
     def test_every_region_asked_for_is_plotted(self, mock_plot, component_scaling_data):
         manager, _ = component_scaling_data
         manager.plot_component_scaling_data([RegionGroup("component", ["Region 1", "Region 2"])], tavg)
 
-        ((_, stat),) = mock_plot.call_args.args[0]
+        (stat,) = mock_plot.call_args.args[0]
         assert list(stat["region"].values) == ["component: Region 1", "component: Region 2"]
 
     @mock.patch("access.profiling.manager.plot_component_scaling")
@@ -1271,7 +1261,7 @@ class TestPlotComponentScalingData:
         manager, _ = component_scaling_data
         manager.plot_component_scaling_data([RegionGroup("component", ["Region 1"])], tavg)
 
-        ((_, stat),) = mock_plot.call_args.args[0]
+        (stat,) = mock_plot.call_args.args[0]
         assert list(stat["region"].values) == ["component: Region 1"]
 
     @mock.patch("access.profiling.manager.plot_component_scaling")
@@ -1280,12 +1270,11 @@ class TestPlotComponentScalingData:
 
         manager, _ = component_scaling_data
         manager.plot_component_scaling_data(
-            [RegionGroup("component", ["Region 1", "Region 2"])],
+            [RegionGroup("component", ["Region 1", "Region 2"], relabel={"Region 1": "Dynamics"})],
             tavg,
-            region_relabel_map={"Region 1": "Dynamics"},
         )
 
-        ((_, stat),) = mock_plot.call_args.args[0]
+        (stat,) = mock_plot.call_args.args[0]
         assert list(stat["region"].values) == ["Dynamics", "component: Region 2"], "one named, one not"
 
     @mock.patch("access.profiling.manager.plot_component_scaling")
@@ -1302,9 +1291,9 @@ class TestPlotComponentScalingData:
         )
 
         groups = mock_plot.call_args.args[0]
-        assert [label for label, _ in groups] == ["component", "component"], "both survive, keyed or not"
-        assert list(groups[0][1]["ncpus"].values) == [60, 120, 240]
-        assert list(groups[1][1]["ncpus"].values) == [30, 60, 120], "the other component's cores"
+        assert len(groups) == 2, "both survive, one log or two"
+        assert list(groups[0]["ncpus"].values) == [60, 120, 240]
+        assert list(groups[1]["ncpus"].values) == [30, 60, 120], "the other component's cores"
 
     @mock.patch("access.profiling.manager.plot_component_scaling")
     def test_one_component_spread_over_several_logs(self, mock_plot, component_scaling_data):
@@ -1323,8 +1312,8 @@ class TestPlotComponentScalingData:
         )
 
         groups = mock_plot.call_args.args[0]
-        assert [label for label, _ in groups] == ["component", "another_log"]
-        assert all(list(stat["ncpus"].values) == sorted(cores) for _, stat in groups), "one component, one axis"
+        assert len(groups) == 2
+        assert all(list(stat["ncpus"].values) == sorted(cores) for stat in groups), "one component, one axis"
 
     @mock.patch("access.profiling.manager.plot_component_scaling")
     def test_a_group_naming_no_component_falls_back(self, mock_plot, component_scaling_data):
@@ -1340,8 +1329,8 @@ class TestPlotComponentScalingData:
         )
 
         groups = mock_plot.call_args.args[0]
-        assert list(groups[0][1]["ncpus"].values) == [30, 60, 120], "the mapping named 'other'"
-        assert list(groups[1][1]["ncpus"].values) == sorted(cores), "nothing named it, so the log's own name"
+        assert list(groups[0]["ncpus"].values) == [30, 60, 120], "the mapping named 'other'"
+        assert list(groups[1]["ncpus"].values) == sorted(cores), "nothing named it, so the log's own name"
 
     @mock.patch("access.profiling.manager.plot_component_scaling")
     def test_the_axis_labels_are_passed_on(self, mock_plot, component_scaling_data):
@@ -1393,7 +1382,7 @@ class TestPlotComponentScalingData:
 
         manager.plot_component_scaling_data([RegionGroup("component", ["Region 1"])], tavg)
 
-        ((_, stat),) = mock_plot.call_args.args[0]
+        (stat,) = mock_plot.call_args.args[0]
         assert list(stat["ncpus"].values) == [60, 120], "the two at 60 cores become one point"
         assert stat[tavg].pint.dequantify().values.tolist() == [[25.0], [50.0]], "and it is the faster of them"
 
@@ -1408,7 +1397,7 @@ class TestPlotComponentScalingData:
 
         manager.plot_component_scaling_data([RegionGroup("component", ["Region 1", "Region 2"])], tavg)
 
-        ((_, stat),) = mock_plot.call_args.args[0]
+        (stat,) = mock_plot.call_args.args[0]
         at_sixty = stat[tavg].sel(ncpus=60).pint.dequantify().values.tolist()
         assert at_sixty == [25.0, 10.0], "Region 1 from 'large', Region 2 from 'small'"
 
@@ -1432,7 +1421,7 @@ class TestPlotComponentScalingData:
         manager.plot_component_scaling_data(
             [RegionGroup("component", ["Region 1"])], tavg, experiments=["small", "medium"]
         )
-        assert self._plotted(mock_plot) == {"component": [60, 120]}
+        assert self._plotted(mock_plot) == [[60, 120]]
 
     def test_no_experiments_selected(self, component_scaling_data):
         manager, _ = component_scaling_data
@@ -1462,19 +1451,44 @@ class TestPlotComponentScalingData:
             manager.plot_component_scaling_data([RegionGroup("component", ["Region 1"])], tavg)
 
 
-class TestRegionGroup:
-    """What a caller says when a log and a component are not the same thing."""
+class TestOneListDrivesEveryPlot:
+    """The point of the type: a study is described once and handed to all three plotting methods."""
 
-    def test_regions_are_kept_as_given(self):
-        assert RegionGroup("MOM6", ["Ocean dynamics", "Ocean"]).regions == ("Ocean dynamics", "Ocean")
+    @staticmethod
+    def _groups() -> list[RegionGroup]:
+        return [RegionGroup("component", ["Region 1", "Region 2"], component="component", relabel={"Region 1": "Dyn"})]
 
-    def test_a_list_becomes_a_tuple(self):
-        """So that a group given one is still the frozen thing it claims to be."""
+    @mock.patch("access.profiling.manager.plot_bar_metrics")
+    @mock.patch("access.profiling.manager.plot_component_scaling")
+    @mock.patch("access.profiling.manager.plot_scaling_metrics")
+    def test_the_same_groups_label_every_figure_alike(self, mock_scaling, mock_component, mock_bar, scaling_data):
+        """A reader moving between the three figures reads one set of names."""
 
-        assert hash(RegionGroup("MOM6", ["Ocean dynamics"])) is not None
+        paths, ncpus, datasets = scaling_data
+        manager = MockProfilingManager(paths, ncpus, datasets)
+        for path, n in zip(paths, ncpus, strict=True):
+            manager.experiments[path.name].layout = _layout(component=n)
+        groups = self._groups()
 
-    def test_no_component_by_default(self):
-        assert RegionGroup("MOM6", ["Ocean dynamics"]).component is None
+        manager.plot_scaling_data(groups, tavg)
+        manager.plot_component_scaling_data(groups, tavg)
+        manager.plot_bar_chart(groups, tavg)
+
+        expected = ["Dyn", "component: Region 2"]
+        assert list(mock_scaling.call_args.args[0][0]["region"].values) == expected
+        assert list(mock_component.call_args.args[0][0]["region"].values) == expected
+        assert mock_bar.call_args.args[1] == expected
+
+    @mock.patch("access.profiling.manager.plot_scaling_metrics")
+    def test_the_component_is_ignored_where_it_cannot_be_honoured(self, mock_plot, scaling_data):
+        """plot_scaling_data reads the whole job, so a group naming a component it could not find still plots."""
+
+        paths, ncpus, datasets = scaling_data
+        manager = MockProfilingManager(paths, ncpus, datasets)
+
+        manager.plot_scaling_data([RegionGroup("component", ["Region 1"], component="no such component")], tavg)
+
+        assert list(mock_plot.call_args.args[0][0]["ncpus"].values) == sorted(ncpus)
 
 
 class TestLayoutIsReadBackOnce:

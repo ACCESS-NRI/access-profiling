@@ -9,7 +9,7 @@ from matplotlib.figure import Figure
 from matplotlib.patches import Rectangle
 
 from access.profiling.metrics import tavg
-from access.profiling.plotting_utils import calculate_column_widths, plot_bar_metrics
+from access.profiling.plotting_utils import RegionGroup, calculate_column_widths, plot_bar_metrics
 
 
 @pytest.fixture(scope="module")
@@ -145,3 +145,55 @@ def test_plot_bar_metrics_show(mock_show):
 
     plot_bar_metrics(data, region_labels, tavg, show=False)
     assert mock_show.call_count == 1  # No additional call
+
+
+class TestRegionGroup:
+    """What a caller says when a log and a component are not the same thing."""
+
+    def test_regions_are_kept_as_given(self):
+        assert RegionGroup("MOM6", ["Ocean dynamics", "Ocean"]).regions == ("Ocean dynamics", "Ocean")
+
+    def test_a_list_becomes_a_tuple(self):
+        """So that a group given one is still the frozen thing it claims to be."""
+
+        assert RegionGroup("MOM6", ["Ocean dynamics"]).regions == ("Ocean dynamics",)
+
+    def test_no_component_by_default(self):
+        assert RegionGroup("MOM6", ["Ocean dynamics"]).component is None
+
+    def test_a_group_that_plots_nothing_is_refused(self):
+        with pytest.raises(ValueError, match="names no regions"):
+            RegionGroup("MOM6", [])
+
+    def test_a_label_for_a_region_the_group_does_not_hold_is_refused(self):
+        """Silently ignoring it is how a caller comes to believe a plot is labelled when it is not."""
+
+        with pytest.raises(ValueError, match=r"labels region\(s\) \['Ocaen'\], which it does not hold"):
+            RegionGroup("MOM6", ["Ocean"], relabel={"Ocaen": "Ocean total"})
+
+    def test_an_unlabelled_region_carries_the_log_that_makes_it_unique(self):
+        assert RegionGroup("MOM6", ["Total"]).label("Total") == "MOM6: Total"
+
+    def test_a_labelled_region_stands_on_its_own(self):
+        group = RegionGroup("MOM6", ["Total"], relabel={"Total": "Ocean"})
+
+        assert group.label("Total") == "Ocean"
+
+    def test_two_logs_can_label_the_same_region_differently(self):
+        """What a single flat map could not do, and the reason the labels sit on the group."""
+
+        ocean = RegionGroup("MOM6", ["Total"], relabel={"Total": "Ocean"})
+        ice = RegionGroup("CICE6", ["Total"], relabel={"Total": "Sea ice"})
+
+        assert (ocean.label("Total"), ice.label("Total")) == ("Ocean", "Sea ice")
+
+    def test_the_group_does_not_change_under_what_it_was_given(self):
+        regions = ["Ocean"]
+        relabel = {"Ocean": "Ocean total"}
+        group = RegionGroup("MOM6", regions, relabel=relabel)
+
+        regions.append("Ocean dynamics")
+        relabel["Ocean"] = "Something else"
+
+        assert group.regions == ("Ocean",)
+        assert group.label("Ocean") == "Ocean total"

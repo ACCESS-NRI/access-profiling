@@ -148,7 +148,7 @@ def plot_scaling_metrics(
 
 
 def plot_component_scaling(
-    stats: list[tuple[str, xr.Dataset]],
+    stats: list[xr.Dataset],
     metric: ProfilingMetric,
     xcoordinate: str = "ncpus",
     xlabel: str | None = None,
@@ -208,7 +208,7 @@ def plot_component_scaling(
     fig, ax = plt.subplots(figsize=(10, 6))
 
     ideals = []
-    for _, stat in stats:
+    for stat in stats:
         for region in stat.region.values:
             values = stat[metric].sel(region=region)
             values.plot.line(x=xcoordinate, ax=ax, marker="o", label=region)

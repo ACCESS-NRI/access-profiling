@@ -24,6 +24,7 @@ from access.profiling.parser import ProfilingParser
 from access.profiling.payu_configuration import PayuConfiguration
 from access.profiling.payu_manager import PayuManager
 from access.profiling.payujson_parser import PayuJSONProfilingParser
+from access.profiling.plotting_utils import RegionGroup
 from access.profiling.rose_configuration import RoseSuiteConfiguration
 from access.profiling.um_parser import UMProfilingParser
 
@@ -47,6 +48,7 @@ __all__ = [
     "RAM3",
     "RoseSuiteConfiguration",
     "ProfilingParser",
+    "RegionGroup",
     "FMSProfilingParser",
     "UMProfilingParser",
     "CICE5ProfilingParser",
