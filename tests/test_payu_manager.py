@@ -114,7 +114,7 @@ def test_the_control_decides_the_clone_directory():
 
     assert manager._repository_directory == "config", "the Payu default, with no control to say otherwise"
 
-    manager.control = GitControlSource("https://example.com/repo", "commit", _directory="ctrl-clone")
+    manager.control = GitControlSource("https://example.com/repo", "commit", directory="ctrl-clone")
     assert manager._repository_directory == "ctrl-clone"
 
 

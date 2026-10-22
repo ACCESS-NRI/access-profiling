@@ -19,33 +19,26 @@ input nobody can give it.
 """
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 
 class ControlSource(ABC):
-    """Abstract base class for the control configuration a profiling study perturbs."""
+    """Abstract base class for the control configuration a profiling study perturbs.
 
-    @property
-    @abstractmethod
-    def directory(self) -> str:
-        """Returns the name the control takes under the working directory.
+    `directory`, `label` and `start_point` are declared as attributes rather than abstract properties, so that a
+    subclass can satisfy them with plain dataclass fields.
+    """
 
-        Returns:
-            str: Directory name, relative to the working directory.
-        """
+    directory: str
+    """The name the control takes under the working directory, relative to it."""
 
-    @property
-    @abstractmethod
-    def label(self) -> str:
-        """Returns a short human-readable identifier for this control.
+    label: str
+    """A short human-readable identifier for this control.
 
-        Used where a study has to say what it was run against: in a plot, in an archive path, or in a record
-        written beside the results.
-
-        Returns:
-            str: The identifier.
-        """
+    Used where a study has to say what it was run against: in a plot, in an archive path, or in a record written
+    beside the results.
+    """
 
     @property
     @abstractmethod
@@ -65,8 +58,7 @@ class ControlSource(ABC):
 
     None means the control is taken as it stands, which is what an already checked-out directory of unknown
     revision amounts to; a runner that has to start branches from somewhere needs a value here and should say so
-    rather than guess one. Declared as an attribute rather than an abstract property so that a subclass can
-    satisfy it with a plain dataclass field.
+    rather than guess one.
     """
 
     @abstractmethod
@@ -79,7 +71,7 @@ class ControlSource(ABC):
         """
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, init=False)
 class GitControlSource(ControlSource):
     """A control held in a git repository.
 
@@ -90,40 +82,37 @@ class GitControlSource(ControlSource):
         repository (str): Repository URL, or the path of one on disk.
         start_point (str): What to start the experiments from: a tag, a branch or a commit. Published setups
             are tagged, so this is usually a tag.
-        _directory (str): Sets `directory`, the name the clone takes under the working directory. Defaults to
-            "config", which is the name studies in this package conventionally use.
-        _label (str | None): Sets `label`, a short identifier for this control. Defaults to the start point,
-            which for a published setup is the release.
+        directory (str): The name the clone takes under the working directory. Defaults to "config", which is
+            the name studies in this package conventionally use.
+        label (str | None): A short identifier for this control. Defaults to the start point, which for a
+            published setup is the release. An empty label is kept as it is.
 
     Raises:
         ValueError: If the repository or the start point is empty.
     """
 
     repository: str
-    # Narrower than the str | None the base class declares, because a git control always has one: omitting
-    # it is refused by __post_init__ below. Narrowing a mutable attribute is unsound in general, since a
-    # writer holding the base type could assign None through it, but this class is frozen so there is no
-    # such writer.
-    start_point: str = ""  # pyright: ignore[reportIncompatibleVariableOverride]
-    _directory: str = "config"
-    _label: str | None = None
+    # Narrower than the str | None the base class declares, because a git control always has one. Narrowing a
+    # mutable attribute is unsound in general, since a writer holding the base type could assign None through
+    # it, but this class is frozen so there is no such writer.
+    start_point: str  # pyright: ignore[reportIncompatibleVariableOverride]
+    directory: str
+    label: str
 
-    def __post_init__(self) -> None:
-        if not self.repository:
+    # Written out rather than generated, so that the label can default to the start point, which a field default
+    # cannot refer to. Equality, hashing and the repr are still generated from the fields.
+    def __init__(self, repository: str, start_point: str, directory: str = "config", label: str | None = None):
+        if not repository:
             raise ValueError("GitControlSource.repository must be non-empty.")
-        if not self.start_point:
+        if not start_point:
             raise ValueError(
                 "GitControlSource.start_point must be non-empty: a control is a particular state of a "
                 "repository, so a tag, branch or commit is needed to say which."
             )
-
-    @property
-    def directory(self) -> str:
-        return self._directory
-
-    @property
-    def label(self) -> str:
-        return self._label if self._label is not None else self.start_point
+        object.__setattr__(self, "repository", repository)
+        object.__setattr__(self, "start_point", start_point)
+        object.__setattr__(self, "directory", directory)
+        object.__setattr__(self, "label", label if label is not None else start_point)
 
     @property
     def origin(self) -> str:
@@ -133,7 +122,7 @@ class GitControlSource(ControlSource):
         return {"repository": self.repository, "start_point": self.start_point}
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, init=False)
 class ExistingDirectoryControlSource(ControlSource):
     """A control already checked out on disk.
 
@@ -143,9 +132,10 @@ class ExistingDirectoryControlSource(ControlSource):
     acted on, so that a study can still say which control it used.
 
     Args:
-        path (Path): The control directory, which must already exist when a study runs.
-        _label (str | None): Sets `label`, a short identifier for this control. Defaults to the directory's
-            own name.
+        path (Path): The control directory, which must already exist when a study runs. Its name is the
+            control's `directory`.
+        label (str | None): A short identifier for this control. Defaults to the directory's own name. An empty
+            label is kept as it is.
         revision (str | None): The revision the directory holds, if it is known. Nothing here checks it out -
             the directory is taken as it stands - but it is what a runner that has to start branches from
             somewhere is given, and it is recorded as provenance either way.
@@ -156,29 +146,28 @@ class ExistingDirectoryControlSource(ControlSource):
     """
 
     path: Path
-    _label: str | None = None
-    revision: str | None = None
-    # Derived from revision rather than taken from the caller: for a directory that is already checked out,
-    # the revision it holds is the only thing a runner could start from. Kept as a field rather than a
-    # property so that it declares the same kind of member as the base class.
-    start_point: str | None = field(init=False, default=None)
+    label: str
+    revision: str | None
+    # Derived rather than taken from the caller: nothing clones the directory into place, so its name is whatever
+    # it is on disk, and for a directory that is already checked out, the revision it holds is the only thing a
+    # runner could start from.
+    directory: str
+    start_point: str | None
 
-    def __post_init__(self) -> None:
-        if not self.path.is_absolute():
+    # Written out rather than generated, so that the label can default to the directory's name, which a field
+    # default cannot refer to. Equality, hashing and the repr are still generated from the fields.
+    def __init__(self, path: Path, label: str | None = None, revision: str | None = None):
+        if not path.is_absolute():
             raise ValueError(
-                f"ExistingDirectoryControlSource.path must be absolute, got {str(self.path)!r}. The control is "
+                f"ExistingDirectoryControlSource.path must be absolute, got {str(path)!r}. The control is "
                 "found again from wherever a study runs, so a relative path would name different directories "
                 "at different times."
             )
-        object.__setattr__(self, "start_point", self.revision)
-
-    @property
-    def directory(self) -> str:
-        return self.path.name
-
-    @property
-    def label(self) -> str:
-        return self._label if self._label is not None else self.path.name
+        object.__setattr__(self, "path", path)
+        object.__setattr__(self, "label", label if label is not None else path.name)
+        object.__setattr__(self, "revision", revision)
+        object.__setattr__(self, "directory", path.name)
+        object.__setattr__(self, "start_point", revision)
 
     @property
     def origin(self) -> str:

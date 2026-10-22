@@ -39,13 +39,12 @@ class TestAGitControlNeedsBothCoordinates:
         with pytest.raises(ValueError, match="start_point must be non-empty"):
             GitControlSource(ESM16_CONFIGS, "")
 
-    def test_omitting_the_start_point_is_refused_although_the_field_has_a_default(self):
-        """The empty default is there only so the field overrides the abstract start_point of the base class.
-        Were it taken at face value, a study would silently profile whatever the repository's default branch
-        happened to be on the day it ran, rather than the release it meant."""
+    def test_omitting_the_start_point_is_refused(self):
+        """Were a missing one taken as the repository's default branch, a study would silently profile whatever
+        that happened to be on the day it ran, rather than the release it meant."""
 
-        with pytest.raises(ValueError, match="start_point must be non-empty"):
-            GitControlSource(ESM16_CONFIGS)
+        with pytest.raises(TypeError, match="start_point"):
+            GitControlSource(ESM16_CONFIGS)  # pyright: ignore[reportCallIssue]
 
     def test_a_source_with_both_coordinates_is_accepted(self):
         """The guard rejects what is missing and nothing else."""
@@ -68,7 +67,7 @@ class TestWhatAGitControlAnswersTo:
         assert GitControlSource(ESM16_CONFIGS, PI_CONTROL_RELEASE).directory == "config"
 
     def test_the_directory_can_be_overridden(self):
-        control = GitControlSource(ESM16_CONFIGS, PI_CONTROL_RELEASE, _directory="am3-suite")
+        control = GitControlSource(ESM16_CONFIGS, PI_CONTROL_RELEASE, directory="am3-suite")
 
         assert control.directory == "am3-suite"
 
@@ -80,7 +79,7 @@ class TestWhatAGitControlAnswersTo:
     def test_the_label_can_be_overridden(self):
         """A commit hash makes a poor axis label, so a study may give the control a name of its own."""
 
-        control = GitControlSource(ESM16_CONFIGS, "9a3f21c", _label="pre-release fix")
+        control = GitControlSource(ESM16_CONFIGS, "9a3f21c", label="pre-release fix")
 
         assert control.label == "pre-release fix"
         assert control.start_point == "9a3f21c", "the override renames the control, it does not move it"
@@ -88,12 +87,12 @@ class TestWhatAGitControlAnswersTo:
     def test_an_empty_label_is_kept_rather_than_replaced_by_the_start_point(self):
         """Only an unset label falls back - a caller that asked for no label gets no label."""
 
-        assert GitControlSource(ESM16_CONFIGS, PI_CONTROL_RELEASE, _label="").label == ""
+        assert GitControlSource(ESM16_CONFIGS, PI_CONTROL_RELEASE, label="").label == ""
 
     def test_the_provenance_is_the_two_coordinates_and_nothing_else(self):
         """It is written beside the results, so it has to be enough to clone the same control again."""
 
-        control = GitControlSource(ESM16_CONFIGS, PI_CONTROL_RELEASE, _directory="config", _label="piControl")
+        control = GitControlSource(ESM16_CONFIGS, PI_CONTROL_RELEASE, directory="config", label="piControl")
 
         assert control.provenance() == {"repository": ESM16_CONFIGS, "start_point": PI_CONTROL_RELEASE}
 
@@ -148,7 +147,7 @@ class TestWhatAnExistingDirectoryAnswersTo:
     def test_the_label_can_be_overridden(self, tmp_path):
         """A suite id says nothing to a reader of the plot, so a study may name it after the science."""
 
-        control = ExistingDirectoryControlSource(tmp_path / "u-dg768", _label="rAM3 trial")
+        control = ExistingDirectoryControlSource(tmp_path / "u-dg768", label="rAM3 trial")
 
         assert control.label == "rAM3 trial"
         assert control.directory == "u-dg768", "the override renames the control, it does not move it"
@@ -187,6 +186,19 @@ class TestBothSourcesAreValues:
         assert one == other
         assert len({one, other}) == 1, "and so group as one control"
         assert one != GitControlSource(ESM16_CONFIGS, "release-piControl-2.0")
+
+    def test_a_default_label_is_the_same_control_as_the_label_it_defaults_to(self):
+        """What is compared is what the control answers to, not whether its label was given or left to default."""
+
+        assert GitControlSource(ESM16_CONFIGS, PI_CONTROL_RELEASE) == GitControlSource(
+            ESM16_CONFIGS, PI_CONTROL_RELEASE, label=PI_CONTROL_RELEASE
+        )
+
+    def test_the_repr_shows_what_the_control_answers_to(self):
+        assert repr(GitControlSource(ESM16_CONFIGS, PI_CONTROL_RELEASE)) == (
+            f"GitControlSource(repository={ESM16_CONFIGS!r}, start_point={PI_CONTROL_RELEASE!r}, directory='config', "
+            f"label={PI_CONTROL_RELEASE!r})"
+        )
 
     def test_two_existing_directory_controls_compare_by_value(self, tmp_path):
         one = ExistingDirectoryControlSource(tmp_path / "u-dg768", revision="1234")
