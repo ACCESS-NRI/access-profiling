@@ -4,7 +4,8 @@
 import pytest
 
 from access.profiling import FMSProfilingParser
-from access.profiling.metrics import count, tavg, tmax, tmin, tstd
+from access.profiling.fms_parser import grain, pelist_max, pelist_min
+from access.profiling.metrics import count, pemax, pemin, tavg, tfrac, tmax, tmin, tstd
 
 
 @pytest.fixture(scope="module")
@@ -190,3 +191,106 @@ def test_fms_incorrect_profiling(tmp_path, fms_hits_parser, fms_incorrect_log_te
     fms_log_file.write_text(fms_incorrect_log_text)
     with pytest.raises(ValueError):
         fms_hits_parser.parse(fms_log_file)
+
+
+def write_log(tmp_path, text):
+    """Writes text to a log file under tmp_path, and returns its path."""
+    log = tmp_path / "fms.log"
+    log.write_text(text)
+    return log
+
+
+HEADER = (
+    "                                   hits          tmin          tmax          tavg          tstd  tfrac grain "
+    "pemin pemax\n"
+)
+FOOTER = " MPP_STACK high water mark=          0\n"
+
+
+def fms_row(name, hits=4, times=(1.0, 2.0, 1.5, 0.5), tfrac=0.01, grain=11, pemin=0, pemax=3):
+    """A row of the table above, written as FMS writes it, with the format (a32,i10,4f14.6,f7.3,3i6)."""
+    columns = f"{hits:10d}" + "".join(f"{time:14.6f}" for time in times) + f"{tfrac:7.3f}{grain:6d}{pemin:6d}{pemax:6d}"
+    return f"{name:32s}{columns}\n"
+
+
+def test_fms_pelist_bounds(tmp_path, fms_hits_parser, fms_nohits_parser, fms_hits_log_text, fms_nohits_log_text):
+    """The pemin and pemax columns are the bounds of each clock's PE list, which are not the PEs on which the
+    minimum and maximum times were recorded, so they are reported under metrics of their own."""
+    for parser, text, last_pe in [
+        (fms_nohits_parser, fms_nohits_log_text, 48),
+        (fms_hits_parser, fms_hits_log_text, 0),
+    ]:
+        stats = parser.parse(write_log(tmp_path, text))
+
+        assert set(stats[pelist_min]) == {0}
+        assert set(stats[pelist_max]) == {last_pe}
+        assert pemin not in stats and pemax not in stats
+        assert pemin not in parser.metrics and pemax not in parser.metrics
+
+
+def test_fms_hits_columns(tmp_path, fms_hits_parser, fms_hits_log_text):
+    """Every column of a row is read, the time fraction as a percentage."""
+    stats = fms_hits_parser.parse(write_log(tmp_path, fms_hits_log_text))
+
+    row = stats["region"].index("(Ocean tracer advection)")
+    assert [stats[metric][row] for metric in (count, grain, pelist_min, pelist_max)] == [48, 21, 0, 0]
+    assert stats[tfrac][row] == pytest.approx(4.4)
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["MOM6 step 2", "fms_io.write_restart", "Ocean grid generation and remap3", "(Ocean tracer #1) [x]", "42"],
+)
+def test_fms_any_clock_name(tmp_path, fms_hits_parser, name):
+    """A name may hold digits, full stops and anything else, and may end in a number, as long as it fits in the 32
+    characters FMS gives it."""
+    stats = fms_hits_parser.parse(write_log(tmp_path, HEADER + fms_row(name) + FOOTER))
+
+    assert stats["region"] == [name]
+    assert stats[count] == [4]
+    assert stats[tmax] == [2.0]
+    assert stats[pelist_max] == [3]
+
+
+@pytest.mark.parametrize(
+    "row",
+    [
+        fms_row("Ocean").rsplit(maxsplit=1)[0] + "\n",
+        fms_row("Ocean").replace("1.000000", "one"),
+        "WARNING from PE     3: something else entirely\n",
+    ],
+    ids=["missing column", "not a number", "not a row"],
+)
+def test_fms_unexpected_line(tmp_path, fms_hits_parser, row):
+    """A line of the table that is not a row is an error, rather than a clock silently left out."""
+    with pytest.raises(ValueError, match="Unexpected line in the FMS timings"):
+        fms_hits_parser.parse(write_log(tmp_path, HEADER + row + FOOTER))
+
+
+def test_fms_unfinished_table(tmp_path, fms_hits_parser, fms_hits_log_text):
+    """A table that the file ends in the middle of, as when a run is killed while writing it, is an error."""
+    truncated = fms_hits_log_text[: fms_hits_log_text.index("Ocean dynamics")]
+
+    with pytest.raises(ValueError, match="end before FMS finished writing them"):
+        fms_hits_parser.parse(write_log(tmp_path, truncated))
+
+
+def test_fms_messages_of_detailed_clocks(tmp_path, fms_hits_parser):
+    """The table of the messages of detailed clocks that FMS writes after the timings is not read."""
+    messages = (
+        "\n"
+        "                                       tmin       tmax       tavg       tstd       mmin       mmax       mavg"
+        "       mstd  mavg/tavg\n"
+        "Ocean SEND                           0.123      0.456      0.234      0.012  1.234E+05  2.345E+05  1.700E+05"
+        "  1.000E+03  7.265E+05\n"
+    )
+
+    stats = fms_hits_parser.parse(write_log(tmp_path, HEADER + fms_row("Ocean") + messages + FOOTER))
+
+    assert stats["region"] == ["Ocean"]
+
+
+def test_fms_hits_header_without_hits_parser(tmp_path, fms_nohits_parser, fms_hits_log_text):
+    """A table with a hits column is not one without, so a parser for the one finds no table in the other."""
+    with pytest.raises(ValueError, match="No FMS profiling data found"):
+        fms_nohits_parser.parse(write_log(tmp_path, fms_hits_log_text))

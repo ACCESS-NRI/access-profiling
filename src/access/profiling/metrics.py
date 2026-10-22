@@ -17,8 +17,7 @@ every call to it, and the timer then summarises those per-PE totals across the P
   PEs of the total time spent in the region.
 - `tfrac` is that mean as a fraction of the total runtime.
 - `count` is the number of times the region was entered.
-- `pemin` and `pemax` are the PEs on which the minimum and maximum times were recorded. FMS output is the
-  exception: its `pemin` and `pemax` columns hold the lowest and highest PE of the clock's PE list instead.
+- `pemin` and `pemax` are the PEs on which the minimum and maximum times were recorded.
 
 Logs that record one elapsed time per region rather than a distribution over PEs - Payu's job timings, the Cylc
 suite log and task database, and the UM's total walltime - store it as `tmax`.
@@ -105,9 +104,9 @@ tmin = ProfilingMetric("minimum time", Unit("second"), "Minimum across PEs of th
 tmax = ProfilingMetric("maximum time", Unit("second"), "Maximum across PEs of the total time spent in the region")
 """Maximum across PEs of the total time spent in the region, or the one elapsed time of logs that record no more."""
 pemin = ProfilingMetric("minimum PE", Unit("dimensionless"), "PE on which the minimum time was recorded")
-"""PE on which the minimum time was recorded. In FMS output, the lowest PE of the clock's PE list."""
+"""PE on which the minimum time was recorded."""
 pemax = ProfilingMetric("maximum PE", Unit("dimensionless"), "PE on which the maximum time was recorded")
-"""PE on which the maximum time was recorded. In FMS output, the highest PE of the clock's PE list."""
+"""PE on which the maximum time was recorded."""
 tavg = ProfilingMetric("average time", Unit("second"), "Mean across PEs of the total time spent in the region")
 """Mean across PEs of the total time spent in the region."""
 tmed = ProfilingMetric("median time", Unit("second"), "Median across PEs of the total time spent in the region")
