@@ -325,6 +325,91 @@ class TestParseStatus:
         assert manager.parse_status(tmp_path) == ProfilingExperimentStatus.DONE
 
 
+class TestKilledJobs:
+    """A run killed before Payu could record a verdict on it, told apart from one still going by asking PBS."""
+
+    JOB = "149764665.gadi-pbs"
+    WITHOUT_VERDICT = {"stage": "model-run", "scheduler_job_id": JOB, "scheduler_type": "pbs"}
+
+    @staticmethod
+    def reply(stdout="", returncode=0, stderr=""):
+        """What qstat answers, as subprocess.run returns it."""
+        return subprocess.CompletedProcess(args=["qstat"], returncode=returncode, stdout=stdout, stderr=stderr)
+
+    def job_in_state(self, state):
+        return self.reply(json.dumps({"Jobs": {self.JOB: {"job_state": state}}}))
+
+    @mock.patch("access.profiling.payu_manager.subprocess.run")
+    def test_a_finished_job_without_a_verdict_was_killed(self, mock_run, manager, tmp_path):
+        write_job_file(tmp_path, 0, self.WITHOUT_VERDICT)
+        mock_run.return_value = self.job_in_state("F")
+
+        assert manager.parse_status(tmp_path) == ProfilingExperimentStatus.FAILED
+        mock_run.assert_called_once_with(
+            ["qstat", "-x", "-f", "-F", "json", self.JOB], capture_output=True, text=True, timeout=60
+        )
+
+    @pytest.mark.parametrize("state", ["Q", "H", "R", "E"])
+    @mock.patch("access.profiling.payu_manager.subprocess.run")
+    def test_a_job_pbs_still_holds_is_running(self, mock_run, manager, tmp_path, state):
+        write_job_file(tmp_path, 0, self.WITHOUT_VERDICT)
+        mock_run.return_value = self.job_in_state(state)
+
+        assert manager.parse_status(tmp_path) == ProfilingExperimentStatus.RUNNING
+
+    @mock.patch("access.profiling.payu_manager.subprocess.run")
+    def test_a_job_pbs_no_longer_knows_was_killed(self, mock_run, manager, tmp_path):
+        """PBS forgets finished jobs once their history expires, and nothing is running them by then."""
+
+        write_job_file(tmp_path, 0, self.WITHOUT_VERDICT)
+        mock_run.return_value = self.reply(returncode=153, stderr=f"qstat: Unknown Job Id {self.JOB}\n")
+
+        assert manager.parse_status(tmp_path) == ProfilingExperimentStatus.FAILED
+
+    @pytest.mark.parametrize(
+        "error", [FileNotFoundError("qstat"), subprocess.TimeoutExpired(["qstat"], 60)], ids=["no qstat", "timeout"]
+    )
+    @mock.patch("access.profiling.payu_manager.subprocess.run")
+    def test_without_an_answer_the_run_is_taken_to_be_going(self, mock_run, manager, tmp_path, error):
+        write_job_file(tmp_path, 0, self.WITHOUT_VERDICT)
+        mock_run.side_effect = error
+
+        assert manager.parse_status(tmp_path) == ProfilingExperimentStatus.RUNNING
+
+    @mock.patch("access.profiling.payu_manager.subprocess.run")
+    def test_another_pbs_error_says_nothing_new(self, mock_run, manager, tmp_path):
+        write_job_file(tmp_path, 0, self.WITHOUT_VERDICT)
+        mock_run.return_value = self.reply(returncode=1, stderr="qstat: cannot connect to server gadi-pbs\n")
+
+        assert manager.parse_status(tmp_path) == ProfilingExperimentStatus.RUNNING
+
+    @pytest.mark.parametrize("stdout", ["not json", json.dumps({"Jobs": {"another.gadi-pbs": {"job_state": "F"}}})])
+    @mock.patch("access.profiling.payu_manager.subprocess.run")
+    def test_a_reply_that_cannot_be_read_says_nothing_new(self, mock_run, manager, tmp_path, stdout):
+        write_job_file(tmp_path, 0, self.WITHOUT_VERDICT)
+        mock_run.return_value = self.reply(stdout)
+
+        assert manager.parse_status(tmp_path) == ProfilingExperimentStatus.RUNNING
+
+    @pytest.mark.parametrize(
+        "job_info",
+        [{"stage": "model-run", "scheduler_job_id": JOB, "scheduler_type": "slurm"}, {"stage": "model-run"}],
+    )
+    @mock.patch("access.profiling.payu_manager.subprocess.run")
+    def test_only_a_pbs_job_is_asked_about(self, mock_run, manager, tmp_path, job_info):
+        write_job_file(tmp_path, 0, job_info)
+
+        assert manager.parse_status(tmp_path) == ProfilingExperimentStatus.RUNNING
+        mock_run.assert_not_called()
+
+    @mock.patch("access.profiling.payu_manager.subprocess.run")
+    def test_a_run_with_a_verdict_needs_no_question(self, mock_run, manager, tmp_path):
+        write_job_file(tmp_path, 0, self.WITHOUT_VERDICT | {"payu_run_status": 0})
+
+        assert manager.parse_status(tmp_path) == ProfilingExperimentStatus.DONE
+        mock_run.assert_not_called()
+
+
 class TestLatestAttempt:
     """Which attempt at a run counts, when a failure has been submitted again at the same run number.
 

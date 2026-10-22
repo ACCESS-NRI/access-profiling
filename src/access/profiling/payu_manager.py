@@ -543,8 +543,9 @@ class PayuManager(ProfilingManager[PayuConfiguration]):
         a run job never reaches the "exited" stage that collate and sync jobs end at.
 
         A run killed outright - a walltime limit, a node failure - never reaches that finally block, so its
-        job file stays at the stage it died in and this keeps reporting it as running. Telling that apart from
-        a run still going needs the scheduler, which this does not ask.
+        job file stays at the stage it died in. Telling that apart from a run still going needs the scheduler,
+        so a run without a verdict is reported failed when PBS says its job is over, and running otherwise,
+        including when the scheduler cannot be asked. See _job_is_over.
 
         Args:
             path (Path): Path to the Payu experiment directory.
@@ -559,7 +560,11 @@ class PayuManager(ProfilingManager[PayuConfiguration]):
 
         run_status = job_info.get("payu_run_status")
         if run_status is None:
-            # Still under way, as far as anything written down says.
+            # Nothing written down says the run is over, but a job killed before Payu could say so would read
+            # the same, so the scheduler is asked.
+            if self._job_is_over(job_info):
+                logger.debug(f"The job of the latest run of {path} is over, but Payu recorded no verdict on it.")
+                return ProfilingExperimentStatus.FAILED
             return ProfilingExperimentStatus.RUNNING
 
         if run_status == 0:
@@ -570,6 +575,49 @@ class PayuManager(ProfilingManager[PayuConfiguration]):
         model_status = job_info.get("payu_model_run_status")
         logger.debug(f"Payu reports run status {run_status} (model run status {model_status}) for {path}.")
         return ProfilingExperimentStatus.FAILED
+
+    @staticmethod
+    def _job_is_over(job_info: dict) -> bool:
+        """Returns whether the scheduler says the job a Payu job file records is over.
+
+        Only PBS is asked, with `qstat -x`, which also reports jobs that have finished. A job it reports in the
+        finished state is over, and so is one it no longer knows, its history having expired: either way, nothing
+        is still running it. A job in any other state - queued, held, running, exiting - is not over.
+
+        A job that cannot be asked about is taken not to be over either, so that its run reads as running, as
+        the job file alone says: a job file that names no PBS job, a machine without qstat, a qstat that does
+        not answer within a minute, or a reply that cannot be read. Those are logged at DEBUG.
+
+        Args:
+            job_info (dict): The parsed job file of a run.
+
+        Returns:
+            bool: True if PBS says the job is over, False otherwise.
+        """
+        job_id = job_info.get("scheduler_job_id")
+        if job_info.get("scheduler_type") != "pbs" or not job_id:
+            return False
+
+        try:
+            reply = subprocess.run(
+                ["qstat", "-x", "-f", "-F", "json", job_id], capture_output=True, text=True, timeout=60
+            )
+        except (OSError, subprocess.TimeoutExpired) as error:
+            logger.debug(f"Could not ask PBS about job {job_id}: {error}.")
+            return False
+
+        if reply.returncode != 0:
+            if "Unknown Job Id" in reply.stderr:
+                return True
+            logger.debug(f"PBS could not report on job {job_id}: {reply.stderr.strip()}")
+            return False
+
+        try:
+            state = json.loads(reply.stdout)["Jobs"][job_id]["job_state"]
+        except (json.JSONDecodeError, KeyError, TypeError) as error:
+            logger.debug(f"Could not read the state of job {job_id} from what PBS reported: {error!r}.")
+            return False
+        return state == "F"
 
     @staticmethod
     def _requested_ncpus(payu_config: dict) -> int:
