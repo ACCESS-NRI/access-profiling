@@ -121,9 +121,9 @@ class MockProfilingManager(ProfilingManager[MockConfiguration]):
         """Simulate parsing profiling data for a given path."""
         pass
 
-    def _delete_experiment(self, name, dry_run, **kwargs):
+    def _delete_experiments(self, names, dry_run, **kwargs):
         """Record requested deletions instead of touching the filesystem."""
-        self._deleted_experiments.append((name, dry_run))
+        self._deleted_experiments.append((names, dry_run))
 
     def _create_experiments(self, plans, **runner_options):
         """Record what generation decided, and register everything new."""

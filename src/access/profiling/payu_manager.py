@@ -336,9 +336,11 @@ class PayuManager(ProfilingManager[PayuConfiguration]):
             experiments (list[str] | None): List of experiments (branches) to delete.
             all_experiments (bool): If True, deletes all experiments managed by this instance.
             dry_run (bool): If True, performs a dry run without deleting files. Defaults to False.
-            remove_repo_dir (bool): If True, removes the base repository directory if no branches are using it.
+            remove_repo_dir (bool): If True, also removes the clone of the control under the working directory,
+                which holds the branch of every experiment. It is kept anyway while an experiment left after the
+                deletion is NEW, RUNNING or FAILED, and so may still be run from it.
         """
-        # remove_repo_dir would already be forwarded to _delete_experiment via the base class **kwargs, but this
+        # remove_repo_dir would already be forwarded to _delete_experiments via the base class **kwargs, but this
         # override declares it explicitly so it stays a documented, discoverable and typo-checked argument of the
         # public Payu API rather than a hidden keyword convention. That deliberately narrows the base method,
         # which accepts any keyword: widening it back would let a misspelled one through to be swallowed, so
@@ -350,16 +352,47 @@ class PayuManager(ProfilingManager[PayuConfiguration]):
             remove_repo_dir=remove_repo_dir,
         )
 
-    def _delete_experiment(self, name: str, dry_run: bool, remove_repo_dir: bool = False, **kwargs) -> None:
-        """Deletes a single Payu experiment (branch) via the experiment runner.
+    def _delete_experiments(self, names: list[str], dry_run: bool, remove_repo_dir: bool = False, **kwargs) -> None:
+        """Deletes Payu experiments (branches) via the experiment runner, in a single call to it.
+
+        The clone of the control under the working directory holds the branch of every experiment, and the
+        runner clones each experiment's own directory from it and pulls corrections from it when it submits an
+        experiment again. An experiment that may still be run therefore needs it: a NEW one, whose branch is
+        nowhere else, and a RUNNING or FAILED one, which may have to be run again. So remove_repo_dir is only
+        passed on to the runner when no experiment left after the deletion is one of those, and the statuses
+        are brought up to date first, since a run may have finished since they were last looked at. Finished
+        experiments do not need the clone, their directories being clones of their own.
+
+        The experiments left are not given to the runner as its running_branches: it would take each of them
+        to need the clone for as long as its directory exists, finished or not.
 
         Args:
-            name (str): Name of the experiment (branch) to delete.
+            names (list[str]): Names of the experiments (branches) to delete.
             dry_run (bool): If True, performs a dry run without deleting files.
-            remove_repo_dir (bool): If True, removes the base repository directory if no branches are using it.
+            remove_repo_dir (bool): If True, also removes the clone of the control, unless an experiment left
+                after the deletion may still be run from it. Which ones keep it are logged at INFO.
             **kwargs: Ignored. Accepted so that this stays substitutable for the base method, whose callers
                 may pass options other runners take.
         """
+        if remove_repo_dir:
+            self.update_statuses()
+            still_to_run = {
+                ProfilingExperimentStatus.NEW,
+                ProfilingExperimentStatus.RUNNING,
+                ProfilingExperimentStatus.FAILED,
+            }
+            needing = [
+                f"'{name}' ({exp.status.name})"
+                for name, exp in self.experiments.items()
+                if name not in names and exp.status in still_to_run
+            ]
+            if needing:
+                logger.info(
+                    f"Keeping the clone of the control in '{self.work_dir / self._repository_directory}', which "
+                    f"experiments that may still be run need: {', '.join(needing)}."
+                )
+                remove_repo_dir = False
+
         runner_config = {
             "test_path": self.work_dir,
             "repository_directory": self._repository_directory,
@@ -368,7 +401,7 @@ class PayuManager(ProfilingManager[PayuConfiguration]):
         runner = ExperimentRunner(runner_config)
 
         runner.delete_experiments(
-            branches=[name],
+            branches=names,
             hard=True,
             dry_run=dry_run,
             remove_repo_dir=remove_repo_dir,

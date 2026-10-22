@@ -1461,7 +1461,7 @@ def test_delete_experiments_rejects_unmanaged_experiments(mock_experiment_runner
 
 @mock.patch("access.profiling.payu_manager.ExperimentRunner")
 def test_delete_experiments_valid_experiments(mock_experiment_runner, manager):
-    """delete_experiments deletes each selected branch individually via ExperimentRunner."""
+    """delete_experiments deletes the selected branches, in the order given, in a single call to ExperimentRunner."""
     manager.experiments.clear()
     manager.experiments["branch1"] = mock.MagicMock(status=ProfilingExperimentStatus.NEW, path=Path("branch1"))
     manager.experiments["branch2"] = mock.MagicMock(status=ProfilingExperimentStatus.NEW, path=Path("branch2"))
@@ -1469,32 +1469,13 @@ def test_delete_experiments_valid_experiments(mock_experiment_runner, manager):
 
     runner = mock_experiment_runner.return_value
 
-    manager.delete_experiments(experiments=["branch3", "branch1"])
+    manager.delete_experiments(experiments=["branch3", "branch1", "branch3"])
 
-    mock_experiment_runner.assert_called_with({"test_path": manager.work_dir, "repository_directory": "config"})
-
-    assert runner.delete_experiments.call_count == 2
-    deleted_branches = set()
-    for _, kwargs in runner.delete_experiments.call_args_list:
-        assert len(kwargs["branches"]) == 1
-        deleted_branches.add(kwargs["branches"][0])
-        assert kwargs["dry_run"] is False
-        assert kwargs["remove_repo_dir"] is False
-    assert deleted_branches == {"branch3", "branch1"}
-
-
-@mock.patch("access.profiling.payu_manager.ExperimentRunner")
-def test_delete_experiments_forwards_remove_repo_dir(mock_experiment_runner, manager):
-    """delete_experiments forwards remove_repo_dir to the runner for each branch."""
-    manager.experiments.clear()
-    manager.experiments["branch1"] = mock.MagicMock(status=ProfilingExperimentStatus.NEW, path=Path("branch1"))
-
-    runner = mock_experiment_runner.return_value
-
-    manager.delete_experiments(experiments=["branch1"], remove_repo_dir=True)
-
-    _, kwargs = runner.delete_experiments.call_args
-    assert kwargs["remove_repo_dir"] is True
+    mock_experiment_runner.assert_called_once_with({"test_path": manager.work_dir, "repository_directory": "config"})
+    runner.delete_experiments.assert_called_once_with(
+        branches=["branch3", "branch1"], hard=True, dry_run=False, remove_repo_dir=False
+    )
+    assert set(manager.experiments) == {"branch2"}
 
 
 @mock.patch("access.profiling.payu_manager.ExperimentRunner")
@@ -1507,6 +1488,8 @@ def test_delete_experiments_dry_run_does_not_modify_state(mock_experiment_runner
     manager.delete_experiments(experiments=["branch1"], dry_run=True)
 
     assert set(manager.experiments.keys()) == {"branch1", "branch2"}
+    _, kwargs = mock_experiment_runner.return_value.delete_experiments.call_args
+    assert kwargs["dry_run"] is True
 
 
 @mock.patch("access.profiling.payu_manager.ExperimentRunner")
@@ -1519,3 +1502,94 @@ def test_delete_experiments_non_dry_run_removes_from_state(mock_experiment_runne
     manager.delete_experiments(experiments=["branch1"], dry_run=False)
 
     assert set(manager.experiments.keys()) == {"branch2"}
+
+
+class TestDeletingTheControlClone:
+    """remove_repo_dir removes the clone of the control only once no experiment left may still be run from it.
+
+    The clone holds the branch of every experiment, and the runner clones the experiments' own directories from it
+    and pulls corrections from it on resubmission, so the runner left to itself would have removed it while
+    experiments still needed it.
+    """
+
+    @staticmethod
+    def manager_holding(tmp_path, statuses):
+        """A manager under tmp_path holding an experiment of each of the given statuses, keyed by name."""
+        manager = PayuManager(tmp_path, tmp_path / "archive", MockPayuConfiguration(), MOCK_CONTROL)
+        for name, status in statuses.items():
+            manager.experiments[name] = ProfilingExperiment(path=tmp_path / name / "config")
+            manager.experiments[name].status = status
+        return manager
+
+    @pytest.mark.parametrize(
+        "status",
+        [ProfilingExperimentStatus.NEW, ProfilingExperimentStatus.RUNNING, ProfilingExperimentStatus.FAILED],
+        ids=lambda status: status.name,
+    )
+    @mock.patch("access.profiling.payu_manager.ExperimentRunner")
+    def test_an_experiment_that_may_still_be_run_keeps_it(self, mock_runner, tmp_path, caplog, status):
+        manager = self.manager_holding(tmp_path, {"deleted": ProfilingExperimentStatus.DONE, "left": status})
+
+        with caplog.at_level(logging.INFO, logger="access.profiling.payu_manager"):
+            manager.delete_experiments(experiments=["deleted"], remove_repo_dir=True)
+
+        mock_runner.return_value.delete_experiments.assert_called_once_with(
+            branches=["deleted"], hard=True, dry_run=False, remove_repo_dir=False
+        )
+        assert f"Keeping the clone of the control in '{tmp_path / 'config'}'" in caplog.text
+        assert f"'left' ({status.name})" in caplog.text
+
+    @pytest.mark.parametrize(
+        "left",
+        [{}, {"done": ProfilingExperimentStatus.DONE, "archived": ProfilingExperimentStatus.ARCHIVED}],
+        ids=["nothing left", "only finished experiments left"],
+    )
+    @mock.patch("access.profiling.payu_manager.ExperimentRunner")
+    def test_with_none_left_it_goes(self, mock_runner, tmp_path, left):
+        """What the deleted experiments were does not matter, only what is left."""
+        manager = self.manager_holding(tmp_path, {"deleted": ProfilingExperimentStatus.NEW} | left)
+
+        manager.delete_experiments(experiments=["deleted"], remove_repo_dir=True)
+
+        mock_runner.return_value.delete_experiments.assert_called_once_with(
+            branches=["deleted"], hard=True, dry_run=False, remove_repo_dir=True
+        )
+
+    @mock.patch("access.profiling.payu_manager.ExperimentRunner")
+    def test_a_run_finished_since_it_was_last_looked_at_does_not_keep_it(self, mock_runner, tmp_path):
+        manager = self.manager_holding(
+            tmp_path, {"deleted": ProfilingExperimentStatus.DONE, "finished": ProfilingExperimentStatus.RUNNING}
+        )
+        write_job_file(tmp_path / "finished" / "config", 0, {"stage": "model-run", "payu_run_status": 0})
+
+        manager.delete_experiments(experiments=["deleted"], remove_repo_dir=True)
+
+        assert manager.experiments["finished"].status == ProfilingExperimentStatus.DONE
+        _, kwargs = mock_runner.return_value.delete_experiments.call_args
+        assert kwargs["remove_repo_dir"] is True
+
+    @mock.patch("experiment_runner.experiment_runner.subprocess.run")
+    def test_through_the_runner(self, mock_sweep, tmp_path):
+        """The clone outlives the deletion of a finished experiment while a NEW one, which has no directory of its
+        own yet, is left, and goes with the last of them. A dry run removes nothing."""
+        manager = self.manager_holding(
+            tmp_path, {"finished": ProfilingExperimentStatus.DONE, "new": ProfilingExperimentStatus.NEW}
+        )
+        clone = tmp_path / "config"
+        clone.mkdir()
+        (tmp_path / "finished" / "config").mkdir(parents=True)
+
+        manager.delete_experiments(all_experiments=True, dry_run=True, remove_repo_dir=True)
+        assert clone.is_dir() and (tmp_path / "finished").is_dir()
+        mock_sweep.assert_not_called()
+
+        manager.delete_experiments(experiments=["finished"], remove_repo_dir=True)
+        assert clone.is_dir()
+        assert not (tmp_path / "finished").exists()
+        mock_sweep.assert_called_once_with(
+            ["payu", "sweep", "--hard"], cwd=tmp_path / "finished" / "config", check=True, text=True
+        )
+
+        manager.delete_experiments(experiments=["new"], remove_repo_dir=True)
+        assert not clone.exists()
+        assert manager.experiments == {}

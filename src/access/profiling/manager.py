@@ -634,15 +634,17 @@ class ProfilingManager(ABC, Generic[AppT]):
             logger.warning(f"Experiment '{name}' not found; cannot delete.")
 
     @abstractmethod
-    def _delete_experiment(self, name: str, dry_run: bool, **kwargs) -> None:
-        """Deletes the on-disk artifacts of a single experiment.
+    def _delete_experiments(self, names: list[str], dry_run: bool, **kwargs) -> None:
+        """Deletes the on-disk artifacts of the experiments selected for deletion.
 
         This is the runner-specific counterpart to delete_experiments, which handles selection, validation and
-        manager-state bookkeeping. Implementations should only remove files and, when dry_run is True, log what would
-        be removed without making any changes.
+        manager-state bookkeeping. The whole selection comes at once, and while this runs the manager still holds
+        every experiment, so that what the selected ones share with the rest can be told apart. Implementations
+        should only remove files and, when dry_run is True, log what would be removed without making any changes.
 
         Args:
-            name (str): Name of the experiment to delete. Guaranteed to be managed by this instance.
+            names (list[str]): Names of the experiments to delete, at least one. Guaranteed to be managed by this
+                instance.
             dry_run (bool): If True, log what would be deleted without making any changes.
             **kwargs: Runner-specific options forwarded verbatim from delete_experiments.
         """
@@ -657,13 +659,13 @@ class ProfilingManager(ABC, Generic[AppT]):
         """Deletes experiments and removes them from the manager.
 
         The selection, validation and manager-state bookkeeping are handled here, while the actual on-disk deletion is
-        delegated to the runner-specific _delete_experiment method.
+        delegated to the runner-specific _delete_experiments method.
 
         Args:
             experiments (list[str] | None): List of experiment names to delete.
             all_experiments (bool): If True, deletes all experiments managed by this instance.
             dry_run (bool): If True, logs what would be deleted without making any changes. Defaults to False.
-            **kwargs (Any): Runner-specific options forwarded to _delete_experiment.
+            **kwargs (Any): Runner-specific options forwarded to _delete_experiments.
 
         Raises:
             ValueError: If both experiments and all_experiments are specified, or neither is.
@@ -674,16 +676,17 @@ class ProfilingManager(ABC, Generic[AppT]):
         if not all_experiments and not experiments:
             raise ValueError("No experiments specified. Pass either experiments=[...] or all_experiments=True.")
         existing = set(self.experiments.keys())
-        names_to_delete = existing if all_experiments else set(experiments or ())
-        unmanaged = names_to_delete - existing
+        names_to_delete = list(self.experiments) if all_experiments else list(dict.fromkeys(experiments or ()))
+        unmanaged = set(names_to_delete) - existing
         if unmanaged:
             raise KeyError(
                 f"Experiments {unmanaged} are not managed by this manager "
                 f"(existing: {existing}). Please check the names and try again."
             )
+        if not names_to_delete:
+            return
 
-        for name in names_to_delete:
-            self._delete_experiment(name, dry_run=dry_run, **kwargs)
+        self._delete_experiments(names_to_delete, dry_run=dry_run, **kwargs)
 
         if dry_run:
             return
