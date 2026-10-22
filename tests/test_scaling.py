@@ -90,6 +90,65 @@ def test_parallel_efficiency(simple_scaling_data):
     assert eff.sel(ncpus=4, region="Region 2").values == pytest.approx(50 * ureg.percent)
 
 
+class TestAnotherXCoordinate:
+    """Speedup and efficiency are taken along the coordinate the data is plotted against, not always ncpus."""
+
+    @staticmethod
+    def along(dim, values, times, **coords):
+        """One region's times along the given dimension, with further coordinates along it."""
+        return xr.Dataset(
+            {tavg: xr.DataArray([times], dims=["region", dim]).pint.quantify("seconds")},
+            coords={"region": ["Region 1"], dim: values} | {name: (dim, value) for name, value in coords.items()},
+        )
+
+    def test_a_dimension_other_than_ncpus(self):
+        stats = self.along("nodes", [1, 2, 4], [100.0, 50.0, 40.0])
+
+        speedup = parallel_speedup(stats, tavg, xcoordinate="nodes").pint.dequantify()
+        efficiency = parallel_efficiency(stats, tavg, xcoordinate="nodes").pint.dequantify()
+
+        assert list(speedup.sel(region="Region 1").values) == pytest.approx([1.0, 2.0, 2.5])
+        assert list(efficiency.sel(region="Region 1").values) == pytest.approx([100.0, 100.0, 62.5])
+
+    def test_a_coordinate_along_ncpus(self):
+        """The cores of one component, say, which do not grow in proportion to the job's."""
+        stats = self.along("ncpus", [100, 200, 400], [100.0, 50.0, 40.0], ocean_cores=[20, 40, 100])
+
+        efficiency = parallel_efficiency(stats, tavg, xcoordinate="ocean_cores").pint.dequantify()
+
+        assert list(efficiency.sel(region="Region 1").values) == pytest.approx([100.0, 100.0, 50.0])
+
+    def test_the_speedup_is_relative_to_the_smallest_value(self):
+        stats = self.along("nodes", [4, 1, 2], [40.0, 100.0, 50.0])
+
+        speedup = parallel_speedup(stats, tavg, xcoordinate="nodes").pint.dequantify()
+
+        assert list(speedup.sel(region="Region 1").values) == pytest.approx([2.5, 1.0, 2.0])
+
+    @mock.patch("matplotlib.pyplot.show", autospec=True)
+    def test_the_plots_follow_it(self, mock_plt):
+        stats = self.along("nodes", [1, 2, 4], [100.0, 50.0, 40.0])
+
+        fig = plot_scaling_metrics([stats], tavg, xcoordinate="nodes")
+
+        efficiency_line = next(line for line in fig.axes[1].get_lines() if line.get_label() == "Region 1")
+        assert list(efficiency_line.get_ydata()) == pytest.approx([100.0, 100.0, 62.5])
+
+
+@mock.patch("matplotlib.pyplot.show", autospec=True)
+def test_plot_scaling_metrics_whatever_the_order_of_the_dimensions(mock_plt, simple_scaling_data):
+    """Regions are picked by name, so data with region first plots and tabulates the same as with ncpus first."""
+    fig = plot_scaling_metrics([simple_scaling_data.transpose("region", "ncpus")], tavg)
+
+    rows = fig.axes[2].tables[0].get_celld()
+    assert [rows[(1, column)].get_text().get_text() for column in range(4)] == [
+        "Region 1",
+        "600365.00",
+        "300182.50",
+        "300182.50",
+    ]
+
+
 def test_incorrect_units(simple_scaling_data):
     """Test calculation with incorrect units."""
     with pytest.raises(ValueError):

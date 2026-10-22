@@ -113,10 +113,10 @@ def calculate_column_widths(table_data: list[list], first_col_fraction: float | 
             its content, the first column's included. Must be between 0.0 (inclusive) and 1.0 (exclusive).
 
     Returns:
-        list : Column width fractions, adding up to 1.
+        list : Column width fractions, adding up to 1. An empty table has no columns, and gives an empty list.
 
     Raises:
-        ValueError: If table_data has fewer than 2 rows or 2 columns.
+        ValueError: If table_data has a single row, or fewer than 2 columns.
         ValueError: If table_data shape is not rectangular, i.e., all rows do not have the same number of columns.
         ValueError: If first_col_fraction is not between 0.0 (inclusive) and 1.0 (exclusive).
     """

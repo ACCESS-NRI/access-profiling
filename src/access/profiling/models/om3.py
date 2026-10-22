@@ -302,9 +302,10 @@ class OM3Configuration(PayuConfiguration):
                     "CICE6", log_at("log/ice.log"), CICE5ProfilingParser(), component=OM3_SEA_ICE_NAME, optional=True
                 )
             )
-        # The name ESMF gives its summary when ESMF_RUNTIME_PROFILE_OUTPUT is SUMMARY. This has not been
-        # checked against an ACCESS-OM3 archive; the log is optional, so a wrong name costs the ESMF timings
-        # rather than the whole parse.
+        # The name ESMF gives its summary when ESMF_RUNTIME_PROFILE_OUTPUT is SUMMARY, at the top of the output
+        # directory Payu archives a run to. That is where the ACCESS-OM3 25 km scaling study of
+        # access-model-scaling (commit 2108c21) read its ESMF timings from. The log is optional, since a run
+        # without those settings writes none.
         specs.append(LogSpec("ESMF", log_at("ESMF_Profile.summary"), ESMFSummaryProfilingParser(), optional=True))
         return tuple(specs)
 

@@ -22,6 +22,7 @@ total pipeline walltime.
 
 import os
 import sqlite3
+from contextlib import closing
 from datetime import datetime
 from pathlib import Path
 
@@ -44,13 +45,14 @@ class CylcProfilingParser(ProfilingParser):
             dict: Parsed timing information.
 
         Raises:
-            ValueError: when the last line does not contain "DONE", or when the first or the last line does not
-                start with a valid timestamp.
-            IndexError: when the file is empty.
+            ValueError: when the file is empty, when the last line does not contain "DONE", or when the first or
+                the last line does not start with a valid timestamp.
             TypeError: If file_path cannot be converted to a valid Path object.
             FileNotFoundError: If file_path doesn't exist or isn't a file.
         """
         lines = _read_text_file(file_path).splitlines()
+        if not lines:
+            raise ValueError(f"Cylc log {file_path} is empty.")
 
         first_line = lines[0]
         last_line = lines[-1]
@@ -97,7 +99,8 @@ class CylcDBReader(ProfilingParser):
 
         dbpath = _test_file(file_path)
 
-        with sqlite3.connect(dbpath) as con:
+        # A connection used as a context manager only ends a transaction, so it is closed explicitly.
+        with closing(sqlite3.connect(dbpath)) as con:
             cur = con.cursor()
 
             # collect and validate table columns . Return type: list of tuples

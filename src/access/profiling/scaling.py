@@ -13,12 +13,16 @@ from access.profiling.metrics import ProfilingMetric
 from access.profiling.plotting_utils import calculate_column_widths
 
 
-def parallel_speedup(stats: xr.Dataset, metric: ProfilingMetric) -> xr.DataArray:
+def parallel_speedup(stats: xr.Dataset, metric: ProfilingMetric, xcoordinate: str = "ncpus") -> xr.DataArray:
     """Calculates the parallel speedup from scaling data.
+
+    The speedup is relative to the point where xcoordinate is smallest. xcoordinate may be a dimension of the data
+    or any other coordinate along one, such as a number of nodes kept along the CPUs.
 
     Args:
         stats (Dataset): Scaling data, stored as a xarray dataset.
         metric (ProfilingMetric): Metric to use for the speedup calculation.
+        xcoordinate (str): The coordinate the data scales along, e.g. "ncpus" (the default).
 
     Returns:
         DataArray: Parallel speedup.
@@ -28,23 +32,28 @@ def parallel_speedup(stats: xr.Dataset, metric: ProfilingMetric) -> xr.DataArray
     """
     if stats[metric].pint.dimensionality != "[time]":
         raise ValueError("Metric units must be time (e.g., seconds)!")
-    speedup = stats[metric].sel(ncpus=stats["ncpus"].min()) / stats[metric]
+    x = stats[xcoordinate]
+    (dim,) = x.dims
+    speedup = stats[metric].isel({dim: int(x.argmin(dim))}, drop=True) / stats[metric]
     speedup.name = "speedup"
     return speedup
 
 
-def parallel_efficiency(stats: xr.Dataset, metric: ProfilingMetric) -> xr.DataArray:
+def parallel_efficiency(stats: xr.Dataset, metric: ProfilingMetric, xcoordinate: str = "ncpus") -> xr.DataArray:
     """Calculates the parallel efficiency from scaling data.
 
     Args:
         stats (Dataset): Scaling data, stored as a xarray dataset.
         metric (ProfilingMetric): Metric to use for the efficiency calculation.
+        xcoordinate (str): The coordinate the data scales along, e.g. "ncpus" (the default). See
+            parallel_speedup.
 
     Returns:
         DataArray: Parallel efficiency.
     """
-    speedup = parallel_speedup(stats, metric)
-    eff = speedup * (speedup.ncpus.min() / speedup.ncpus)
+    speedup = parallel_speedup(stats, metric, xcoordinate)
+    x = stats[xcoordinate]
+    eff = speedup * (x.min() / x)
     eff = eff.pint.to("percent")
     eff.name = "parallel efficiency"
     return eff
@@ -101,19 +110,20 @@ def plot_scaling_metrics(
     tbl = [[xlabel if xlabel is not None else xcoordinate] + list(reference[xcoordinate].values)]  # first row
     for stat in stats:
         # calculate efficiency and speedup
-        efficiency = parallel_efficiency(stat, metric)
-        speedup = parallel_speedup(stat, metric)
+        efficiency = parallel_efficiency(stat, metric, xcoordinate)
+        speedup = parallel_speedup(stat, metric, xcoordinate)
 
-        # plots speedup and efficiency on their respective axes.
+        # plots speedup and efficiency on their respective axes. Regions are selected by name, whichever order
+        # the dimensions of the data come in.
         for region in stat.region.values:
-            speedup.loc[region, :].plot.line(x=xcoordinate, ax=ax1, marker="o", label=region)
-            efficiency.loc[region, :].plot.line(x=xcoordinate, ax=ax2, marker="o", label=region)
+            speedup.sel(region=region).plot.line(x=xcoordinate, ax=ax1, marker="o", label=region)
+            efficiency.sel(region=region).plot.line(x=xcoordinate, ax=ax2, marker="o", label=region)
             # find max efficiency for setting efficiency axis
             # pint compares a bare number against a percent Quantity's fractional (base-unit) magnitude rather
             # than its percent magnitude, so dequantify first or values above 100% get silently dropped.
-            max_eff = max(max_eff, float(efficiency.loc[region, :].max().pint.dequantify()))
+            max_eff = max(max_eff, float(efficiency.sel(region=region).max().pint.dequantify()))
 
-            tbl.append([region] + [f"{val:.2f}" for val in stat[metric].loc[:, region].pint.dequantify().values])
+            tbl.append([region] + [f"{val:.2f}" for val in stat[metric].sel(region=region).pint.dequantify().values])
 
     # ideal speedup/scaling
     minx = reference[xcoordinate].values.min()
