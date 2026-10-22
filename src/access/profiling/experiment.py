@@ -11,6 +11,7 @@ has touched it.
 """
 
 import logging
+import os
 import tarfile
 import tempfile
 from contextlib import contextmanager
@@ -160,12 +161,28 @@ class ProfilingExperimentStatus(Enum):
     ARCHIVED = 5
 
 
+def _target_inside(link: Path, root: Path) -> Path | None:
+    """Returns where a symlink points relative to the directory being archived, if it points inside it.
+
+    Args:
+        link (Path): The symlink.
+        root (Path): The directory being archived.
+
+    Returns:
+        Path | None: The target of the link relative to root, or None if the target is outside root.
+    """
+    target = link.resolve()
+    real_root = root.resolve()
+    return target.relative_to(real_root) if target.is_relative_to(real_root) else None
+
+
 def experiment_directory_walker(path: Path, arcname: Path, root: Path, follow_symlinks: bool = False):
     """Walks through the experiment directory, yielding files and corresponding names in the archive.
 
     Symlinks are treated in a special manner.
 
-    - if the target is inside the experiment directory, the symlink itself is always returned
+    - if the target is inside the experiment directory, the symlink itself is always returned, whether the target
+      is a file or a directory, so that what it points to is archived once, where it is
     - if follow_symlinks is True and the target is a directory, then all the contents of the target directory are
       recursively iterated
     - if follow_symlinks is True and the target is a file, then the target file name is returned, not the symlink
@@ -182,8 +199,9 @@ def experiment_directory_walker(path: Path, arcname: Path, root: Path, follow_sy
         Tuple[Path, Path]: A tuple containing the file path and its archive name.
     """
     if path.is_symlink():
-        if not follow_symlinks:
-            # Add symlink itself without following
+        if not follow_symlinks or _target_inside(path, root) is not None:
+            # Add symlink itself without following: what a symlink inside the experiment points to is archived
+            # where it is
             yield path, arcname
         else:
             target = path.resolve()
@@ -193,9 +211,6 @@ def experiment_directory_walker(path: Path, arcname: Path, root: Path, follow_sy
                     yield from experiment_directory_walker(
                         child, Path(arcname) / child.name, root, follow_symlinks=follow_symlinks
                     )
-            elif target.absolute().is_relative_to(root.absolute()):
-                # Target is within the experiment directory, so add symlink as is
-                yield path, arcname
             else:
                 # Target is outside the experiment directory, add the target file instead
                 yield target, arcname
@@ -337,10 +352,11 @@ class ProfilingExperiment:
 
         Only experiments with status DONE will be archived. No error will be raised if the experiment is not DONE.
 
-        Symlinks to files and directories inside the experiment directory will be included as symlinks. Symlinks to
-        files and directories outside the experiment directory will be followed if follow_symlinks is True, otherwise
-        they will be included as symlinks. path contents are stored under experiment/ in the archive. If
-        run_path is set, its contents are stored under runs/ in the archive.
+        Symlinks to files and directories inside the experiment directory will be included as symlinks, pointing
+        to their targets relative to where they are in the archive, so that they still point at them once the archive
+        is extracted. Symlinks to files and directories outside the experiment directory will be followed if
+        follow_symlinks is True, otherwise they will be included as symlinks. path contents are stored under
+        experiment/ in the archive. If run_path is set, its contents are stored under runs/ in the archive.
 
         Args:
             archive_path (Path): Path to the archive destination. This should include the file name, but without
@@ -383,7 +399,15 @@ class ProfilingExperiment:
                     if any(file.match(pat) for pat in exclude_files):
                         continue
                     logger.debug(f"Archiving file: {file} as {arcname}")
-                    tar.add(file, arcname=arcname)
+                    inside = _target_inside(file, root) if file.is_symlink() else None
+                    if inside is None:
+                        tar.add(file, arcname=arcname)
+                        continue
+                    # Rewritten relative to the link's place in the archive, which also keeps it extractable at all:
+                    # the data filter directory() extracts with refuses a link to an absolute path.
+                    link = tar.gettarinfo(file, arcname=str(arcname))
+                    link.linkname = os.path.relpath(prefix / inside, arcname.parent)
+                    tar.addfile(link)
 
         self.status = ProfilingExperimentStatus.ARCHIVED
         self.path = archive_file

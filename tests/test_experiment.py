@@ -8,7 +8,12 @@ from unittest import mock
 
 import pytest
 
-from access.profiling.experiment import ProfilingExperiment, ProfilingExperimentStatus, ProfilingLog
+from access.profiling.experiment import (
+    ProfilingExperiment,
+    ProfilingExperimentStatus,
+    ProfilingLog,
+    experiment_directory_walker,
+)
 from access.profiling.metrics import tavg, tmax
 
 
@@ -280,7 +285,8 @@ def setup_experiment_directory():
             root (Path): Root temporary directory.
             follow_symlinks (bool): Whether archiving will follow symlinks.
         Returns:
-            tuple: (list of files expected to be archived, list of all files in the experiment)
+            tuple: (list of files expected to be added to the archive, list of the symlinks inside the experiment,
+                which are kept as links relative to where they are)
         """
         # Create directories
         for dir in [
@@ -327,20 +333,27 @@ def setup_experiment_directory():
         links_out = [Path("exp1/another.log"), Path("exp1/archive")]
 
         if follow_symlinks:
-            # Return files inside and outside experiment directory, plus links pointing to files inside
-            return files_in + files_out + links_in
+            # Return files inside and outside experiment directory, and links pointing to files inside
+            return files_in + files_out, links_in
         else:
-            # Return files inside the experiment directory, plus links pointing to files inside and outside
-            return files_in + links_in + links_out
+            # Return files inside the experiment directory plus links pointing outside, and links pointing inside
+            return files_in + links_out, links_in
 
     return _setup_experiment_directory
+
+
+def assert_links_kept(mock_tarfile, root, links):
+    """Asserts that every symlink inside the experiment was added as a link relative to where it is."""
+    assert mock_tarfile.addfile.call_count == len(links)
+    for link in links:
+        mock_tarfile.gettarinfo.assert_any_call(root / link, arcname=str(Path("experiment") / link.relative_to("exp1")))
 
 
 @mock.patch("access.profiling.experiment.tarfile.open")
 def test_profiling_experiment_archive(mock_open, tmp_path, setup_experiment_directory):
     """Test the archive method of ProfilingExperiment whithout following symlinks."""
 
-    files = setup_experiment_directory(tmp_path, follow_symlinks=False)
+    files, links = setup_experiment_directory(tmp_path, follow_symlinks=False)
 
     # Setup mock TarFile with context manager
     mock_tarfile = mock.MagicMock()
@@ -365,13 +378,14 @@ def test_profiling_experiment_archive(mock_open, tmp_path, setup_experiment_dire
         else:
             arcname = Path("experiment") / file
         mock_tarfile.add.assert_any_call(tmp_path / file, arcname=arcname)
+    assert_links_kept(mock_tarfile, tmp_path, links)
 
 
 @mock.patch("access.profiling.experiment.tarfile.open")
 def test_profiling_experiment_archive_follow_symlinks(mock_open, tmp_path, setup_experiment_directory):
     """Test the archive method of ProfilingExperiment when following symlinks."""
 
-    files = setup_experiment_directory(tmp_path, follow_symlinks=True)
+    files, links = setup_experiment_directory(tmp_path, follow_symlinks=True)
 
     # Setup mock TarFile with context manager
     mock_tarfile = mock.MagicMock()
@@ -396,13 +410,14 @@ def test_profiling_experiment_archive_follow_symlinks(mock_open, tmp_path, setup
         else:
             arcname = Path("experiment") / file
         mock_tarfile.add.assert_any_call(tmp_path / file, arcname=arcname)
+    assert_links_kept(mock_tarfile, tmp_path, links)
 
 
 @mock.patch("access.profiling.experiment.tarfile.open")
 def test_profiling_experiment_archive_with_filters(mock_open, tmp_path, setup_experiment_directory):
     """Test the archive method of ProfilingExperiment with exclude patterns."""
 
-    files = setup_experiment_directory(tmp_path, follow_symlinks=True)
+    files, links = setup_experiment_directory(tmp_path, follow_symlinks=True)
     files_to_archive = []
     for file in files:
         # Exclude files that match the exclude patterns
@@ -439,6 +454,7 @@ def test_profiling_experiment_archive_with_filters(mock_open, tmp_path, setup_ex
         else:
             arcname = Path("experiment") / file
         mock_tarfile.add.assert_any_call(tmp_path / file, arcname=arcname)
+    assert_links_kept(mock_tarfile, tmp_path, links)
 
 
 @mock.patch("access.profiling.experiment.tarfile.open")
@@ -475,3 +491,70 @@ def test_profiling_experiment_archive_with_run_path(mock_open, tmp_path):
     # run_path cleared after archiving
     assert exp.run_path is None
     assert exp.path == Path("/fake/archive.tar.gz")
+
+
+class TestSymlinksInsideTheExperiment:
+    """A symlink to something inside the experiment is archived as a link, whatever it points to and whether symlinks
+    are followed, so that what it points to is archived once, where it is, and the link still points at it once the
+    archive is extracted."""
+
+    @staticmethod
+    def make_experiment(root: Path) -> Path:
+        """An experiment with an absolute symlink to a directory in it, and a relative one to a file."""
+        exp = root / "exp1"
+        (exp / "archive" / "output001").mkdir(parents=True)
+        (exp / "archive" / "output001" / "timings.txt").write_text("timings")
+        (exp / "latest").symlink_to(exp / "archive" / "output001")
+        (exp / "archive" / "timings.txt").symlink_to("output001/timings.txt")
+        return exp
+
+    @staticmethod
+    def done(path: Path) -> ProfilingExperiment:
+        experiment = ProfilingExperiment(path=path)
+        experiment.status = ProfilingExperimentStatus.DONE
+        return experiment
+
+    @pytest.mark.parametrize("follow_symlinks", [True, False])
+    def test_the_walk_keeps_them(self, tmp_path, follow_symlinks):
+        exp = self.make_experiment(tmp_path)
+
+        walked = set(experiment_directory_walker(exp, Path("experiment"), exp, follow_symlinks=follow_symlinks))
+
+        assert walked == {
+            (exp / "archive/output001/timings.txt", Path("experiment/archive/output001/timings.txt")),
+            (exp / "latest", Path("experiment/latest")),
+            (exp / "archive/timings.txt", Path("experiment/archive/timings.txt")),
+        }
+
+    @pytest.mark.parametrize("follow_symlinks", [True, False])
+    def test_the_archive_extracts_with_them(self, tmp_path, follow_symlinks):
+        """The links are made relative, which is also what lets the archive be extracted at all, the data filter
+        refusing links to absolute paths."""
+        experiment = self.done(self.make_experiment(tmp_path))
+
+        experiment.archive(tmp_path / "archived", follow_symlinks=follow_symlinks)
+
+        with experiment.directory() as (path, _):
+            assert (path / "latest").readlink() == Path("archive/output001")
+            assert (path / "archive/timings.txt").readlink() == Path("output001/timings.txt")
+            assert (path / "latest/timings.txt").read_text() == "timings"
+            assert (path / "archive/timings.txt").read_text() == "timings"
+            assert sorted(p.name for p in path.rglob("*") if p.is_file() and not p.is_symlink()) == ["timings.txt"]
+
+    def test_a_link_met_outside_that_points_back_inside(self, tmp_path):
+        """Payu keeps an experiment's outputs outside it, in its laboratory, behind a symlink that is followed. A
+        link there to a file of the experiment is kept relative to where it lands in the archive."""
+        exp = tmp_path / "exp1"
+        exp.mkdir()
+        (exp / "config.yaml").write_text("model: access-esm1.6\n")
+        lab_output = tmp_path / "lab" / "output001"
+        lab_output.mkdir(parents=True)
+        (lab_output / "config.yaml").symlink_to(exp / "config.yaml")
+        (exp / "archive").symlink_to(tmp_path / "lab")
+        experiment = self.done(exp)
+
+        experiment.archive(tmp_path / "archived", follow_symlinks=True)
+
+        with experiment.directory() as (path, _):
+            assert (path / "archive/output001/config.yaml").readlink() == Path("../../config.yaml")
+            assert (path / "archive/output001/config.yaml").read_text() == "model: access-esm1.6\n"
