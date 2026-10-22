@@ -4,6 +4,7 @@
 """Parser for ESMF profiling text summary data, such as output by nuopc.
 The data to be parsed is written in the following form:
 
+```text
 Region                                       PETs   PEs    Count    Mean (s)    Min (s)     Min PET Max (s)     Max PET
   [ESMF]                                     1664   1664   1        2558.5684   2555.1450   279     2559.5801   817
     [ensemble] RunPhase1                     1664   1664   1        1879.7292   1872.5078   376     1905.4939   1
@@ -22,11 +23,16 @@ Region                                       PETs   PEs    Count    Mean (s)    
         [MED] med_phases_restart_write       364    364    960      31.8234     31.8123     203     33.0513     363
           MED:(med_phases_restart_write)     364    364    960      31.7651     31.7559     203     32.9919     363
 ...
+```
 
 Where indentation depth indicates depth in the call-stack. Usually there is a header like
+
+```text
 ********
 A warning about identifying load-imbalance.
 ********
+```
+
 Note that the profiling summary stats may contain identical region names
 e.g. [ATM-TO-MED] RunPhase1 is found twice in OM3.
 """
@@ -48,7 +54,9 @@ from access.profiling.metrics import (
 from access.profiling.parser import ProfilingData, ProfilingParser, _read_text_file
 
 pets = ProfilingMetric("PETs", Unit("dimensionless"), "ESMF Virtual Machine Persistent Execution Threads")
+"""Number of ESMF Virtual Machine Persistent Execution Threads, as the `PETs` column of an ESMF summary reports it."""
 pes = ProfilingMetric("PEs", Unit("dimensionless"), "Processing Elements")
+"""Number of processing elements, as the `PEs` column of an ESMF summary reports it."""
 
 
 class ESMFSummaryProfilingParser(ProfilingParser):
@@ -70,6 +78,22 @@ class ESMFSummaryProfilingParser(ProfilingParser):
         self._metrics = [pets, pes, count, tavg, tmin, pemin, tmax, pemax]
 
     def parse(self, file_path: str | Path | os.PathLike) -> dict:
+        """Implements "parse" abstract method to parse an ESMF text summary profile.
+
+        Args:
+            file_path (str | Path | os.PathLike): file to parse.
+
+        Returns:
+            dict: Parsed timing information, in the flat format, or in the hierarchical one if this parser was
+                created with hierarchical=True.
+
+        Raises:
+            ValueError: If no ESMF summary profiling data is found.
+            NotImplementedError: If, in the flat format, a region name appears more than once and its PETs and PEs
+                are not all the same.
+            TypeError: If file_path cannot be converted to a valid Path object.
+            FileNotFoundError: If file_path doesn't exist or isn't a file.
+        """
         stream = _read_text_file(file_path)
 
         lines = stream.strip().split("\n")

@@ -1,6 +1,13 @@
 # Copyright 2025 ACCESS-NRI and contributors. See the top-level COPYRIGHT file for details.
 # SPDX-License-Identifier: Apache-2.0
 
+"""What a plot is to show, and the parts of the plots that are not about scaling.
+
+`RegionGroup` names the regions of one log a plot is to show, what to call them and whose cores they are read
+against, and one list of groups describes a study to every plotting method of a manager. The bar chart those
+methods draw, and the helper that sizes the columns of the table beside a scaling plot, are here too.
+"""
+
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
@@ -25,23 +32,24 @@ class RegionGroup:
     component says one thing, but a name prefixed with a pair of them is a coupler between two and looks the
     same; many names say nothing at all; and the call stack that would settle it is not kept. Hence this.
 
-    One list of groups describes a study to all three plotting methods. Only plot_component_scaling_data
-    reads `component`, being the only one whose x axis is a component's own cores; plot_scaling_data reads
-    every region against the whole job and plot_bar_chart puts no cores on either axis, so both ignore it
-    rather than refusing a list that carries it. A component named here is still checked by the plot that
-    uses it, so a misspelling is not lost as long as the same list reaches that plot.
+    One list of groups describes a study to all three plotting methods. Only
+    `ProfilingManager.plot_component_scaling_data` reads `component`, being the only one whose x axis is a
+    component's own cores; `ProfilingManager.plot_scaling_data` reads every region against the whole job and
+    `ProfilingManager.plot_bar_chart` puts no cores on either axis, so both ignore it rather than refusing a list
+    that carries it. A component named here is still checked by the plot that uses it, so a misspelling is not
+    lost as long as the same list reaches that plot.
 
     Args:
         log (str): Name of the profiling log the regions come from, as the application's LogSpec names it.
             This is the log, never a component: the parsed data is keyed by log throughout.
         regions (Sequence[str]): Regions of that log to plot, each of which becomes a line or a bar.
         component (str | None): Component whose cores these regions are read against, named as the layout
-            names it, and read only by plot_component_scaling_data. None (the default) takes the component
-            the application declares for this log, and failing that the log's own name - which is enough
-            for a log that is one component's alone. Name it for a log that is no single component's, such
-            as a coupled summary covering several.
+            names it, and read only by `ProfilingManager.plot_component_scaling_data`. None (the default) takes
+            the component the application declares for this log, and failing that the log's own name - which is
+            enough for a log that is one component's alone. Name it for a log that is no single component's,
+            such as a coupled summary covering several.
         relabel (Mapping[str, str] | None): What to call the named regions, keyed by region name. A region
-            left out is plotted as "<log>: <region>", since region names are only made unique within one
+            left out is plotted as `<log>: <region>`, since region names are only made unique within one
             log and two components may each have a "Total"; a region named here is plotted under its label
             alone, the caller having said what they want it called.
 
@@ -92,13 +100,17 @@ def calculate_column_widths(table_data: list[list], first_col_fraction: float | 
 
     Args:
         table_data (list[list]): Table data including headers. e.g.
-                                 [[  "ncpus",  "col1", "col2", "col3"],
-                                  ["region1",    0.1,    0.2,    0.3],
-                                  ["region2",    1. ,    2. ,    3. ]]
-        first_col_fraction (float): If provided, controls the fraction of the table width
-                                    assigned to the first column. Default None.
-                                    If set to 0.0 or None, all columns have the same width.
-                                    Must be between 0.0 (inclusive) and 1.0 (exclusive).
+
+            ```python
+            [[  "ncpus",  "col1", "col2", "col3"],
+             ["region1",    0.1,    0.2,    0.3],
+             ["region2",    1. ,    2. ,    3. ]]
+            ```
+
+        first_col_fraction (float | None): If provided, controls the fraction of the table width
+            assigned to the first column, the other columns sharing the rest in proportion to the length of their
+            content. Default None. If set to 0.0 or None, every column's width is proportional to the length of
+            its content, the first column's included. Must be between 0.0 (inclusive) and 1.0 (exclusive).
 
     Returns:
         list : Column width fractions, adding up to 1.
@@ -106,6 +118,7 @@ def calculate_column_widths(table_data: list[list], first_col_fraction: float | 
     Raises:
         ValueError: If table_data has fewer than 2 rows or 2 columns.
         ValueError: If table_data shape is not rectangular, i.e., all rows do not have the same number of columns.
+        ValueError: If first_col_fraction is not between 0.0 (inclusive) and 1.0 (exclusive).
     """
     if not table_data:
         return []
@@ -141,7 +154,7 @@ def calculate_column_widths(table_data: list[list], first_col_fraction: float | 
             col_widths.append(length * base_width)
 
     else:
-        # Equal column width
+        # Every column proportional to its content, the first one included
         total_length = sum(max_lengths)
         col_widths = [length / total_length for length in max_lengths]
 

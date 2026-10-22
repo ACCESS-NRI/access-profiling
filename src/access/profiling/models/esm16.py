@@ -36,47 +36,67 @@ from access.profiling.um_parser import UMProfilingParser, UMTotalRuntimeParser, 
 logger = logging.getLogger(__name__)
 
 ESM16_UM7_NAME: str = "UM7"
+"""Component name of the atmosphere, UM7."""
 ESM16_MOM5_NAME: str = "MOM5"
+"""Component name of the ocean, MOM5."""
 ESM16_CICE5_NAME: str = "CICE5"
+"""Component name of the sea ice, CICE5."""
 
-# The N96 atmosphere grid and the one-degree tripolar ocean grid, which every released ACCESS-ESM1.6
-# configuration that has the component in question runs it on.
 ESM16_N96_ATMOSPHERE: Domain = Domain(shape=(192, 144))
+"""The N96 atmosphere grid, which every released ACCESS-ESM1.6 configuration with an atmosphere runs it on."""
 ESM16_1DEG_OCEAN: Domain = Domain(shape=(360, 300))
-# CICE5's grid is the ocean's. ACCESS-ESM1.6 builds CICE5 with runtime grid and block namelist entries and
-# with nprocs stated there, distributes its blocks cartesian with one block row, and pins no block size, so
-# the search chooses how the x extent is split and each rank receives one block spanning the full y extent.
+"""The one-degree tripolar ocean grid, which every released ACCESS-ESM1.6 configuration with an ocean runs it on."""
 ESM16_CICE5: CICEPartitioning = CICEPartitioning(
     grid=(360, 300),
     writes_nprocs=True,
     grid_is_runtime=True,
     namelist_path="ice/cice_in.nml",
 )
+"""How ACCESS-ESM1.6's CICE5 divides its grid.
 
-# Cores each component receives in the released pre-industrial control configuration. These are not used to
-# build any layout, and are provided as the reference a caller writing an allocation strategy is usually
-# working from. Note that the other coupled releases run on the same counts, which is the whole difficulty.
+CICE5's grid is the ocean's. ACCESS-ESM1.6 builds CICE5 with runtime grid and block namelist entries and with
+nprocs stated there, distributes its blocks cartesian with one block row, and pins no block size, so the search
+chooses how the x extent is split and each rank receives one block spanning the full y extent.
+"""
+
 ESM16_PI_CONTROL_CORES: dict[str, int] = {ESM16_UM7_NAME: 256, ESM16_MOM5_NAME: 240, ESM16_CICE5_NAME: 12}
+"""Cores each component receives in the released pre-industrial control configuration, keyed by component name.
 
-# Ceilings on what counts as a reasonable ACCESS-ESM1.6 layout at all, rather than the tolerances of any
-# particular study. Constraints are cumulative and a caller can only tighten them, so these are set loosely: a
-# study that wants near-square subdomains or no waste at all says so in its own allocation strategy.
+These are not used to build any layout, and are provided as the reference a caller writing an allocation strategy
+is usually working from. Note that the other coupled releases run on the same counts, which is the whole
+difficulty.
+"""
+
 ESM16_MAX_SUBDOMAIN_ASPECT_RATIO: float = 4.0
-ESM16_MAX_WASTED_CORE_FRACTION: float = 0.1
+"""Ceiling on the aspect ratio of a UM or MOM5 rank's subdomain, its longest extent over its shortest.
 
-# The submodels the coupled releases declare in config.yaml, in the order they declare them. The experiment
-# generator merges list edits positionally and then truncates to the length of the edit, so a three-element
-# submodels change against this four-element list would silently delete the coupler: every slot has to be
-# accounted for, and the one this package sets nothing in is marked PRESERVE. OASIS takes no cores and
-# changes no layout, so it is a slot here rather than a component of the tree.
+Like `ESM16_MAX_WASTED_CORE_FRACTION`, this bounds what counts as a reasonable ACCESS-ESM1.6 layout at all, rather
+than the tolerances of any particular study. Constraints are cumulative and a caller can only tighten them, so both
+are set loosely: a study that wants near-square subdomains or no waste at all says so in its own allocation
+strategy.
+"""
+ESM16_MAX_WASTED_CORE_FRACTION: float = 0.1
+"""Ceiling on the fraction of its cores an ACCESS-ESM1.6 layout may leave idle.
+
+Set loosely, for the reason `ESM16_MAX_SUBDOMAIN_ASPECT_RATIO` gives: a study that wants no waste at all says so in
+its own allocation strategy.
+"""
+
 ESM16_COUPLED_SUBMODELS: tuple[tuple[str, str | None], ...] = (
     ("atmosphere", ESM16_UM7_NAME),
     ("ocean", ESM16_MOM5_NAME),
     ("ice", ESM16_CICE5_NAME),
     ("coupler", None),
 )
-# What release-amip-1.0 declares: the atmosphere alone, with no ocean, no sea ice and nothing to couple.
+"""The submodels the coupled releases declare in config.yaml, in the order they declare them.
+
+The experiment generator merges list edits positionally and then truncates to the length of the edit, so a
+three-element submodels change against this four-element list would silently delete the coupler: every slot has
+to be accounted for, and the one this package sets nothing in is marked PRESERVE. OASIS takes no cores and changes
+no layout, so it is a slot here rather than a component of the tree.
+"""
 ESM16_AMIP_SUBMODELS: tuple[tuple[str, str | None], ...] = (("atmosphere", ESM16_UM7_NAME),)
+"""The submodels release-amip-1.0 declares: the atmosphere alone, with no ocean, no sea ice and nothing to couple."""
 
 # The marker the experiment generator reads as "leave this slot as the control has it".
 _PRESERVE: str = "PRESERVE"
@@ -437,31 +457,40 @@ def _process_grid(component: str, sub_layout: ComponentLayout) -> tuple[int, int
     return nx, ny
 
 
-# The one ACCESS-ESM1.6 configuration this package ships. The other released configurations - historical,
-# amip, esm-piControl, the scenario runs - are reached by replacing what differs, which for the coupled ones
-# is the name alone:
-#
-#     replace(ESM16_PI_CONTROL, name="historical")
-#
-# paired with a control of their own:
-#
-#     GitControlSource(ESM16_CONFIGS_REPOSITORY, "release-historical-1.1")
-#
-# Shipping one rather than a dozen is deliberate: a preset per config-repo release would tie a release of this
-# package to every release of that one.
 ESM16_PI_CONTROL: ESM16Configuration = ESM16Configuration(
     name="piControl",
     atmosphere=ESM16_N96_ATMOSPHERE,
     ocean=ESM16_1DEG_OCEAN,
     sea_ice=ESM16_CICE5,
 )
+"""The one ACCESS-ESM1.6 configuration this package ships: the pre-industrial control.
 
-# The release that configuration describes, which is a convenience rather than part of it: a study profiling
-# a fork, or a later release, passes its own control to the manager and keeps this configuration. Kept beside
-# the preset rather than on it so that choosing a different release does not mean building a different
-# configuration.
+The other released configurations - historical, amip, esm-piControl, the scenario runs - are reached by replacing
+what differs, which for the coupled ones is the name alone:
+
+```python
+replace(ESM16_PI_CONTROL, name="historical")
+```
+
+paired with a control of their own:
+
+```python
+GitControlSource(ESM16_CONFIGS_REPOSITORY, "release-historical-1.1")
+```
+
+Shipping one rather than a dozen is deliberate: a preset per config-repo release would tie a release of this
+package to every release of that one.
+"""
+
 ESM16_CONFIGS_REPOSITORY: str = "git@github.com:ACCESS-NRI/access-esm1.6-configs.git"
+"""The repository holding the released ACCESS-ESM1.6 configurations."""
 ESM16_PI_CONTROL_SOURCE: GitControlSource = GitControlSource(
     repository=ESM16_CONFIGS_REPOSITORY,
     start_point="release-piControl-2.1",
 )
+"""The release `ESM16_PI_CONTROL` describes, as a control to profile it against.
+
+This is a convenience rather than part of the configuration: a study profiling a fork, or a later release, passes
+its own control to the manager and keeps `ESM16_PI_CONTROL`. Kept beside the preset rather than on it so that
+choosing a different release does not mean building a different configuration.
+"""

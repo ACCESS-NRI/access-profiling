@@ -8,6 +8,10 @@ The ocean, the sea ice and the waves are optional, and a configuration has to ha
 worth profiling. Every component carries its own grid: the configurations released so far all happen to put
 every component on the tripolar ocean grid, but that is a property of those configurations rather than of the
 model.
+
+The components are named after their NUOPC realm prefixes in nuopc.runconfig - `cpl`, `atm`, `ice`, `rof`, `ocn`
+and `wav` - and the mediator, the data components and the sea ice sit under a parent named `shared`, the range of
+cores they take turns on. Those names are the keys of an allocation strategy.
 """
 
 import logging
@@ -37,33 +41,49 @@ logger = logging.getLogger(__name__)
 # NUOPC realm prefixes, as they appear in the PELAYOUT_attributes block of nuopc.runconfig. They are also the
 # component names of the tree below, and so the keys a caller uses in an allocation strategy.
 OM3_MEDIATOR_NAME: str = "cpl"
+"""Component name of the CMEPS mediator."""
 OM3_ATMOSPHERE_NAME: str = "atm"
+"""Component name of the data atmosphere."""
 OM3_SEA_ICE_NAME: str = "ice"
+"""Component name of the sea ice."""
 OM3_RUNOFF_NAME: str = "rof"
+"""Component name of the data runoff."""
 OM3_OCEAN_NAME: str = "ocn"
+"""Component name of the ocean, MOM6."""
 OM3_WAVE_NAME: str = "wav"
-# The pool of cores the mediator, the data components and the sea ice take turns on. It is a component of the
-# tree but not of the model, so its name is not a NUOPC realm.
+"""Component name of the waves, WW3."""
 OM3_SHARED_NAME: str = "shared"
+"""Component name of the pool of cores the mediator, the data components and the sea ice take turns on.
 
-# Ceiling on what counts as a reasonable ACCESS-OM3 layout at all, rather than the budget of any particular
-# study. Constraints are cumulative and a caller can only tighten this one.
+It is a component of the tree but not of the model, so its name is not a NUOPC realm.
+"""
+
 OM3_MAX_WASTED_CORE_FRACTION: float = 0.1
+"""Ceiling on the fraction of its cores an ACCESS-OM3 layout may leave idle.
 
-# Floor on how thin a MOM6 rank's sub-domain may get: it must hold at least its halo width along every
-# dimension, and NIHALO and NJHALO are 4 throughout ACCESS-OM3's MOM_input. Not a tolerance of any particular
-# study - a layout that breaks it is not one the model can run - so anything beyond it, near-square
-# sub-domains for one, is a choice and belongs in the allocation strategy. The sea ice's own floor is the
-# ghost width its CICEPartitioning states.
+This bounds what counts as a reasonable ACCESS-OM3 layout at all, rather than the budget of any particular study.
+Constraints are cumulative, so a caller can only tighten this one.
+"""
+
 OM3_MOM6_HALO_WIDTH: int = 4
+"""Floor on how thin a MOM6 rank's sub-domain may get.
+
+It must hold at least its halo width along every dimension, and NIHALO and NJHALO are 4 throughout ACCESS-OM3's
+MOM_input. Not a tolerance of any particular study - a layout that breaks it is not one the model can run - so
+anything beyond it, near-square sub-domains for one, is a choice and belongs in the allocation strategy.
+"""
 OM3_CICE6_GHOST_WIDTH: int = 1
+"""CICE6's ghost width, the floor on how thin the sea ice's blocks may get."""
 
-# How many blocks each CICE6 rank should hold, land blocks included. Several per rank is how CICE6 balances
-# its work, and the 25 km release holds about 7.5 of its 30 x 27 blocks on each of its 275 ranks.
 OM3_CICE6_BLOCKS_PER_RANK_RANGE: tuple[int, int] = (5, 8)
+"""How many blocks each CICE6 rank should hold, land blocks included.
 
-# The 25 km tripolar grid every ACCESS-OM3 configuration released so far runs every component on.
+Several per rank is how CICE6 balances its work, and the 25 km release holds about 7.5 of its 30 x 27 blocks on
+each of its 275 ranks.
+"""
+
 OM3_25KM_GRID: Domain = Domain(shape=(1440, 1152))
+"""The 25 km tripolar grid every ACCESS-OM3 configuration released so far runs every component on."""
 
 
 @dataclass(frozen=True)
@@ -77,11 +97,11 @@ class OM3Configuration(PayuConfiguration):
     instead, nothing reaches the tree, though ice_in is still written; a configuration running CDEPS's data sea ice
     instead says so with data_sea_ice, and then it does not. The ocean's does only where the configuration pins
     MOM6's LAYOUT: MOM6 otherwise works its own decomposition out from the ranks it is given, which is what
-    auto_ocean_layout says and what ACCESS-OM3 does. The mediator, the data components - the data sea ice among them
-    when there is one - and the waves are handed their meshes by ESMF, which decomposes them over whatever ranks
-    they are given, and state no process grid either. Every grid is recorded whether or not it reaches the tree,
-    because the configuration files state them, and because a grid is how this class says which components a
-    configuration runs.
+    auto_ocean_layout says and what a scaling study normally has it do. The mediator, the data components - the data
+    sea ice among them when there is one - and the waves are handed their meshes by ESMF, which decomposes them over
+    whatever ranks they are given, and state no process grid either. Every grid is recorded whether or not it reaches
+    the tree, because the configuration files state them, and because a grid is how this class says which components
+    a configuration runs.
 
     Args:
         name (str): Identifies the configuration in the names of the experiments generated for it.
@@ -102,8 +122,11 @@ class OM3Configuration(PayuConfiguration):
             which is what every released configuration does. Keyed by realm, so one of OM3_MEDIATOR_NAME,
             OM3_ATMOSPHERE_NAME, OM3_SEA_ICE_NAME or OM3_RUNOFF_NAME.
         auto_ocean_layout (bool): Whether MOM6 works its own decomposition out from the ranks it is given,
-            rather than being handed a LAYOUT. True by default, which is how ACCESS-OM3 runs: its MOM_input
-            sets AUTO_MASKTABLE and states no LAYOUT at all. The ocean then carries no grid into the
+            rather than being handed a LAYOUT. True by default, which is how a scaling study normally runs
+            ACCESS-OM3: with AUTO_MASKTABLE set and no LAYOUT, so that MOM6 decomposes whatever ocean core count
+            each layout gives it. The released 25 km configurations do pin a LAYOUT and a MASKTABLE in MOM_input -
+            only the 1.0-beta releases set AUTO_MASKTABLE instead - so a study using one of them as its control
+            removes those and sets AUTO_MASKTABLE through control_options. The ocean then carries no grid into the
             component tree - there is no process grid for the search to choose, so it enumerates none and
             offers one layout per ocean core count instead of one per factorisation of it - and config_changes
             writes no MOM_input, leaving the control directory to say how MOM6 decomposes. Note that this
@@ -548,11 +571,6 @@ def _om3_leaf(name: str, n_cores: int, core_offset: int = 0) -> ComponentLayout:
     )
 
 
-# CICE6 as the 25 km releases configure it: square-ice blocks distributed roundrobin. Neither forms a process
-# grid - roundrobin maps blocks to ranks without one, and square-ice is not a shape a one-dimensional domain
-# could express anyway - so the search chooses how many ranks the sea ice gets and nothing else. The block
-# size follows from that rank count, so that each rank keeps holding several blocks as the count changes,
-# and is written into ice_in with max_blocks left for CICE6 to work out.
 OM3_25KM_CICE6: CICEPartitioning = CICEPartitioning(
     grid=(OM3_25KM_GRID.shape[0], OM3_25KM_GRID.shape[1]),
     distribution_type="roundrobin",
@@ -560,21 +578,14 @@ OM3_25KM_CICE6: CICEPartitioning = CICEPartitioning(
     blocks_per_rank_range=OM3_CICE6_BLOCKS_PER_RANK_RANGE,
     nghost=OM3_CICE6_GHOST_WIDTH,
 )
+"""CICE6 as the 25 km releases configure it: square-ice blocks distributed roundrobin.
 
-# Every ACCESS-OM3 configuration released so far is this one: MOM6 and CICE6 at 25 km, every component on the
-# same tripolar grid. The releases differ in their forcing, their biogeochemistry and the core counts they
-# were run with, none of which changes how the model is parallelised.
-#
-# Note what the mask table costs this configuration. MOM_input pins MOM6's decomposition with an explicit
-# LAYOUT and a MASKTABLE naming a file of masked blocks, and ocn_ntasks is the layout's ranks less the masked
-# ones. config_changes writes LAYOUT but never touches MASKTABLE - dropping it silently would change what is
-# computed, not just how it is divided - so a control directory carrying one has to have it removed or
-# regenerated before a generated layout means anything.
-#
-# It also puts the released core counts out of the search's reach in all but name: ocn_ntasks is 2429, a
-# masked count and so 7 x 347 as a process grid. The search still finds layouts on those counts, because
-# nothing here rules them out, but a decomposition it writes for them is not the one the release runs. Treat
-# OM3_MC_25KM_RELEASE_CORES as the budget the release occupied rather than as a layout to reproduce.
+Neither forms a process grid - roundrobin maps blocks to ranks without one, and square-ice is not a shape a
+one-dimensional domain could express anyway - so the search chooses how many ranks the sea ice gets and nothing
+else. The block size follows from that rank count, so that each rank keeps holding several blocks as the count
+changes, and is written into ice_in with max_blocks left for CICE6 to work out.
+"""
+
 OM3_MC_25KM: OM3Configuration = OM3Configuration(
     name="MC-25km",
     ocean=OM3_25KM_GRID,
@@ -582,17 +593,37 @@ OM3_MC_25KM: OM3Configuration = OM3Configuration(
     atmosphere=OM3_25KM_GRID,
     runoff=OM3_25KM_GRID,
 )
+"""ACCESS-OM3 with MOM6 and CICE6 at 25 km, every component on the same tripolar grid.
 
-# The release that configuration describes, which is a convenience rather than part of it: the other 25 km
-# releases are the same configuration against a different control, so a study profiling one passes its own
-# and keeps OM3_MC_25KM.
+Every ACCESS-OM3 configuration released so far is this one. The releases differ in their forcing, their
+biogeochemistry and the core counts they were run with, none of which changes how the model is parallelised.
+
+Note what the mask table costs this configuration. Its control, `OM3_MC_25KM_SOURCE`, pins MOM6's decomposition in
+MOM_input with an explicit LAYOUT of 72 x 48 and a MASKTABLE naming a file of 1027 masked blocks, and ocn_ntasks is
+the layout's ranks less the masked ones: 2429. This configuration leaves the ocean's decomposition to MOM6
+(auto_ocean_layout), so config_changes writes no MOM_input and touches neither: a study has to remove LAYOUT,
+IO_LAYOUT and MASKTABLE and set AUTO_MASKTABLE through control_options before a generated ocean core count means
+anything. A study setting auto_ocean_layout False gets a LAYOUT written instead, but still has to remove or
+regenerate the MASKTABLE - config_changes never touches it, since dropping it silently would change what is
+computed, not just how it is divided.
+
+With auto_ocean_layout False, the released core counts are also out of the search's reach in all but name:
+ocn_ntasks is 2429, a masked count and so 7 x 347 as a process grid. The search still finds layouts on those counts,
+because nothing here rules them out, but a decomposition it writes for them is not the one the release runs. Treat
+`OM3_MC_25KM_RELEASE_CORES` as the budget the release occupied rather than as a layout to reproduce.
+"""
+
 OM3_CONFIGS_REPOSITORY: str = "git@github.com:ACCESS-NRI/access-om3-configs.git"
+"""The repository holding the released ACCESS-OM3 configurations."""
 OM3_MC_25KM_SOURCE: GitControlSource = GitControlSource(
     repository=OM3_CONFIGS_REPOSITORY,
     start_point="release-MC_25km_jra_ryf-2.0-beta",
 )
-# Cores each component receives in release-MC_25km_jra_ryf-2.0-beta. These build no layout, and are provided
-# as the reference a caller writing an allocation strategy is usually working from.
+"""The release `OM3_MC_25KM` describes, as a control to profile it against.
+
+This is a convenience rather than part of the configuration: the other 25 km releases are the same configuration
+against a different control, so a study profiling one passes its own and keeps `OM3_MC_25KM`.
+"""
 OM3_MC_25KM_RELEASE_CORES: dict[str, int] = {
     OM3_MEDIATOR_NAME: 275,
     OM3_ATMOSPHERE_NAME: 275,
@@ -600,3 +631,8 @@ OM3_MC_25KM_RELEASE_CORES: dict[str, int] = {
     OM3_RUNOFF_NAME: 275,
     OM3_OCEAN_NAME: 2429,
 }
+"""Cores each component receives in release-MC_25km_jra_ryf-2.0-beta, keyed by component name.
+
+These build no layout, and are provided as the reference a caller writing an allocation strategy is usually
+working from.
+"""

@@ -1,6 +1,14 @@
 # Copyright 2025 ACCESS-NRI and contributors. See the top-level COPYRIGHT file for details.
 # SPDX-License-Identifier: Apache-2.0
 
+"""Profiling studies of models driven by Payu.
+
+`PayuManager` is the manager for every Payu model: it generates experiments as branches of a clone of the control
+with the experiment generator, runs them with the experiment runner, and reads back what Payu and the scheduler
+recorded about each run - the CPUs it occupied, the state it reached and the profiling logs it wrote. What is
+being profiled arrives as a `PayuConfiguration`.
+"""
+
 import json
 import logging
 import subprocess
@@ -90,6 +98,9 @@ class PayuManager(ProfilingManager[PayuConfiguration]):
 
         Args:
             value (int): Number of repetitions.
+
+        Raises:
+            ValueError: If value is negative.
         """
         if value < 0:
             raise ValueError("Number of runs must be at least 0.")
@@ -398,6 +409,7 @@ class PayuManager(ProfilingManager[PayuConfiguration]):
         Args:
             path (Path): Path to the Payu experiment directory. Must contain a config.yaml file.
             run_path (Path | None): Optional path to a separate runs directory. Unused for Payu experiments.
+
         Returns:
             int: Number of CPUs the experiment occupied, including any left idle to fill whole compute nodes.
         """
@@ -609,8 +621,12 @@ class PayuManager(ProfilingManager[PayuConfiguration]):
         Args:
             path (Path): Path to the experiment directory.
             run_path (Path | None): Optional path to a separate runs directory. Unused for Payu experiments.
+
         Returns:
             dict[str, dict[int, ProfilingLog]]: Dictionary mapping log names to their logs, keyed by run number.
+
+        Raises:
+            FileNotFoundError: If the experiment has no archive directory, or no output directory in it.
         """
         logs: dict[str, dict[int, ProfilingLog]] = {}
 

@@ -1,6 +1,14 @@
 # Copyright 2025 ACCESS-NRI and contributors. See the top-level COPYRIGHT file for details.
 # SPDX-License-Identifier: Apache-2.0
 
+"""The part of a profiling study that is the same whichever workflow engine runs it.
+
+`ProfilingManager` decides which experiments a study is made of, follows the status they reach, archives them,
+and parses, selects and plots their profiling data. What depends on the engine - creating, running and deleting
+experiments, and reading what the engine and the scheduler recorded - is left to a subclass for each engine,
+`PayuManager` or `CylcRoseManager`.
+"""
+
 import itertools
 import logging
 import textwrap
@@ -29,10 +37,13 @@ from access.profiling.scaling import plot_component_scaling, plot_scaling_metric
 
 logger = logging.getLogger(__name__)
 
-# What a manager is profiling. A manager is written once per workflow engine, and each engine drives a
-# particular kind of application - Payu drives a PayuConfiguration, a Cylc Rose suite a
-# RoseSuiteConfiguration - so the engine knows the concrete type and should not have to rediscover it.
 AppT = TypeVar("AppT", bound=Application)
+"""The kind of application a manager profiles.
+
+A manager is written once per workflow engine, and each engine drives a particular kind of application - Payu
+drives a PayuConfiguration, a Cylc Rose suite a RoseSuiteConfiguration - so the engine knows the concrete type
+and should not have to rediscover it.
+"""
 
 _RUN_DIM_ERROR = (
     "Profiling data still has a 'run' dimension. Use select_best_run() to keep the best run of each experiment, "
@@ -103,9 +114,10 @@ def _component_names(layout: ComponentLayout) -> list[str]:
 class ProfilingManager(ABC, Generic[AppT]):
     """Abstract base class to handle profiling data and workflows.
 
-    This high-level class defines methods to parse different types of profiling data. Currently,
-    it supports parsing and plotting scaling data, including selecting the best performing experiment
-    for each number of CPUs.
+    This high-level class generates the experiments of a scaling study, keeps track of the status they reach,
+    archives them, and parses and plots their profiling data, including selecting the best performing
+    experiment for each number of CPUs. What depends on the workflow engine - creating, running and deleting
+    the experiments, and reading what the engine recorded about them - is left to each subclass.
 
     A manager is the workflow engine, and nothing about any one application: what is being profiled arrives
     as an Application and what it is profiled against as a ControlSource. So a subclass is written once
@@ -124,12 +136,21 @@ class ProfilingManager(ABC, Generic[AppT]):
         control (ControlSource | None): Where the control every experiment perturbs comes from.
             None (the default) is enough to read and plot experiments that already exist, and is rejected by
             generate_scaling_experiments, which has nothing to perturb without it.
+
+    Attributes:
+        work_dir (Path): Working directory where profiling experiments will be generated and run.
+        archive_dir (Path): Directory where completed experiments will be archived.
+        experiments (dict[str, ProfilingExperiment]): The experiments this manager holds, keyed by name: those
+            found in the archive directory when it was built, and those it has generated or been given since.
+        data (dict[str, dict[str, xr.Dataset]]): The profiling data `parse_profiling_data` parsed, keyed by
+            experiment and then by log name. A dataset has a 'run' dimension where several runs of the
+            experiment produced its log, until `select_best_run` or `aggregate_runs` reduces it.
     """
 
-    work_dir: Path  # Working directory where profiling experiments will be generated and run.
-    archive_dir: Path  # Directory where completed experiments will be archived.
-    experiments: dict[str, ProfilingExperiment]  # Dictionary storing ProfilingExperiment instances.
-    data: dict[str, dict[str, xr.Dataset]]  # Dictionary mapping experiments to log names and their profiling datasets.
+    work_dir: Path
+    archive_dir: Path
+    experiments: dict[str, ProfilingExperiment]
+    data: dict[str, dict[str, xr.Dataset]]
 
     def __init__(
         self,
@@ -294,6 +315,7 @@ class ProfilingManager(ABC, Generic[AppT]):
                 ranking the whole result set, which is the cost this argument exists to avoid: the search is lazy
                 and layout counts reach millions at production core counts. Sorting is applied to what was
                 enumerated, so it orders the returned layouts without deciding which ones they are.
+
         Returns:
             list[ComponentLayout]: The layouts found, sorted by increasing number of idle cores.
         """
@@ -473,7 +495,8 @@ class ProfilingManager(ABC, Generic[AppT]):
                 already held, whatever became of it. Only failed ones are ever regenerated: a running one
                 would be rewritten underneath a live job, and one that finished has results that its
                 configuration should go on matching.
-            **runner_options: Further options for the workflow engine, passed through to _create_experiments.
+            **runner_options (Any): Further options for the workflow engine, passed through to
+                _create_experiments.
 
         Raises:
             ValueError: If this manager has no control, if cores_per_node is not a positive integer, or if any
@@ -580,9 +603,10 @@ class ProfilingManager(ABC, Generic[AppT]):
         Args:
             name (str): Name of the experiment.
             path (Path): Path to the experiment directory.
+
         Raises:
             ValueError: If the specified path does not exist, is not a directory, or is not inside the working
-            directory.
+                directory.
         """
         if not path.is_absolute():
             path = self.work_dir / path
@@ -610,14 +634,14 @@ class ProfilingManager(ABC, Generic[AppT]):
     def _delete_experiment(self, name: str, dry_run: bool, **kwargs) -> None:
         """Deletes the on-disk artifacts of a single experiment.
 
-        This is the configuration-specific counterpart to delete_experiments, which handles selection, validation and
+        This is the runner-specific counterpart to delete_experiments, which handles selection, validation and
         manager-state bookkeeping. Implementations should only remove files and, when dry_run is True, log what would
         be removed without making any changes.
 
         Args:
             name (str): Name of the experiment to delete. Guaranteed to be managed by this instance.
             dry_run (bool): If True, log what would be deleted without making any changes.
-            **kwargs: Configuration-specific options forwarded verbatim from delete_experiments.
+            **kwargs: Runner-specific options forwarded verbatim from delete_experiments.
         """
 
     def delete_experiments(
@@ -630,13 +654,13 @@ class ProfilingManager(ABC, Generic[AppT]):
         """Deletes experiments and removes them from the manager.
 
         The selection, validation and manager-state bookkeeping are handled here, while the actual on-disk deletion is
-        delegated to the configuration-specific _delete_experiment method.
+        delegated to the runner-specific _delete_experiment method.
 
         Args:
             experiments (list[str] | None): List of experiment names to delete.
             all_experiments (bool): If True, deletes all experiments managed by this instance.
             dry_run (bool): If True, logs what would be deleted without making any changes. Defaults to False.
-            **kwargs: Configuration-specific options forwarded to _delete_experiment.
+            **kwargs (Any): Runner-specific options forwarded to _delete_experiment.
 
         Raises:
             ValueError: If both experiments and all_experiments are specified, or neither is.
@@ -857,9 +881,9 @@ class ProfilingManager(ABC, Generic[AppT]):
 
         Configurations that can be run several times produce profiling data with a 'run' dimension. This method
         keeps a single run per experiment: the one with the smallest value of the given metric, measured on the
-        given region of the given component. Smaller is always better.
+        given region of the given log. Smaller is always better.
 
-        The chosen run is selected in *every* component of the experiment, so the result always describes a single
+        The chosen run is selected in *every* log of the experiment, so the result always describes a single
         run that actually took place, and never mixes measurements taken during different runs. Use
         aggregate_runs() instead to compute statistics over the runs.
 
@@ -872,8 +896,8 @@ class ProfilingManager(ABC, Generic[AppT]):
             metric (ProfilingMetric): Metric used to rank runs. The smallest value wins.
 
         Raises:
-            KeyError: If the component, region or metric is not available in one of the experiments, or if the
-                chosen run is missing from one of the components of that experiment.
+            KeyError: If the log, region or metric is not available in one of the experiments, or if the
+                chosen run is missing from one of the logs of that experiment.
         """
         for exp_name, logs in self.data.items():
             ranking = logs[log]

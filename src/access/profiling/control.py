@@ -60,12 +60,14 @@ class ControlSource(ABC):
             str: The origin.
         """
 
-    # The revision of the control to start the experiments from: a tag, a branch, a commit or a revision.
-    # None means the control is taken as it stands, which is what an already checked-out directory of
-    # unknown revision amounts to; a runner that has to start branches from somewhere needs a value here and
-    # should say so rather than guess one. Declared as an attribute rather than an abstract property so that
-    # a subclass can satisfy it with a plain dataclass field.
     start_point: str | None
+    """The revision of the control to start the experiments from: a tag, a branch, a commit or a revision.
+
+    None means the control is taken as it stands, which is what an already checked-out directory of unknown
+    revision amounts to; a runner that has to start branches from somewhere needs a value here and should say so
+    rather than guess one. Declared as an attribute rather than an abstract property so that a subclass can
+    satisfy it with a plain dataclass field.
+    """
 
     @abstractmethod
     def provenance(self) -> dict[str, str]:
@@ -88,10 +90,10 @@ class GitControlSource(ControlSource):
         repository (str): Repository URL, or the path of one on disk.
         start_point (str): What to start the experiments from: a tag, a branch or a commit. Published setups
             are tagged, so this is usually a tag.
-        directory (str): Name the clone takes under the working directory. Defaults to "config", which is
-            the name studies in this package conventionally use.
-        label (str | None): Short identifier for this control. Defaults to the start point, which for a
-            published setup is the release.
+        _directory (str): Sets `directory`, the name the clone takes under the working directory. Defaults to
+            "config", which is the name studies in this package conventionally use.
+        _label (str | None): Sets `label`, a short identifier for this control. Defaults to the start point,
+            which for a published setup is the release.
 
     Raises:
         ValueError: If the repository or the start point is empty.
@@ -142,7 +144,8 @@ class ExistingDirectoryControlSource(ControlSource):
 
     Args:
         path (Path): The control directory, which must already exist when a study runs.
-        label (str | None): Short identifier for this control. Defaults to the directory's own name.
+        _label (str | None): Sets `label`, a short identifier for this control. Defaults to the directory's
+            own name.
         revision (str | None): The revision the directory holds, if it is known. Nothing here checks it out -
             the directory is taken as it stands - but it is what a runner that has to start branches from
             somewhere is given, and it is recorded as provenance either way.

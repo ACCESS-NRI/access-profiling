@@ -4,6 +4,7 @@
 """Parser for CICE5 profiling data.
 The data to be parsed is written in the following form, where block stats are discarded:
 
+```text
 Timer   1:     Total    8133.37 seconds
   Timer stats (node): min =     8133.36 seconds
                       max =     8133.37 seconds
@@ -18,6 +19,7 @@ Timer   2:  TimeLoop    8133.00 seconds
   Timer stats(block): min =        0.00 seconds
                       max =        0.00 seconds
                       mean=        0.00 seconds
+```
 
 These timers are printed at the end of the CICE5 run and can be an arbitrary number of timers.
 For example, ESM1.6 has 17 timers printed at the end of ice_diag.d output log.

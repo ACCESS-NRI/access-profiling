@@ -3,40 +3,42 @@
 
 """Classes and utilities for reading and transforming profiling data.
 
-Data formats
-------------
+**Data formats**
+
 Parsers return a plain dict. Three shapes are supported:
 
-Flat (standard)
-    One list per metric, all the same length as 'region':
+- **Flat** (standard): one list per metric, all the same length as 'region':
 
-        {'region': [...], metric_a: [...], metric_b: [...]}
+    ```python
+    {'region': [...], metric_a: [...], metric_b: [...]}
+    ```
 
-Hierarchical (nested dict)
-    Used when regions form a call-stack tree (e.g. ESMF). String keys are child
-    region names; ProfilingMetric keys are metric values. The two key types never
-    collide, so no separator is needed:
+- **Hierarchical** (nested dict): used when regions form a call-stack tree (e.g. ESMF). String keys are child
+  region names; ProfilingMetric keys are metric values. The two key types never collide, so no separator is
+  needed:
 
-        {'[ESMF]': {tavg: 2558.6, '[ICE] RunPhase1': {tavg: 155.8, ...}}}
+    ```python
+    {'[ESMF]': {tavg: 2558.6, '[ICE] RunPhase1': {tavg: 155.8, ...}}}
+    ```
 
-    Use flatten_hierarchical() to convert to the flat format.
+    Use `flatten_hierarchical()` to convert to the flat format.
 
-Per-PE
-    Each region has one measurement per processing element (MPI process). Metric
-    values are 2D lists of shape (n_regions, n_pes); a 'pe' key holds the PE IDs:
+- **Per-PE**: each region has one measurement per processing element (MPI process). Metric values are 2D lists
+  of shape (n_regions, n_pes); a 'pe' key holds the PE IDs:
 
-        {'region': [...], 'pe': [0, 1, ..., N-1], metric_a: [[...], [...]]}
+    ```python
+    {'region': [...], 'pe': [0, 1, ..., N-1], metric_a: [[...], [...]]}
+    ```
 
-    Use aggregate_pe_data() on the resulting xarray Dataset to reduce over PEs
-    and compute load-imbalance statistics (see metrics.py for the naming convention).
+    Use `aggregate_pe_data()` on the resulting xarray Dataset to reduce over PEs and compute load-imbalance
+    statistics (see metrics.py for the naming convention).
 
-Utilities
----------
-flatten_hierarchical(data, metrics)
-    Converts a hierarchical nested dict to the standard flat dict (DFS pre-order).
-aggregate_pe_data(ds)
-    Reduces a per-PE Dataset along 'pe', producing variables named
-    {var}_{stat}_pe for each input variable and statistic.
+**Utilities**
+
+- `flatten_hierarchical(data, metrics)` converts a hierarchical nested dict to the standard flat dict (DFS
+  pre-order).
+- `aggregate_pe_data(ds)` reduces a per-PE Dataset along 'pe', producing variables named `{var}_{stat}_pe` for
+  each input variable and statistic.
 """
 
 import os
@@ -50,11 +52,13 @@ import xarray as xr
 
 from access.profiling.metrics import ProfilingMetric
 
-# What a parser returns, and what the helpers below pass around. One dict is keyed by BOTH kinds of key, as
-# the Data formats section above describes: str for 'region', 'pe' and child region names, ProfilingMetric
-# for the measurements. The two never collide, which is what makes a single dict workable - but it also
-# means neither dict[str, ...] nor dict[ProfilingMetric, ...] describes it.
 ProfilingData = dict[str | ProfilingMetric, Any]
+"""What a parser returns, and what the helpers below pass around.
+
+One dict is keyed by both kinds of key, as the data formats above describe: str for 'region', 'pe' and child
+region names, ProfilingMetric for the measurements. The two never collide, which is what makes a single dict
+workable - but it also means neither dict[str, ...] nor dict[ProfilingMetric, ...] describes it.
+"""
 
 
 class ProfilingParser(ABC):
@@ -63,37 +67,47 @@ class ProfilingParser(ABC):
     The main purpose of a parser is to read profiling data from a file and return it
     as a dict. Three output shapes are supported (see module docstring for full details):
 
-    Flat (standard)::
+    Flat (standard):
 
-        {
-            'region': ['region1', 'region2', ...],
-            metric_a: [val1a, val2a, ...],
-            metric_b: [val1b, val2b, ...],
+    ```python
+    {
+        'region': ['region1', 'region2', ...],
+        metric_a: [val1a, val2a, ...],
+        metric_b: [val1b, val2b, ...],
+    }
+    ```
+
+    Hierarchical (nested dict, no 'region' key):
+
+    ```python
+    {
+        'root_region': {
+            metric_a: val,
+            'child_region': {metric_a: val, ...},
         }
+    }
+    ```
 
-    Hierarchical (nested dict, no 'region' key)::
+    Per-PE (flat with an additional 'pe' key; metric values are 2D lists):
 
-        {
-            'root_region': {
-                metric_a: val,
-                'child_region': {metric_a: val, ...},
-            }
-        }
-
-    Per-PE (flat with an additional 'pe' key; metric values are 2D lists)::
-
-        {
-            'region': ['region1', 'region2', ...],
-            'pe': [0, 1, ..., N-1],
-            metric_a: [[pe0_val1, pe1_val1, ...], [pe0_val2, pe1_val2, ...]],
-        }
+    ```python
+    {
+        'region': ['region1', 'region2', ...],
+        'pe': [0, 1, ..., N-1],
+        metric_a: [[pe0_val1, pe1_val1, ...], [pe0_val2, pe1_val2, ...]],
+    }
+    ```
     """
 
     _metrics: list[ProfilingMetric]
 
     @property
     def metrics(self) -> list[ProfilingMetric]:
-        """list: Metrics available when using this parser."""
+        """Returns the metrics available when using this parser.
+
+        Returns:
+            list[ProfilingMetric]: The metrics.
+        """
         return self._metrics
 
     @abstractmethod
@@ -157,19 +171,17 @@ def aggregate_pe_data(ds: xr.Dataset) -> xr.Dataset:
     and returns them as new string-named variables following the {var}_{stat}_pe
     convention defined in metrics.py:
 
-    ========================  =============================================
-    Variable                  Description
-    ========================  =============================================
-    ``{var}_min_pe``          minimum across PEs
-    ``{var}_max_pe``          maximum across PEs
-    ``{var}_mean_pe``         mean across PEs
-    ``{var}_median_pe``       median across PEs
-    ``{var}_std_pe``          standard deviation across PEs
-    ``{var}_total_pe``        sum across PEs (total work done by all PEs)
-    ``{var}_argmin_pe``       PE index of the minimum value (dimensionless)
-    ``{var}_argmax_pe``       PE index of the maximum value (dimensionless)
-    ``{var}_imbalance_pe``    (max - min) / mean; 0 = perfectly balanced
-    ========================  =============================================
+    | Variable | Description |
+    |---|---|
+    | `{var}_min_pe` | minimum across PEs |
+    | `{var}_max_pe` | maximum across PEs |
+    | `{var}_mean_pe` | mean across PEs |
+    | `{var}_median_pe` | median across PEs |
+    | `{var}_std_pe` | standard deviation across PEs |
+    | `{var}_total_pe` | sum across PEs (total work done by all PEs) |
+    | `{var}_argmin_pe` | PE index of the minimum value (dimensionless) |
+    | `{var}_argmax_pe` | PE index of the maximum value (dimensionless) |
+    | `{var}_imbalance_pe` | (max - min) / mean; 0 = perfectly balanced |
 
     Args:
         ds (xr.Dataset): Dataset with a 'pe' dimension, as returned by

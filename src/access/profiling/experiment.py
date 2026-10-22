@@ -1,6 +1,15 @@
 # Copyright 2025 ACCESS-NRI and contributors. See the top-level COPYRIGHT file for details.
 # SPDX-License-Identifier: Apache-2.0
 
+"""The experiments a profiling study is made of, and the profiling logs they produce.
+
+A `ProfilingExperiment` is one experiment held by a manager: the directory it runs in, the status it has reached
+and, once they are known, the cores it occupied and the layout it ran. Once finished it can be archived to a
+tarball, and it is read from the tarball after that. A `ProfilingLog` pairs one log file with the parser that
+reads it, and an `ExperimentPlan` is an experiment a manager has decided to create, before any workflow engine
+has touched it.
+"""
+
 import logging
 import tarfile
 import tempfile
@@ -36,7 +45,7 @@ class ProfilingLog:
         filepath (Path): Path to the log file.
         parser (ProfilingParser): Parser to use for this log file.
         optional (bool): Whether this log might be missing or does not contain parsable data. If True, no error should
-        be raised if the log is missing or unparsable. Defaults to False.
+            be raised if the log is missing or unparsable. Defaults to False.
     """
 
     filepath: Path  # Path to the log file
@@ -50,7 +59,12 @@ class ProfilingLog:
 
     @property
     def optional(self) -> bool:
-        """bool: Whether this log might not be present."""
+        """Returns whether this log might not be present.
+
+        Returns:
+            bool: True if the log might be missing or might not contain parsable data, in which case a manager
+                skips it rather than raising.
+        """
         return self._optional
 
     def parse(self) -> xr.Dataset:
@@ -58,11 +72,11 @@ class ProfilingLog:
 
         Accepts all three parser output formats (see parser.py module docstring):
 
-        - **Flat**: standard 1D Dataset over the ``region`` dimension.
+        - **Flat**: standard 1D Dataset over the `region` dimension.
         - **Hierarchical nested dict**: automatically flattened via
-          :func:`flatten_hierarchical` before building the Dataset.
-        - **Per-PE**: produces a 2D Dataset with both ``region`` and ``pe`` dimensions.
-          Use :func:`aggregate_pe_data` on the result to compute summary statistics.
+          `flatten_hierarchical` before building the Dataset.
+        - **Per-PE**: produces a 2D Dataset with both `region` and `pe` dimensions.
+          Use `aggregate_pe_data` on the result to compute summary statistics.
 
         Returns:
            xr.Dataset: Parsed profiling data.
@@ -115,28 +129,52 @@ class ExperimentPlan:
 
 
 class ProfilingExperimentStatus(Enum):
-    """Enumeration representing the status of a profiling experiment."""
+    """Enumeration representing the status of a profiling experiment.
 
-    NEW = 1  # Experiment has been created but not started
-    RUNNING = 2  # Experiment is running or is queued
-    DONE = 3  # Experiment has finished successfully
-    FAILED = 4  # Experiment ran but did not finish successfully
-    ARCHIVED = 5  # Experiment has been archived
+    A status is kept in memory, on the experiment, so it does not outlive the session. A manager brings it up to
+    date with what the workflow engine recorded in `ProfilingManager.update_statuses`, which archiving, parsing and
+    running experiments all call first.
+
+    Attributes:
+        NEW: Experiment has been created but not started. Every experiment a manager generates starts here, but
+            since a status does not outlive the session, this only says that this manager has not submitted it:
+            `update_statuses` moves it on if the engine has records of a run.
+        RUNNING: Experiment is running or is queued. Set by `run_experiments` once it has submitted the
+            experiment, and by `update_statuses` while the engine's records say a run is under way.
+        DONE: Experiment has finished successfully. Set by `update_statuses` from the engine's records, and by
+            `add_experiment_from_directory` and `CylcRoseManager.add_rose_experiment`, which take the experiment
+            they add to be complete. Only a DONE experiment is archived, and only a DONE or an ARCHIVED one is
+            parsed.
+        FAILED: Experiment ran but did not finish successfully. Set by `update_statuses` from the engine's
+            records. `run_experiments(retry_failed=True)` runs it again, and
+            `generate_scaling_experiments(regenerate_failed=True)` regenerates it first.
+        ARCHIVED: Experiment has been archived. Set by `ProfilingExperiment.archive`, and from the start for an
+            experiment created from a tarball. It is final: `update_statuses` leaves an archived experiment alone.
+    """
+
+    NEW = 1
+    RUNNING = 2
+    DONE = 3
+    FAILED = 4
+    ARCHIVED = 5
 
 
 def experiment_directory_walker(path: Path, arcname: Path, root: Path, follow_symlinks: bool = False):
     """Walks through the experiment directory, yielding files and corresponding names in the archive.
 
     Symlinks are treated in a special manner.
-        - if the target is inside the experiment directory, the symlink itself is always returned
-        - if follow_symlinks is True and the target is a directory, then the all contents in the target directory are
-            recursively iterated
-        - if follow_symlinks is True and the target is a file, then the target file name is returned, not the symlink
-        - if follow_symlinks is False, then the symlink itself is returned for both files and directories
+
+    - if the target is inside the experiment directory, the symlink itself is always returned
+    - if follow_symlinks is True and the target is a directory, then all the contents of the target directory are
+      recursively iterated
+    - if follow_symlinks is True and the target is a file, then the target file name is returned, not the symlink
+    - if follow_symlinks is False, then the symlink itself is returned for both files and directories
 
     Args:
         path (Path): Path to walk through.
         arcname (Path): Archive name for the current path.
+        root (Path): The directory being archived, which the walk started from. A symlink whose target is inside it
+            counts as being inside the experiment directory.
         follow_symlinks (bool): Whether to follow symlinks. Defaults to False.
 
     Yields:
@@ -193,13 +231,22 @@ class ProfilingExperiment:
             path contents are stored under experiment/ and run_path contents under runs/.
         layout (ComponentLayout | None): Layout the experiment runs, where it is known at construction.
             None (the default) leaves it to be read back from the configuration when it is asked for.
+
+    Attributes:
+        path (Path): Path to the experiment directory, or to its tarball once it has been archived.
+        run_path (Path | None): Path to a separate runs directory, or None. Always None once the experiment has
+            been archived, its runs being in the tarball.
+        status (ProfilingExperimentStatus): Status of the experiment. NEW at construction, or ARCHIVED where path
+            is a tarball.
+        ncpus (int | None): CPUs the experiment occupied, or None while that is still unknown.
+        layout (ComponentLayout | None): Layout the experiment runs, or None while that is unknown.
     """
 
-    path: Path  # Path to the experiment directory
-    run_path: Path | None  # Path to a separate runs directory, or None
-    status: ProfilingExperimentStatus = ProfilingExperimentStatus.NEW  # Status of the experiment
-    ncpus: int | None = None  # CPUs the experiment occupied, or None while that is still unknown
-    layout: ComponentLayout | None = None  # Layout the experiment runs, or None while that is unknown
+    path: Path
+    run_path: Path | None
+    status: ProfilingExperimentStatus = ProfilingExperimentStatus.NEW
+    ncpus: int | None = None
+    layout: ComponentLayout | None = None
 
     def __init__(self, path: Path, run_path: Path | None = None, layout: ComponentLayout | None = None) -> None:
         self.path = path
@@ -289,14 +336,14 @@ class ProfilingExperiment:
 
         Only experiments with status DONE will be archived. No error will be raised if the experiment is not DONE.
 
-        Symlinks to files and directories inside the experiment directory will be include as symlinks. Symlinks to files
-        and directories outside the experiment directory will be followed if follow_symlinks is True, otherwise they
-        will be included as symlinks. path contents are stored under experiment/ in the archive. If
+        Symlinks to files and directories inside the experiment directory will be included as symlinks. Symlinks to
+        files and directories outside the experiment directory will be followed if follow_symlinks is True, otherwise
+        they will be included as symlinks. path contents are stored under experiment/ in the archive. If
         run_path is set, its contents are stored under runs/ in the archive.
 
         Args:
             archive_path (Path): Path to the archive destination. This should include the file name, but without
-            the .tar.gz suffix.
+                the .tar.gz suffix.
             exclude_dirs (list[str] | None): Directory patterns to exclude when archiving.
             exclude_files (list[str] | None): File patterns to exclude when archiving.
             follow_symlinks (bool): Whether to follow symlinks when archiving. Defaults to False.

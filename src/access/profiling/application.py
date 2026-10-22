@@ -10,8 +10,9 @@ parallelism, which logs to read - is data, and it belongs here.
 
 The rule that places a member is which side of that line it reads from:
 
-    The manager reads what the engine and the scheduler wrote.
-    The application reads what its own input files say.
+> The manager reads what the engine and the scheduler wrote.
+>
+> The application reads what its own input files say.
 
 So finding an engine's output directory is the manager's, because the engine chose that name, while reading
 the file that states how the work is divided is the application's, because the application chose what that
@@ -34,9 +35,12 @@ from access.config.parallel_component import ComponentLayout, ParallelComponent
 from access.profiling.experiment import ProfilingLog
 from access.profiling.parser import ProfilingParser
 
-# How to find one log inside an output directory. Takes the directory, returns the file, or None when the
-# configuration that wrote the directory does not say where it is.
 LogLocator = Callable[[Path], Path | None]
+"""How to find one log inside an output directory.
+
+Takes the directory, returns the file, or None when the configuration that wrote the directory does not say where
+it is.
+"""
 
 
 def log_at(relative_path: str) -> LogLocator:

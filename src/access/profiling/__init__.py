@@ -1,5 +1,12 @@
-"""
-access-profiling package.
+"""Tools and utilities to profile the ACCESS climate models.
+
+A study is put together from three parts. A manager drives one workflow engine - `PayuManager` for Payu,
+`CylcRoseManager` for a Cylc Rose suite - and runs the study, from generating its experiments to plotting their
+profiling data. An application says what is being profiled, and is usually one of the presets in
+`access.profiling.models`, such as `ESM16_PI_CONTROL`, `OM3_MC_25KM` or `AM3_N96E`. A control source says where
+the configuration every experiment perturbs comes from; most presets have one to go with them, such as
+`ESM16_PI_CONTROL_SOURCE`. The names a study uses most are importable from the package itself; everything else is
+imported from the module that defines it.
 """
 
 from contextlib import suppress

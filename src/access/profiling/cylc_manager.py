@@ -1,6 +1,14 @@
 # Copyright 2025 ACCESS-NRI and contributors. See the top-level COPYRIGHT file for details.
 # SPDX-License-Identifier: Apache-2.0
 
+"""Profiling studies of models driven by a Cylc Rose suite.
+
+`CylcRoseManager` is the manager for every rose suite: it runs experiments with `rose suite-run`, and reads back
+what the suite and Cylc recorded about each run - the CPUs its layout puts to work, the state its tasks reached
+and the profiling logs they wrote. Experiments are not generated for a suite yet, so they are added from suites
+already in the working directory. What is being profiled arrives as a `RoseSuiteConfiguration`.
+"""
+
 import logging
 import shutil
 import sqlite3
@@ -64,10 +72,10 @@ class CylcRoseManager(ProfilingManager[RoseSuiteConfiguration]):
         the suite's and is answered by the configuration.
 
         Unlike the Payu manager, this reports the cores the layout puts to work rather than the ones the job
-        occupied: it does not yet round up to whole compute nodes the way PayuManager.parse_ncpus does, though
-        the configuration does state the node size. Scaling studies whose sizes are not multiples of the node
-        size will therefore group experiments by a slightly smaller count than they were charged for, until
-        this is implemented.
+        occupied: it does not yet round up to whole compute nodes the way PayuManager.parse_ncpus does, and the
+        configuration states no node size for it to round up to. Scaling studies whose sizes are not multiples
+        of the node size will therefore group experiments by a slightly smaller count than they were charged
+        for, until this is implemented.
 
         Args:
             path (Path): Path to the experiment directory. Must contain a rose-suite.conf file.
@@ -274,9 +282,14 @@ class CylcRoseManager(ProfilingManager[RoseSuiteConfiguration]):
         Args:
             path (Path): Path to the experiment directory.
             run_path (Path | None): Path to the Cylc run directory.
+
         Returns:
             dict[str, dict[int, ProfilingLog]]: Dictionary mapping log names to their logs, keyed by run number.
                 Cylc workflows have no concept of repeated runs, so every log is returned as the single run 0.
+
+        Raises:
+            ValueError: If no run directory is given.
+            RuntimeError: If the run directory holds no task job logs.
         """
         if run_path is None:
             raise ValueError("Cylc run_path is required to locate profiling logs.")

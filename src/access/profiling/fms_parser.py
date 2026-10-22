@@ -4,6 +4,7 @@
 """Parser for FMS profiling data, such as output by MOM5 and MOM6.
 The data to be parsed is written in the following form:
 
+```text
                                    hits          tmin          tmax          tavg          tstd  tfrac grain pemin pemax
 Total runtime                        1    138.600364    138.600366    138.600365      0.000001  1.000     0     0    11
 Ocean Initialization                 2      2.344926      2.345701      2.345388      0.000198  0.017    11     0    11
@@ -11,6 +12,7 @@ Ocean                               23     86.869466     86.871652     86.870450
 Ocean dynamics                      96     43.721019     44.391032     43.957944      0.244785  0.317    11     0    11
 Ocean thermodynamics and tracers    72     27.377185     33.281659     29.950144      1.792324  0.216    11     0    11
  MPP_STACK high water mark=          0
+```
 """
 
 import os
@@ -23,6 +25,7 @@ from access.profiling.metrics import ProfilingMetric, count, pemax, pemin, tavg,
 from access.profiling.parser import ProfilingData, ProfilingParser, _convert_from_string, _read_text_file
 
 grain = ProfilingMetric("grain", Unit("dimensionless"), "Grain")
+"""Granularity of an FMS clock, as the `grain` column of FMS timings reports it."""
 
 
 class FMSProfilingParser(ProfilingParser):
@@ -44,6 +47,19 @@ class FMSProfilingParser(ProfilingParser):
         self._metrics += [tmin, tmax, tavg, tstd, tfrac, grain, pemin, pemax]
 
     def parse(self, file_path: str | Path | os.PathLike) -> dict:
+        """Implements "parse" abstract method to parse profiling data in FMS log output.
+
+        Args:
+            file_path (str | Path | os.PathLike): file to parse.
+
+        Returns:
+            dict: Parsed timing information, with the time fraction as a percentage.
+
+        Raises:
+            ValueError: If matching timings aren't found.
+            TypeError: If file_path cannot be converted to a valid Path object.
+            FileNotFoundError: If file_path doesn't exist or isn't a file.
+        """
         stream = _read_text_file(file_path)
 
         labels = ["hits"] if self.has_hits else []
