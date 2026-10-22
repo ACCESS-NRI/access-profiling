@@ -193,6 +193,92 @@ def test_parse_ncpus_uses_run_path(tmp_path, manager):
     assert manager.parse_ncpus(exp_path, run_path) == 6
 
 
+class TestRequestedNcpus:
+    """The CPUs a suite occupied are those its job asked PBS for, which may be more than its layout puts to work."""
+
+    @staticmethod
+    def job_script(run_path, task, *directives, cycle="19820101T0000Z", attempt="01"):
+        """Writes the job script of a task's latest attempt, with the given PBS directives, as Cylc 7 writes it."""
+        attempt_dir = run_path / "log/job" / cycle / task / attempt
+        attempt_dir.mkdir(parents=True)
+        (attempt_dir.parent / "NN").symlink_to(attempt)
+        lines = [
+            "#!/bin/bash -l",
+            "#",
+            "# ++++ THIS IS A CYLC TASK JOB SCRIPT ++++",
+            f"# Task: {task}.{cycle}",
+            "# Job submit method: pbs",
+            "",
+            "# DIRECTIVES:",
+            f"#PBS -N {task}.{cycle}.u-aa123",
+            "#PBS -l walltime=3600",
+            "#PBS -q normal",
+            *(f"#PBS {directive}" for directive in directives),
+            "#PBS -P tm70",
+            "export CYLC_DIR='/g/data/hr22/apps/cylc7/cylc_7.9.9'",
+        ]
+        (attempt_dir / "job").write_text("\n".join(lines) + "\n")
+
+    @pytest.fixture()
+    def paths(self, tmp_path):
+        """An experiment whose layout puts 6 CPUs to work, and its run directory."""
+        exp_path = tmp_path / "experiment"
+        exp_path.mkdir()
+        (exp_path / "rose-suite.conf").write_text("um_layout = 2,3\n")
+        run_path = tmp_path / "runs"
+        run_path.mkdir()
+        return exp_path, run_path
+
+    def test_the_job_of_the_layout_fills_a_node(self, manager, paths):
+        exp_path, run_path = paths
+        self.job_script(run_path, "atmos_main", "-l ncpus=48", "-l mem=192GB")
+
+        assert manager.parse_ncpus(exp_path, run_path) == 48
+
+    def test_the_smallest_request_covering_the_layout_is_that_of_its_job(self, manager, paths):
+        """Smaller jobs are other tasks, and so are larger ones, the layout's own job being what rounds it up."""
+        exp_path, run_path = paths
+        self.job_script(run_path, "install_cold", "-l ncpus=1")
+        self.job_script(run_path, "atmos_main", "-l ncpus=48")
+        self.job_script(run_path, "atmos_main", "-l ncpus=48", cycle="19820201T0000Z")
+        self.job_script(run_path, "big_postproc", "-l ncpus=96")
+
+        assert manager.parse_ncpus(exp_path, run_path) == 48
+
+    def test_only_the_latest_attempt_counts(self, manager, paths):
+        exp_path, run_path = paths
+        self.job_script(run_path, "atmos_main", "-l ncpus=48", attempt="02")
+        (run_path / "log/job/19820101T0000Z/atmos_main/01").mkdir()
+        (run_path / "log/job/19820101T0000Z/atmos_main/01/job").write_text("#PBS -l ncpus=24\n")
+
+        assert manager.parse_ncpus(exp_path, run_path) == 48
+
+    def test_a_request_among_other_resources(self, manager, paths):
+        exp_path, run_path = paths
+        self.job_script(run_path, "atmos_main", "-l mem=192GB,ncpus=48,jobfs=10GB")
+
+        assert manager.parse_ncpus(exp_path, run_path) == 48
+
+    @pytest.mark.parametrize(
+        "directives",
+        [(), ("-l ncpus=1",), ("-l select=1:ncpus=48",)],
+        ids=["no request", "no request covering the layout", "chunks"],
+    )
+    def test_without_a_request_covering_the_layout(self, manager, paths, caplog, directives):
+        """The layout's own count is reported then, as it is without a run directory."""
+        exp_path, run_path = paths
+        self.job_script(run_path, "atmos_main", *directives)
+
+        with caplog.at_level(logging.DEBUG, logger="access.profiling.cylc_manager"):
+            assert manager.parse_ncpus(exp_path, run_path) == 6
+        assert "asked PBS for the 6 CPUs of the layout" in caplog.text
+
+    def test_without_a_run_directory(self, manager, paths):
+        exp_path, _ = paths
+
+        assert manager.parse_ncpus(exp_path) == 6
+
+
 def test_parse_ncpus_with_split_layout_variable(tmp_path):
     """AM3-style layouts store x and y as two separate variables rather than one comma-separated tuple."""
 

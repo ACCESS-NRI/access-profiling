@@ -4,12 +4,13 @@
 """Profiling studies of models driven by a Cylc Rose suite.
 
 `CylcRoseManager` is the manager for every rose suite: it runs experiments with `rose suite-run`, and reads back
-what the suite and Cylc recorded about each run - the CPUs its layout puts to work, the state its tasks reached
-and the profiling logs they wrote. Experiments are not generated for a suite: they are added from suites already
+what the suite and Cylc recorded about each run - the CPUs its jobs occupied, the state its tasks reached and
+the profiling logs they wrote. Experiments are not generated for a suite: they are added from suites already
 in the working directory. What is being profiled arrives as a `RoseSuiteConfiguration`.
 """
 
 import logging
+import re
 import shutil
 import sqlite3
 import subprocess
@@ -27,6 +28,10 @@ from access.profiling.manager import ProfilingManager
 from access.profiling.rose_configuration import RoseSuiteConfiguration
 
 logger = logging.getLogger(__name__)
+
+# The PBS request for CPUs in a job script, as Cylc writes the directive - `#PBS -l ncpus=576` - possibly after
+# other resources in the same list.
+_PBS_NCPUS = re.compile(r"^#PBS\s+-l\s+(?:[^\s,]+,)*ncpus=(?P<ncpus>\d+)\b", re.MULTILINE)
 
 
 class CylcRoseManager(ProfilingManager[RoseSuiteConfiguration]):
@@ -66,22 +71,70 @@ class CylcRoseManager(ProfilingManager[RoseSuiteConfiguration]):
         )
 
     def parse_ncpus(self, path: Path, run_path: Path | None = None) -> int:
-        """Parses the number of CPUs used in a given Cylc/Rose experiment, from the model layout.
+        """Parses the number of CPUs a given Cylc/Rose experiment occupied.
 
-        Finding the configuration file is this manager's, since where a rose suite keeps it and how it is
-        written is the runner's business; what its variables are called, and so how many CPUs they come to, is
-        the suite's and is answered by the configuration.
+        The layout is read first: finding the configuration file is this manager's, since where a rose suite
+        keeps it and how it is written is the runner's business, while what its variables are called, and so how
+        many CPUs they come to, is the suite's and is answered by the configuration.
 
-        Unlike the Payu manager, this reports the cores the layout puts to work rather than the ones the job
-        occupied: it does not yet round up to whole compute nodes the way PayuManager.parse_ncpus does, and the
-        configuration states no node size for it to round up to. Scaling studies whose sizes are not multiples
-        of the node size will therefore group experiments by a slightly smaller count than they were charged
-        for, until this is implemented.
+        The job that runs the layout may occupy more CPUs than the layout puts to work, to fill whole compute
+        nodes, and the scheduler charges for those. So, as PayuManager.parse_ncpus reads what the scheduler was
+        asked for, this reads the PBS requests in the job scripts Cylc submitted, and reports the smallest that
+        covers the layout: that of the job that ran it. Where no job script covers the layout - no run directory,
+        no job submitted to PBS - the layout's own count is reported. See _requested_ncpus.
 
         Args:
             path (Path): Path to the experiment directory. Must contain a rose-suite.conf file.
             run_path (Path | None): Optional path to a separate runs directory. Its run configuration is
-                preferred over the one in path when present, since it records what the run actually used.
+                preferred over the one in path when present, since it records what the run actually used, and
+                its job scripts say what the run's jobs asked PBS for.
+
+        Returns:
+            int: Number of CPUs the experiment occupied, including any left idle to fill whole compute nodes.
+
+        Raises:
+            FileNotFoundError: If neither configuration file exists.
+            ValueError: If a variable the configuration names is not set in the file that was found.
+        """
+        layout_cpus = self._layout_ncpus(path, run_path)
+        if run_path is None:
+            return layout_cpus
+
+        covering = [ncpus for ncpus in self._requested_ncpus(run_path) if ncpus >= layout_cpus]
+        if not covering:
+            logger.debug(f"No job in {run_path} asked PBS for the {layout_cpus} CPUs of the layout, or more.")
+            return layout_cpus
+        return min(covering)
+
+    @staticmethod
+    def _requested_ncpus(run_path: Path) -> list[int]:
+        """Returns the numbers of CPUs the jobs of a suite's run asked PBS for.
+
+        Cylc writes the directives of a task's job into the script it submits, at
+        log/job/<cycle>/<task>/NN/job for the latest attempt at it, so a job submitted to PBS has a `#PBS -l
+        ncpus=<n>` line there. A job asking for chunks with `select` instead, or not submitted to PBS, says
+        nothing here.
+
+        Args:
+            run_path (Path): Path to the Cylc run directory.
+
+        Returns:
+            list[int]: The request of every job script that makes one, in no particular order.
+        """
+        requests = []
+        for script in run_path.glob("log/job/*/*/NN/job"):
+            match = _PBS_NCPUS.search(script.read_text(errors="replace"))
+            if match is not None:
+                requests.append(int(match["ncpus"]))
+        return requests
+
+    def _layout_ncpus(self, path: Path, run_path: Path | None) -> int:
+        """Returns the number of CPUs the layout of a suite puts to work, from its rose-suite.conf.
+
+        Args:
+            path (Path): Path to the experiment directory.
+            run_path (Path | None): Optional path to a separate runs directory, whose run configuration is
+                preferred.
 
         Returns:
             int: Number of CPUs the layout puts to work.
@@ -90,8 +143,6 @@ class CylcRoseManager(ProfilingManager[RoseSuiteConfiguration]):
             FileNotFoundError: If neither configuration file exists.
             ValueError: If a variable the configuration names is not set in the file that was found.
         """
-        # TODO: round up to whole compute nodes, as PayuManager.parse_ncpus does, using the node size from the
-        # Rose/Cylc configuration.
         # both the run and original config will store cpu information
         config_paths = []
         if run_path is not None:
