@@ -5,8 +5,8 @@
 
 `CylcRoseManager` is the manager for every rose suite: it runs experiments with `rose suite-run`, and reads back
 what the suite and Cylc recorded about each run - the CPUs its layout puts to work, the state its tasks reached
-and the profiling logs they wrote. Experiments are not generated for a suite yet, so they are added from suites
-already in the working directory. What is being profiled arrives as a `RoseSuiteConfiguration`.
+and the profiling logs they wrote. Experiments are not generated for a suite: they are added from suites already
+in the working directory. What is being profiled arrives as a `RoseSuiteConfiguration`.
 """
 
 import logging

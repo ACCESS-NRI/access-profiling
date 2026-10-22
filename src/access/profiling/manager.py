@@ -114,10 +114,12 @@ def _component_names(layout: ComponentLayout) -> list[str]:
 class ProfilingManager(ABC, Generic[AppT]):
     """Abstract base class to handle profiling data and workflows.
 
-    This high-level class generates the experiments of a scaling study, keeps track of the status they reach,
-    archives them, and parses and plots their profiling data, including selecting the best performing
-    experiment for each number of CPUs. What depends on the workflow engine - creating, running and deleting
-    the experiments, and reading what the engine recorded about them - is left to each subclass.
+    This high-level class generates the experiments of a profiling study, one for each layout of every size the
+    study asks for, or takes in experiments that already exist. It keeps track of the status they reach, archives
+    them, and parses, selects and plots their profiling data: the best performing experiment for each number of
+    CPUs, the best of several runs, how each region scales, and how experiments compare region by region. What
+    depends on the workflow engine - creating, running and deleting the experiments, and reading what the engine
+    recorded about them - is left to each subclass.
 
     A manager is the workflow engine, and nothing about any one application: what is being profiled arrives
     as an Application and what it is profiled against as a ControlSource. So a subclass is written once
@@ -441,12 +443,13 @@ class ProfilingManager(ABC, Generic[AppT]):
         regenerate_failed: bool = False,
         **runner_options,
     ) -> None:
-        """Generates scaling experiments, one per valid layout of the configuration being profiled.
+        """Generates the experiments of a study, one per valid layout of the configuration being profiled.
 
         For each requested number of nodes, the valid layouts are enumerated and each one becomes an
-        experiment. Layouts whose experiment is already known to this manager, or was already planned earlier
-        in the same call, are skipped, so the same layout found for two different numbers of nodes only
-        generates one experiment.
+        experiment. A scaling study asks for several numbers of nodes, and a study of the best layout of one
+        budget for a single one. Layouts whose experiment is already known to this manager, or was already
+        planned earlier in the same call, are skipped, so the same layout found for two different numbers of
+        nodes only generates one experiment.
 
         That happens whenever a layout fits both budgets, which is a matter of how much waste the component
         tree tolerates: a layout spending 508 cores is valid on 520 and on 546, leaving 2.3% and 7.0% of them

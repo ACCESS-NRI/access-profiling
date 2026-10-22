@@ -76,16 +76,16 @@ class RoseSuiteConfiguration(Application):
 
     @property
     def parallel_component(self) -> ParallelComponent:
-        """Not supported for Rose suites: layout generation is not implemented for them yet.
+        """Not supported for Rose suites: the package does not generate their layouts.
 
         Raises:
-            NotImplementedError: Always. A rose suite states its parallelism in `rose-suite.conf`, and nothing
-                here yet knows how to search over that.
+            NotImplementedError: Always. A rose suite states its parallelism in `rose-suite.conf`, which
+                nothing here searches over.
         """
         raise NotImplementedError(self._unsupported)
 
     def experiment_name(self, layout: ComponentLayout) -> str:
-        """Not supported for Rose suites: layout generation is not implemented for them yet.
+        """Not supported for Rose suites: the package does not generate their layouts.
 
         Raises:
             NotImplementedError: Always.
@@ -93,7 +93,7 @@ class RoseSuiteConfiguration(Application):
         raise NotImplementedError(self._unsupported)
 
     def config_changes(self, layout: ComponentLayout) -> dict:
-        """Not supported for Rose suites: layout generation is not implemented for them yet.
+        """Not supported for Rose suites: the package does not generate their layouts.
 
         Raises:
             NotImplementedError: Always.
@@ -101,7 +101,7 @@ class RoseSuiteConfiguration(Application):
         raise NotImplementedError(self._unsupported)
 
     def parse_layout(self, output_dir: Path) -> ComponentLayout | None:
-        """Not supported for Rose suites: reading a layout back out of a suite is not implemented yet.
+        """Not supported for Rose suites: the package does not read a layout back out of a suite.
 
         Raises:
             NotImplementedError: Always.
