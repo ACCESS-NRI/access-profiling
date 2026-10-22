@@ -133,18 +133,19 @@ class ProfilingExperimentStatus(Enum):
 
     A status is kept in memory, on the experiment, so it does not outlive the session. A manager brings it up to
     date with what the workflow engine recorded in `ProfilingManager.update_statuses`, which archiving, parsing and
-    running experiments all call first.
+    running experiments all call first. `CylcRoseManager.add_rose_experiment` starts a suite from those records
+    too.
 
     Attributes:
-        NEW: Experiment has been created but not started. Every experiment a manager generates starts here, but
-            since a status does not outlive the session, this only says that this manager has not submitted it:
-            `update_statuses` moves it on if the engine has records of a run.
+        NEW: Experiment has been created but not started. Every experiment a manager generates starts here, as
+            does a suite added with no run recorded, but since a status does not outlive the session, this only
+            says that this manager has not submitted it: `update_statuses` moves it on if the engine has records
+            of a run.
         RUNNING: Experiment is running or is queued. Set by `run_experiments` once it has submitted the
             experiment, and by `update_statuses` while the engine's records say a run is under way.
         DONE: Experiment has finished successfully. Set by `update_statuses` from the engine's records, and by
-            `add_experiment_from_directory` and `CylcRoseManager.add_rose_experiment`, which take the experiment
-            they add to be complete. Only a DONE experiment is archived, and only a DONE or an ARCHIVED one is
-            parsed.
+            `add_experiment_from_directory`, which takes the experiment it adds to be complete. Only a DONE
+            experiment is archived, and only a DONE or an ARCHIVED one is parsed.
         FAILED: Experiment ran but did not finish successfully. Set by `update_statuses` from the engine's
             records. `run_experiments(retry_failed=True)` runs it again, and
             `generate_scaling_experiments(regenerate_failed=True)` regenerates it first.

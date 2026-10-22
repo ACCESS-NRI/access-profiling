@@ -4,6 +4,7 @@
 import logging
 import sqlite3
 import subprocess
+from contextlib import closing
 from pathlib import Path
 from unittest import mock
 
@@ -49,7 +50,7 @@ class TestParseStatus:
         """Writes a cylc-suite.db recording one task job per given run status."""
 
         run_path.mkdir(parents=True, exist_ok=True)
-        with sqlite3.connect(run_path / "cylc-suite.db") as connection:
+        with closing(sqlite3.connect(run_path / "cylc-suite.db")) as connection, connection:
             connection.execute("CREATE TABLE task_jobs (name TEXT, run_status INTEGER)")
             connection.executemany(
                 "INSERT INTO task_jobs VALUES (?, ?)",
@@ -285,20 +286,63 @@ def test_parse_ncpus_with_io_server_variable_missing_key(tmp_path):
         manager.parse_ncpus(exp_path)
 
 
-def test_add_rose_experiment_uses_new_experiment_api(manager):
-    """add_rose_experiment should populate ProfilingExperiment.path and run_path."""
+class TestAddRoseExperiment:
+    """A suite is added with the status its run directory records, or as NEW where there is no run of it."""
 
-    rose = "u-aa123"
-    experiment_path = manager.work_dir / rose
-    run_path = Path("/scratch") / "proj" / "fake-user" / "cylc-run" / rose
+    ROSE = "u-aa123"
 
-    with mock.patch("access.profiling.cylc_manager.Path.is_dir", autospec=True) as mock_is_dir:
-        mock_is_dir.side_effect = lambda path: path in {experiment_path, run_path}
-        manager.add_rose_experiment(rose, run_path=run_path)
+    @pytest.fixture()
+    def manager(self, tmp_path):
+        manager = mock_manager(tmp_path / "roses", tmp_path / "archive")
+        (manager.work_dir / self.ROSE).mkdir(parents=True)
+        return manager
 
-    assert manager.experiments[rose].path == experiment_path
-    assert manager.experiments[rose].run_path == run_path
-    assert manager.experiments[rose].status == ProfilingExperimentStatus.DONE
+    @pytest.mark.parametrize(
+        ("statuses", "expected"),
+        [
+            ([0, 0], ProfilingExperimentStatus.DONE),
+            ([0, 1], ProfilingExperimentStatus.FAILED),
+            ([0, None], ProfilingExperimentStatus.RUNNING),
+        ],
+        ids=["succeeded", "failed", "running"],
+    )
+    def test_a_suite_that_has_run(self, manager, tmp_path, statuses, expected):
+        run_path = tmp_path / "cylc-run" / self.ROSE
+        TestParseStatus._suite_db(run_path, statuses)
+
+        manager.add_rose_experiment(self.ROSE, run_path=run_path)
+
+        experiment = manager.experiments[self.ROSE]
+        assert experiment.path == manager.work_dir / self.ROSE
+        assert experiment.run_path == run_path
+        assert experiment.status == expected
+
+    @mock.patch("access.profiling.cylc_manager.subprocess.run")
+    def test_a_suite_still_to_run_is_new_and_runs(self, mock_subprocess, manager, tmp_path):
+        """Its run directory is where Cylc will run it, so it is kept, for its status to be read from once it does."""
+        run_path = tmp_path / "cylc-run" / self.ROSE
+
+        manager.add_rose_experiment(self.ROSE, run_path=run_path)
+
+        assert manager.experiments[self.ROSE].status == ProfilingExperimentStatus.NEW
+        assert manager.experiments[self.ROSE].run_path == run_path
+
+        manager.run_experiments()
+
+        mock_subprocess.assert_called_once_with(
+            ["rose", "suite-run"], cwd=manager.work_dir / self.ROSE, check=True, capture_output=True, text=True
+        )
+        assert manager.experiments[self.ROSE].status == ProfilingExperimentStatus.RUNNING
+
+        TestParseStatus._suite_db(run_path, [0])
+        manager.update_statuses()
+        assert manager.experiments[self.ROSE].status == ProfilingExperimentStatus.DONE
+
+    def test_without_a_run_directory(self, manager):
+        manager.add_rose_experiment(self.ROSE)
+
+        assert manager.experiments[self.ROSE].run_path is None
+        assert manager.experiments[self.ROSE].status == ProfilingExperimentStatus.NEW
 
 
 def test_add_rose_experiment_rejects_missing_experiment_path(manager):
@@ -309,39 +353,6 @@ def test_add_rose_experiment_rejects_missing_experiment_path(manager):
         pytest.raises(ValueError, match="does not exist or is not a directory"),
     ):
         manager.add_rose_experiment("u-aa123", run_path=Path("/scratch/proj/fake-user/cylc-run/u-aa123"))
-
-
-def test_add_rose_experiment_missing_run_path(caplog, manager):
-    """A missing or omitted Cylc run directory is allowed, but stored as None."""
-
-    rose = "u-aa123"
-    experiment_path = manager.work_dir / rose
-    run_path = Path("/scratch") / "proj" / "fake-user" / "cylc-run" / rose
-
-    with mock.patch("access.profiling.cylc_manager.Path.is_dir", autospec=True) as mock_is_dir:
-        mock_is_dir.side_effect = lambda path: path == experiment_path
-        with caplog.at_level(logging.WARNING):
-            manager.add_rose_experiment(rose, run_path=run_path)
-
-    assert manager.experiments[rose].path == experiment_path
-    assert manager.experiments[rose].run_path is None
-    assert f"Run path '{run_path}' does not exist" in caplog.text
-
-
-def test_add_rose_experiment_without_run_path(caplog, manager):
-    """Omitting run_path stores None without emitting a warning."""
-
-    rose = "u-aa123"
-    experiment_path = manager.work_dir / rose
-
-    with mock.patch("access.profiling.cylc_manager.Path.is_dir", autospec=True) as mock_is_dir:
-        mock_is_dir.side_effect = lambda path: path == experiment_path
-        with caplog.at_level(logging.WARNING):
-            manager.add_rose_experiment(rose)
-
-    assert manager.experiments[rose].path == experiment_path
-    assert manager.experiments[rose].run_path is None
-    assert "does not exist" not in caplog.text
 
 
 def test_delete_experiments_removes_path_and_run_path(tmp_path):
@@ -631,8 +642,8 @@ class TestParseRoseConf:
 def test_delete_experiments_without_a_run_directory(tmp_path, caplog):
     """An experiment added without a Cylc run directory still has its own directory deleted.
 
-    That is the state add_rose_experiment leaves behind whenever the run directory was not given or had gone
-    missing, so deletion has to cope with it rather than fail on a run path that was never there.
+    That is the state add_rose_experiment leaves behind whenever the run directory was not given, so deletion has
+    to cope with it rather than fail on a run path that was never there.
     """
 
     manager = mock_manager(tmp_path / "work", tmp_path / "archive")

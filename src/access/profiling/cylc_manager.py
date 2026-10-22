@@ -13,6 +13,7 @@ import logging
 import shutil
 import sqlite3
 import subprocess
+from contextlib import closing
 from pathlib import Path
 
 from access.profiling.cylc_parser import CylcDBReader, CylcProfilingParser
@@ -118,10 +119,15 @@ class CylcRoseManager(ProfilingManager[RoseSuiteConfiguration]):
     def add_rose_experiment(self, rose: str, run_path: Path | None = None) -> None:
         """Adds the given rose as an experiment to this manager.
 
+        The experiment takes the status the suite database in its run directory records, as parse_status reads
+        it: DONE once every task has succeeded, FAILED once one has not, and RUNNING while some are still going. A
+        suite with no run recorded there is NEW, which is what run_experiments runs.
+
         Args:
             rose (str): The rose to add as an experiment.
-            run_path (Path | None): Path to the Cylc run directory holding the results. If not provided, or if the
-                provided directory does not exist, archiving will only include the experiment files.
+            run_path (Path | None): Path to the Cylc run directory of the suite, where its results are, or will be
+                once it runs: it does not have to exist yet. Without it, nothing the suite records can be read, so
+                the suite stays NEW, a run of it is never seen to finish, and its logs cannot be parsed.
 
         Raises:
             ValueError: If the experiment path does not exist.
@@ -130,12 +136,10 @@ class CylcRoseManager(ProfilingManager[RoseSuiteConfiguration]):
         if not experiment_path.is_dir():
             raise ValueError(f"Experiment path '{experiment_path}' does not exist or is not a directory.")
 
-        if run_path is not None and not run_path.is_dir():
-            logger.warning(f"Run path '{run_path}' does not exist. Archiving will only include experiment files.")
-            run_path = None
-
-        self.experiments[rose] = ProfilingExperiment(path=experiment_path, run_path=run_path)
-        self.experiments[rose].status = ProfilingExperimentStatus.DONE
+        experiment = ProfilingExperiment(path=experiment_path, run_path=run_path)
+        status = self.parse_status(experiment_path, run_path)
+        experiment.status = status if status is not None else ProfilingExperimentStatus.NEW
+        self.experiments[rose] = experiment
 
     def run_experiments(self, retry_failed: bool = False) -> None:
         """Runs Rose Cylc experiments via `rose suite-run` for profiling data generation.
@@ -260,8 +264,9 @@ class CylcRoseManager(ProfilingManager[RoseSuiteConfiguration]):
             logger.debug(f"No Cylc suite database at {cylcdb}.")
             return None
 
+        # A connection used as a context manager only ends a transaction, so it is closed explicitly.
         try:
-            with sqlite3.connect(f"file:{cylcdb}?mode=ro", uri=True) as connection:
+            with closing(sqlite3.connect(f"file:{cylcdb}?mode=ro", uri=True)) as connection:
                 statuses = [row[0] for row in connection.execute("SELECT run_status FROM task_jobs")]
         except sqlite3.Error as error:
             logger.debug(f"Could not read task statuses from {cylcdb}: {error}.")
