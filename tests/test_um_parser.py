@@ -352,7 +352,7 @@ def test_um7_parser_missing_section(tmp_path, um_parser, um7_malformed_profiling
     """Test that UM7 parsing fails when the profiling section is empty (but both header and footer are present)"""
     um7_log_file = tmp_path / "um7.log"
     um7_log_file.write_text(um7_malformed_profiling_data_missing_profiling_section)
-    with pytest.raises(AssertionError):
+    with pytest.raises(ValueError, match="Expected .* regions"):
         um_parser.parse(um7_log_file)
 
 
@@ -360,7 +360,7 @@ def test_um7_parser_extra_final_column(tmp_path, um_parser, um7_malformed_data_e
     """Test that UM7 parsing fails when there is an extra column at the end"""
     um7_log_file = tmp_path / "um7.log"
     um7_log_file.write_text(um7_malformed_data_extra_final_column)
-    with pytest.raises(AssertionError):
+    with pytest.raises(ValueError, match="Expected .* regions"):
         um_parser.parse(um7_log_file)
 
 
@@ -378,7 +378,7 @@ def test_um7_parser_extra_front_column_float(
     """Test that UM7 parsing fails when there is an extra column, with float values, at the beginning of a line"""
     um7_log_file = tmp_path / "um7.log"
     um7_log_file.write_text(um7_malformed_data_extra_front_column_with_float_data)
-    with pytest.raises(AssertionError):
+    with pytest.raises(ValueError, match="Expected .* regions"):
         um_parser.parse(um7_log_file)
 
 
@@ -408,7 +408,7 @@ def test_um7_parser_extra_front_column_string(
     """Test that UM7 parsing fails when there is an extra column, with string values, at the beginning of a line"""
     um7_log_file = tmp_path / "um7.log"
     um7_log_file.write_text(um7_malformed_data_extra_front_column_with_string_data)
-    with pytest.raises(AssertionError):
+    with pytest.raises(ValueError, match="Expected .* regions"):
         um_parser.parse(um7_log_file)
 
 
@@ -416,7 +416,7 @@ def test_um7_parser_malformed_columns(tmp_path, um_parser, um7_malformed_profili
     """Test that UM7 parsing fails when the column data is not representable as a number"""
     um7_log_file = tmp_path / "um7.log"
     um7_log_file.write_text(um7_malformed_profiling_data_bad_columndata)
-    with pytest.raises(AssertionError):
+    with pytest.raises(ValueError, match="Expected .* regions"):
         um_parser.parse(um7_log_file)
 
 

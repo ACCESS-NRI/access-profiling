@@ -96,17 +96,16 @@ class UMProfilingParser(ProfilingParser):
                 `ROUTINE` (including `N` for UM v13+) and will be ignored when the
                 header is being parsed. Such columns must contain integer values for the
                 profiling information parsing to work, otherwise (e.g., new columns with float
-                data), an `AssertionError` is raised.
+                data), a `ValueError` is raised.
 
                 Parsing will fail if there are any unexpected columns at the end, either
                 at the end of the expected header, or the end of the expected columns with
                 profiling data (regardless of type of the column value)
 
         Raises:
-            ValueError: If a match for the header or the footer is not found, or if there is no section between
-                them, the footer coming before the header.
-            AssertionError: If the expected format is not found in *all* of the lines within the
-                profiling section.
+            ValueError: If a match for the header or the footer is not found, if there is no section between
+                them, the footer coming before the header, or if the expected format is not found in *all* of the
+                lines within the profiling section.
             TypeError: If file_path cannot be converted to a valid Path object.
             FileNotFoundError: If file_path doesn't exist or isn't a file.
         """
@@ -195,7 +194,7 @@ class UMProfilingParser(ProfilingParser):
         num_lines = len(profiling_section.strip().split("\n"))
         logger.debug(f"Found {num_lines} lines in profiling section")
         if len(stats["region"]) != num_lines:
-            raise AssertionError(f"Expected {num_lines} regions, found {len(stats['region'])}.")
+            raise ValueError(f"Expected {num_lines} regions in {file_path}, found {len(stats['region'])}.")
 
         logger.info(f"Found {len(stats['region'])} regions with profiling info")
         return stats
