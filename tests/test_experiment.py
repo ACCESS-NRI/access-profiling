@@ -15,13 +15,14 @@ from access.profiling.experiment import (
     experiment_directory_walker,
 )
 from access.profiling.metrics import tavg, tmax
+from access.profiling.parser import ProfilingParser
 
 
 def test_profiling_log():
     """Test the ProfilingLog class."""
 
     # Mock parser and path
-    mock_parser = mock.MagicMock(autospec=True)
+    mock_parser = mock.Mock(spec=ProfilingParser)
     mock_parser.metrics = [tavg, tmax]
     mock_parser.parse.return_value = {
         "region": ["Region 1", "Region 2"],
@@ -52,7 +53,7 @@ def test_profiling_log():
 def test_profiling_log_duplicate_regions():
     """Test duplicate region names are renamed correctly during parsing."""
 
-    mock_parser = mock.MagicMock(autospec=True)
+    mock_parser = mock.Mock(spec=ProfilingParser)
     mock_parser.metrics = [tavg]
     mock_parser.parse.return_value = {
         "region": ["Region 1", "Region 1", "Region 2", "Region 1"],
@@ -73,7 +74,7 @@ def test_profiling_log_duplicate_regions():
 
 def test_profiling_log_hierarchical():
     """Test ProfilingLog.parse() with hierarchical (nested dict) parser output."""
-    mock_parser = mock.MagicMock(autospec=True)
+    mock_parser = mock.Mock(spec=ProfilingParser)
     mock_parser.metrics = [tavg, tmax]
     # Nested dict: no 'region' key — string keys are children, metric keys are values
     mock_parser.parse.return_value = {
@@ -97,7 +98,7 @@ def test_profiling_log_hierarchical():
 
 def test_profiling_log_with_pe():
     """Test ProfilingLog.parse() with per-PE parser output."""
-    mock_parser = mock.MagicMock(autospec=True)
+    mock_parser = mock.Mock(spec=ProfilingParser)
     mock_parser.metrics = [tavg]
     mock_parser.parse.return_value = {
         "region": ["Region 1", "Region 2"],
@@ -241,8 +242,9 @@ def test_profiling_experiment_archive_file_exists():
     exp = ProfilingExperiment(path=Path("/fake/work_dir/exp1"))
     exp.status = ProfilingExperimentStatus.DONE
 
-    with mock.patch.object(Path, "exists", return_value=True) as mock_exists, pytest.raises(FileExistsError):
-        exp.archive(Path("/fake/archive"))
+    with mock.patch.object(Path, "exists", return_value=True) as mock_exists:
+        with pytest.raises(FileExistsError):
+            exp.archive(Path("/fake/archive"))
         mock_exists.assert_called_once()
 
 

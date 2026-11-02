@@ -39,18 +39,6 @@ def cylc_log_text():
 """
 
 
-@pytest.fixture(scope="module")
-def cylc_log_no_first_timestamp(cylc_log_text):
-    "Fixture instantiating an invalid Cylc log that is missing a timestamp in the first line."
-    return "Not a valid start to the log\n" + cylc_log_text
-
-
-@pytest.fixture(scope="module")
-def cylc_log_no_last_timestamp(cylc_log_text):
-    "Fixture instantiating an invalid Cylc log that is missing a timestamp in the last line."
-    return cylc_log_text + "\nNot a valid end to the log\n"
-
-
 def test_cylc_profiling(tmp_path, cylc_parser, cylc_profiling, cylc_log_text):
     "Tests that a Cylc log file is correctly parsed."
     cylc_log_file = tmp_path / "cylc.log"

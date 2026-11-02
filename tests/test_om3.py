@@ -9,7 +9,7 @@ from access.config.parallel_allocation_strategies import FixedAllocation, FreeAl
 from access.config.parallel_component import ComponentLayout
 from access.config.parallel_constraints import DomainDivisibleByRanksConstraint, EqualCoresGroupConstraint
 from access.config.parallel_domain import Domain
-from conftest import component_of, layout_of
+from conftest import component_of, layout_of, select_layouts
 
 from access.profiling.cice5_parser import CICE5ProfilingParser
 from access.profiling.esmf_parser import ESMFSummaryProfilingParser
@@ -29,7 +29,6 @@ from access.profiling.models.om3 import (
     OM3_WAVE_NAME,
     OM3Configuration,
 )
-from access.profiling.payu_manager import PayuManager
 
 # The two development configurations below are not shipped with the package: only released ones are. They are
 # built here the way a caller builds their own, which is what OM3Configuration exists for.
@@ -87,21 +86,6 @@ def _om3_grids(layout: ComponentLayout) -> dict[str, tuple[int, ...]]:
     return grids
 
 
-def _select(configuration: OM3Configuration, total_cores: int, **kwargs) -> list[ComponentLayout]:
-    """The layouts of a configuration at a size, through the manager that searches for them.
-
-    Args:
-        configuration (OM3Configuration): The configuration to search over.
-        total_cores (int): Cores the layouts must distribute among the components.
-        **kwargs: As for ProfilingManager.select_layouts.
-
-    Returns:
-        list[ComponentLayout]: The layouts found, fewest idle cores first.
-    """
-    manager = PayuManager(Path("/fake/test_path"), Path("/fake/archive_path"), configuration)
-    return manager.select_layouts(total_cores, **kwargs)
-
-
 def _om3_layout(
     configuration: OM3Configuration, total_cores: int, cores: dict[str, int], **grids: tuple[int, ...]
 ) -> ComponentLayout:
@@ -113,7 +97,7 @@ def _om3_layout(
     """
     found = [
         layout
-        for layout in _select(configuration, total_cores, allocations=_om3_pinned(**cores))
+        for layout in select_layouts(configuration, total_cores, allocations=_om3_pinned(**cores))
         if _om3_grids(layout) == grids
     ]
     (layout,) = found
@@ -145,7 +129,7 @@ def test_om3_reproduces_the_released_layout(om3):
     process grid for a search to choose. See the note on OM3_MC_25KM.
     """
 
-    layouts = _select(om3, 2704, allocations=_om3_pinned(**OM3_MC_25KM_RELEASE_CORES))
+    layouts = select_layouts(om3, 2704, allocations=_om3_pinned(**OM3_MC_25KM_RELEASE_CORES))
     assert len(layouts) == 1, "nothing here decomposes, so one set of core counts is one layout"
     assert all(layout.idle_cores == 0 for layout in layouts)
     assert all(_om3_grids(layout) == {} for layout in layouts), (
@@ -239,7 +223,7 @@ def test_om3_finds_no_layout_for_a_component_running_past_its_range():
         shared_core_offsets={OM3_ATMOSPHERE_NAME: 12},
     )
     # The atmosphere starts 12 cores in and wants 24, so it reaches 36 and a 24-core range cannot hold it.
-    assert _select(configuration, 24, allocations=_om3_pinned(cpl=24, atm=24, ice=24)) == []
+    assert select_layouts(configuration, 24, allocations=_om3_pinned(cpl=24, atm=24, ice=24)) == []
     # Give it a range that reaches far enough and the layout appears.
     layout = _om3_layout(configuration, 36, {"pool_cores": 36, "cpl": 24, "atm": 24, "ice": 24}, ice=(24,))
     assert _pelayout(configuration, layout)["atm_rootpe"] == 12
@@ -254,7 +238,7 @@ def test_om3_finds_no_layout_for_a_range_its_components_leave_idle():
     so there is no layout rather than one that pays for cores it never uses.
     """
 
-    def manager_for(offsets: dict) -> OM3Configuration:
+    def configuration_with(offsets: dict) -> OM3Configuration:
         configuration = OM3Configuration(
             name="idle",
             sea_ice=OM3_100KM_CICE6,
@@ -265,9 +249,9 @@ def test_om3_finds_no_layout_for_a_range_its_components_leave_idle():
 
     offsets = dict.fromkeys((OM3_MEDIATOR_NAME, OM3_ATMOSPHERE_NAME, OM3_SEA_ICE_NAME), 4)
     pinned = _om3_pinned(pool_cores=28, cpl=24, atm=24, ice=24)
-    assert _select(manager_for(offsets), 28, allocations=pinned) == []
+    assert select_layouts(configuration_with(offsets), 28, allocations=pinned) == []
     # The same components with nothing between them and the start of the range do have one.
-    layout = _om3_layout(manager_for({}), 24, {"cpl": 24, "atm": 24, "ice": 24}, ice=(24,))
+    layout = _om3_layout(configuration_with({}), 24, {"cpl": 24, "atm": 24, "ice": 24}, ice=(24,))
     assert layout.sub_layouts[0].idle_cores == 0
 
 
@@ -281,7 +265,7 @@ def test_om3_equal_cores_puts_every_shared_component_on_the_whole_range():
     at a common offset put every one of them on all of it.
     """
 
-    manager = OM3_MC_100KM
+    configuration = OM3_MC_100KM
     realms = OM3_MC_100KM.shared_realms
 
     def allocations_with(*group_constraints) -> RootAllocation:
@@ -296,7 +280,7 @@ def test_om3_equal_cores_puts_every_shared_component_on_the_whole_range():
             }
         )
 
-    layouts = _select(manager, 24, allocations=allocations_with(EqualCoresGroupConstraint()))
+    layouts = select_layouts(configuration, 24, allocations=allocations_with(EqualCoresGroupConstraint()))
     assert layouts
     for layout in layouts:
         pool = layout.sub_layouts[0]
@@ -304,7 +288,7 @@ def test_om3_equal_cores_puts_every_shared_component_on_the_whole_range():
         assert pool.n_cores == 12
 
     # Without the rule the same search still offers every uneven division of the range.
-    uneven = _select(manager, 24, allocations=allocations_with(), max_layouts=500)
+    uneven = select_layouts(configuration, 24, allocations=allocations_with(), max_layouts=500)
     assert any(len({realm.n_cores for realm in layout.sub_layouts[0].sub_layouts}) > 1 for layout in uneven)
 
 
@@ -351,17 +335,17 @@ def test_om3_omits_the_components_a_configuration_does_not_have():
     """Test that a configuration without an ocean, or without sea ice, writes no keys for it."""
 
     ocean_only = OM3Configuration(name="M", ocean=OM3_100KM_GRID, atmosphere=OM3_100KM_GRID, auto_ocean_layout=False)
-    manager = ocean_only
-    layout = _om3_layout(manager, 20, {"cpl": 4, "atm": 4, "ocn": 16}, ocn=(4, 4))
-    assert not any(key.startswith("ice_") for key in _pelayout(manager, layout))
-    assert "ice_in" not in manager.config_changes(layout), "and nothing for CICE6 to decompose"
+    configuration = ocean_only
+    layout = _om3_layout(configuration, 20, {"cpl": 4, "atm": 4, "ocn": 16}, ocn=(4, 4))
+    assert not any(key.startswith("ice_") for key in _pelayout(configuration, layout))
+    assert "ice_in" not in configuration.config_changes(layout), "and nothing for CICE6 to decompose"
 
     # Pinned as well, so that the missing MOM_input is the missing ocean rather than MOM6 choosing.
     ice_only = OM3Configuration(name="C", sea_ice=OM3_100KM_CICE6, runoff=OM3_100KM_GRID, auto_ocean_layout=False)
-    manager = ice_only
-    layout = _om3_layout(manager, 8, {"cpl": 8, "ice": 8, "rof": 8}, ice=(8,))
-    assert not any(key.startswith("ocn_") for key in _pelayout(manager, layout))
-    assert "MOM_input" not in manager.config_changes(layout), "and no MOM6 layout to write"
+    configuration = ice_only
+    layout = _om3_layout(configuration, 8, {"cpl": 8, "ice": 8, "rof": 8}, ice=(8,))
+    assert not any(key.startswith("ocn_") for key in _pelayout(configuration, layout))
+    assert "MOM_input" not in configuration.config_changes(layout), "and no MOM6 layout to write"
 
 
 def test_om3_assigns_the_domains_it_records():
@@ -416,8 +400,8 @@ def test_om3_enumerates_no_ocean_decomposition_by_default():
     pinned = OM3_MC_100KM_PINNED
     cores = {"cpl": 24, "atm": 24, "ice": 24, "rof": 24, "ocn": 216}
 
-    auto_layouts = _select(auto, 240, allocations=_om3_pinned(**cores))
-    pinned_layouts = _select(pinned, 240, allocations=_om3_pinned(**cores))
+    auto_layouts = select_layouts(auto, 240, allocations=_om3_pinned(**cores))
+    pinned_layouts = select_layouts(pinned, 240, allocations=_om3_pinned(**cores))
     assert len(auto_layouts) < len(pinned_layouts), "one layout per ocean process grid is what goes away"
     assert all(set(_om3_grids(layout)) == {OM3_SEA_ICE_NAME} for layout in auto_layouts), (
         "the sea ice is the only component left with a decomposition the search chose"
@@ -432,8 +416,8 @@ def test_om3_enumerates_no_ocean_decomposition_by_default():
 def test_om3_pinning_the_ocean_layout_restores_the_search():
     """Test that a configuration pinning MOM6's LAYOUT gets the grid, the halo rule and the written LAYOUT."""
 
-    manager = OM3_MC_100KM_PINNED
-    layouts = _select(manager, 240, allocations=_om3_pinned(cpl=24, atm=24, ice=24, rof=24, ocn=216))
+    configuration = OM3_MC_100KM_PINNED
+    layouts = select_layouts(configuration, 240, allocations=_om3_pinned(cpl=24, atm=24, ice=24, rof=24, ocn=216))
 
     grids = {_om3_grids(layout)[OM3_OCEAN_NAME] for layout in layouts}
     assert grids, "the ocean decomposes its grid again"
@@ -443,18 +427,18 @@ def test_om3_pinning_the_ocean_layout_restores_the_search():
         assert min(360 // nx_ranks, 324 // ny_ranks) >= OM3_MOM6_HALO_WIDTH
 
     layout = next(lay for lay in layouts if _om3_grids(lay)[OM3_OCEAN_NAME] == (18, 12))
-    assert manager.config_changes(layout)["MOM_input"] == {"LAYOUT": "18, 12"}
+    assert configuration.config_changes(layout)["MOM_input"] == {"LAYOUT": "18, 12"}
 
 
 def test_om3_writes_the_chosen_decomposition():
     """Test that MOM6's LAYOUT and CICE6's blocks follow the decomposition the search chose."""
 
-    manager = OM3_MC_100KM_PINNED
+    configuration = OM3_MC_100KM_PINNED
     layout = _om3_layout(
-        manager, 240, {"cpl": 24, "atm": 24, "ice": 24, "rof": 24, "ocn": 216}, ice=(24,), ocn=(18, 12)
+        configuration, 240, {"cpl": 24, "atm": 24, "ice": 24, "rof": 24, "ocn": 216}, ice=(24,), ocn=(18, 12)
     )
 
-    changes = manager.config_changes(layout)
+    changes = configuration.config_changes(layout)
     assert changes["MOM_input"] == {"LAYOUT": "18, 12"}
     # One block per rank spanning the full y extent, 24 ranks splitting the 360-point x extent between them.
     # Neither nprocs nor the grid extents are written: this configuration states them nowhere the search
@@ -492,9 +476,9 @@ def test_om3_searches_only_sea_ice_rank_counts_some_block_size_suits():
     leaves = {sub.name: sub for sub in configuration.parallel_component.subcomponents[0].subcomponents}
     assert leaves[OM3_SEA_ICE_NAME].domain is None, "the search chooses a rank count and nothing else"
 
-    assert not _select(configuration, 240, allocations=_om3_pinned(cpl=29, atm=29, ice=29, rof=29, ocn=211))
+    assert not select_layouts(configuration, 240, allocations=_om3_pinned(cpl=29, atm=29, ice=29, rof=29, ocn=211))
 
-    (layout,) = _select(configuration, 240, allocations=_om3_pinned(cpl=24, atm=24, ice=24, rof=24, ocn=216))
+    (layout,) = select_layouts(configuration, 240, allocations=_om3_pinned(cpl=24, atm=24, ice=24, rof=24, ocn=216))
     domain_nml = configuration.config_changes(layout)["ice_in"]["domain_nml"]
     n_blocks = (360 // int(domain_nml["block_size_x"])) * (324 // int(domain_nml["block_size_y"]))
     assert 5 * 24 <= n_blocks <= 8 * 24
@@ -509,7 +493,7 @@ def test_om3_blocks_tile_the_grid_wherever_the_search_chooses_them():
     stating it again changes nothing, which is what this checks.
     """
 
-    manager = OM3_MC_100KM
+    configuration = OM3_MC_100KM
     allocations = RootAllocation(
         subcomponents={
             OM3_SHARED_NAME: FixedAllocation(
@@ -525,13 +509,13 @@ def test_om3_blocks_tile_the_grid_wherever_the_search_chooses_them():
         }
     )
 
-    layouts = _select(manager, 240, allocations=allocations)
+    layouts = select_layouts(configuration, 240, allocations=allocations)
     assert layouts, "the 100 km grid is tiled by 24 block columns"
     nx_global, ny_global = OM3_100KM_GRID.shape
     for layout in layouts:
         (nx_ranks,) = _om3_grids(layout)[OM3_SEA_ICE_NAME]
         assert nx_global % nx_ranks == 0
-        domain_nml = manager.config_changes(layout)["ice_in"]["domain_nml"]
+        domain_nml = configuration.config_changes(layout)["ice_in"]["domain_nml"]
         assert int(domain_nml["block_size_x"]) * nx_ranks == nx_global, "so the blocks tile the x extent"
         assert int(domain_nml["block_size_y"]) == ny_global, "each one spanning the full y extent"
 
@@ -544,7 +528,7 @@ def test_om3_blocks_tile_the_grid_wherever_the_search_chooses_them():
             OM3_OCEAN_NAME: FixedAllocation(216),
         }
     )
-    assert len(_select(manager, 240, allocations=without)) == len(layouts)
+    assert len(select_layouts(configuration, 240, allocations=without)) == len(layouts)
 
 
 def test_om3_data_sea_ice_is_not_decomposed():
@@ -558,7 +542,7 @@ def test_om3_data_sea_ice_is_not_decomposed():
     configuration = dataclasses.replace(OM3_MC_100KM, name="MD-100km", data_sea_ice=True)
     cores = {"cpl": 24, "atm": 24, "ice": 24, "rof": 24, "ocn": 216}
 
-    layouts = _select(configuration, 240, allocations=_om3_pinned(**cores))
+    layouts = select_layouts(configuration, 240, allocations=_om3_pinned(**cores))
     (layout,) = layouts  # with no process grid to choose, one set of core counts is one layout
 
     assert OM3_SEA_ICE_NAME not in _om3_grids(layout), "ESMF decomposes its mesh over the ranks it is given"
@@ -667,7 +651,9 @@ class TestOM3ParseLayout:
 
         configuration = dataclasses.replace(OM3_MC_100KM, name="MD-100km", data_sea_ice=True)
         # No component of this one carries a grid, so these core counts pick out a single layout.
-        (generated,) = _select(configuration, 240, allocations=_om3_pinned(cpl=24, atm=24, ice=24, rof=24, ocn=216))
+        (generated,) = select_layouts(
+            configuration, 240, allocations=_om3_pinned(cpl=24, atm=24, ice=24, rof=24, ocn=216)
+        )
         path = _write_runconfig(tmp_path, _pelayout(configuration, generated))
 
         parsed = layout_of(configuration.parse_layout(path))
@@ -788,13 +774,13 @@ class TestOM3ParseLayout:
 
     def test_a_configuration_without_an_ocean(self, tmp_path):
         ice_only = OM3Configuration(name="ice-only", sea_ice=OM3_100KM_CICE6, atmosphere=OM3_100KM_GRID)
-        manager = ice_only
+        configuration = ice_only
         path = _write_runconfig(
             tmp_path,
             {"cpl_ntasks": 24, "cpl_rootpe": 0, "atm_ntasks": 24, "atm_rootpe": 0, "ice_ntasks": 24, "ice_rootpe": 0},
         )
 
-        parsed = layout_of(manager.parse_layout(path))
+        parsed = layout_of(configuration.parse_layout(path))
 
         assert [sub.name for sub in parsed.sub_layouts] == [OM3_SHARED_NAME]
         assert parsed.n_cores == 24
@@ -802,7 +788,7 @@ class TestOM3ParseLayout:
     def test_a_configuration_with_waves(self, tmp_path):
         """WW3 takes a range of its own after the ocean, so it is read back beside it."""
 
-        manager = OM3_MCW_100KM
+        configuration = OM3_MCW_100KM
         path = _write_runconfig(
             tmp_path,
             {
@@ -821,7 +807,7 @@ class TestOM3ParseLayout:
             },
         )
 
-        parsed = layout_of(manager.parse_layout(path))
+        parsed = layout_of(configuration.parse_layout(path))
 
         assert [sub.name for sub in parsed.sub_layouts] == [OM3_SHARED_NAME, OM3_OCEAN_NAME, OM3_WAVE_NAME]
         assert component_of(parsed, OM3_WAVE_NAME).n_cores == 24

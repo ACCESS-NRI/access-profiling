@@ -23,10 +23,10 @@ from access.profiling.metrics import count, tavg
 from access.profiling.plotting_utils import RegionGroup
 
 
-class MockConfiguration(Application):
-    """The model axis these tests do not exercise, with the one member they do.
+class MockApplication(Application):
+    """The application axis these tests do not exercise, with the one member they do.
 
-    What the manager's own tests cover - parsing, archiving, bookkeeping, plotting - takes a configuration
+    What the manager's own tests cover - parsing, archiving, bookkeeping, plotting - takes an application
     only to read a layout back and to say which component a log belongs to. The rest raises, so a test that
     reached the layout search by accident would say so.
 
@@ -66,7 +66,7 @@ class MockConfiguration(Application):
         return self.layouts.get(output_dir.name)
 
 
-class MockProfilingManager(ProfilingManager[MockConfiguration]):
+class MockProfilingManager(ProfilingManager[MockApplication]):
     """Test class inheriting from ProfilingManager to test its methods.
 
     This class will simulate parsing of some profiling data.
@@ -86,7 +86,7 @@ class MockProfilingManager(ProfilingManager[MockConfiguration]):
         ncpus: list[int] | None = None,
         datasets: list[dict[str, xr.Dataset]] | None = None,
     ):
-        super().__init__(Path("/fake/work_dir"), Path("/fake/archive_dir"), MockConfiguration())
+        super().__init__(Path("/fake/work_dir"), Path("/fake/archive_dir"), MockApplication())
 
         # Pre-generate experiments
         for path in paths:
@@ -241,7 +241,7 @@ def test_repr(scaling_data):
 
 
 def test_repr_names_the_control_the_study_perturbs():
-    """A manager profiling the same configuration against two releases in turn must be able to say which one.
+    """A manager profiling the same application against two releases in turn must be able to say which one.
 
     The control line is printed only when there is one - test_repr covers the manager that has none - so a repr
     that dropped it would still look entirely plausible, while two studies of 'mock' became indistinguishable.
