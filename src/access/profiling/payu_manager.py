@@ -1,12 +1,12 @@
 # Copyright 2025 ACCESS-NRI and contributors. See the top-level COPYRIGHT file for details.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Profiling studies of models driven by Payu.
+"""Profiling studies of applications driven by Payu, such as the ACCESS models ACCESS-ESM1.6 and ACCESS-OM3.
 
-`PayuManager` is the manager for every Payu model: it generates experiments as branches of a clone of the control
-with the experiment generator, runs them with the experiment runner, and reads back what Payu and the scheduler
-recorded about each run - the CPUs it occupied, the state it reached and the profiling logs it wrote. What is
-being profiled arrives as a `PayuConfiguration`.
+`PayuManager` is the manager for every application Payu runs: it generates experiments as branches of a clone of the
+control with the experiment generator, runs them with the experiment runner, and reads back what Payu and the
+scheduler recorded about each run - the CPUs it occupied, the state it reached and the profiling logs it wrote. What
+is being profiled arrives as a `PayuConfiguration`.
 """
 
 import json
@@ -52,12 +52,12 @@ def _walltime_string(hours: float) -> str:
 
 
 class PayuManager(ProfilingManager[PayuConfiguration]):
-    """Profiling of any ACCESS model driven by Payu.
+    """Profiling of any application driven by Payu, such as the ACCESS models.
 
-    One class for every Payu model: what is being profiled arrives as a PayuConfiguration, so ACCESS-ESM1.6
-    and ACCESS-OM3 are two values rather than two subclasses. What is written here is the engine - the
+    One class for every application Payu runs: what is being profiled arrives as a PayuConfiguration, so
+    ACCESS-ESM1.6 and ACCESS-OM3 are two values rather than two subclasses. What is written here is the engine - the
     experiment generator and runner, Payu's own output layout, and the job records the scheduler leaves
-    behind - and none of it is any one model's.
+    behind - and none of it is any one application's.
 
     Args:
         work_dir (Path): Working directory where profiling experiments will be generated and run.

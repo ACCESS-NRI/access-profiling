@@ -223,7 +223,7 @@ class ProfilingManager(ABC, Generic[AppT]):
     def control(self, value: ControlSource | None) -> None:
         """Sets where the control configuration comes from.
 
-        Settable so that one manager can profile the same configuration against several controls in turn -
+        Settable so that one manager can profile the same application against several controls in turn -
         two releases, or a release and a fork - without being rebuilt and losing the experiments it holds.
 
         Args:
@@ -248,9 +248,9 @@ class ProfilingManager(ABC, Generic[AppT]):
     def parse_ncpus(self, path: Path, run_path: Path | None = None) -> int:
         """Parses the number of CPUs a given experiment occupied.
 
-        This is what the experiment cost, not what it put to work: schedulers hand out whole compute nodes, so
-        a run that gives its components 402 cores on 104 core nodes still occupies, and is charged for, all
-        416.
+        This is what the experiment cost, not what it put to work: a scheduler that hands out whole compute
+        nodes charges a run that gives its components 402 cores on 104 core nodes for all 416 cores it
+        occupies.
         Two layouts that fill the same nodes are the same size for the purposes of a scaling study, however
         differently they divide the cores among the components.
 
@@ -287,11 +287,11 @@ class ProfilingManager(ABC, Generic[AppT]):
 
     @property
     def parallel_component(self) -> ParallelComponent:
-        """Returns the component tree describing how the model is parallelised.
+        """Returns the component tree describing how the application is parallelised.
 
         Returns:
-            ParallelComponent: Root of the component tree, as the configuration being profiled states it. It
-                holds the domains and the requirements that every valid layout of that configuration must
+            ParallelComponent: Root of the component tree, as the application being profiled states it. It
+                holds the domains and the requirements that every valid layout of that application must
                 satisfy; requirements specific to a particular study belong in the allocation strategy passed
                 to the layout search instead.
         """
@@ -303,10 +303,11 @@ class ProfilingManager(ABC, Generic[AppT]):
         allocations: RootAllocation | None = None,
         max_layouts: int | None = None,
     ) -> list[ComponentLayout]:
-        """Returns the valid layouts of the model for a given number of cores, fewest idle cores first.
+        """Returns the valid layouts of the application for a given number of cores, fewest idle cores first.
 
         Args:
-            total_cores (int): Total number of cores the layouts must distribute among the model components.
+            total_cores (int): Total number of cores the layouts must distribute among the application's
+                components.
             allocations (RootAllocation | None): Allocation strategy deciding how many cores each component may
                 receive, and any further constraints the layouts must satisfy. None (the default) leaves every
                 component unconstrained, which is rarely what is wanted: the number of valid layouts grows very
@@ -443,7 +444,7 @@ class ProfilingManager(ABC, Generic[AppT]):
         regenerate_failed: bool = False,
         **runner_options,
     ) -> None:
-        """Generates the experiments of a study, one per valid layout of the configuration being profiled.
+        """Generates the experiments of a study, one per valid layout of the application being profiled.
 
         For each requested number of nodes, the valid layouts are enumerated and each one becomes an
         experiment. A scaling study asks for several numbers of nodes, and a study of the best layout of one
@@ -460,7 +461,7 @@ class ProfilingManager(ABC, Generic[AppT]):
         An experiment that failed may be generated again, which is what regenerate_failed asks for. The
         changes each experiment makes are worked out afresh from the arguments of this call rather than
         replayed from what was generated before, so correcting whatever produced the failure - the walltime,
-        the allocation, the configuration's own config_changes - and calling this method again is what puts
+        the allocation, the application's own config_changes - and calling this method again is what puts
         the correction on the experiment.
 
         Regenerating leaves the status alone, so an experiment that failed still reads as failed: what a run
@@ -697,9 +698,9 @@ class ProfilingManager(ABC, Generic[AppT]):
     def parse_profiling_data(self):
         """Parses profiling data from the experiments.
 
-        Configurations that can be run several times produce one set of profiling logs per run. In that case the
-        parsed datasets are concatenated along a 'run' dimension, coordinated by the run number reported by the
-        configuration. Experiments with a single run are stored without a 'run' dimension, so that they can be used
+        Experiments that ran several times produce one set of profiling logs per run. In that case the parsed
+        datasets are concatenated along a 'run' dimension, coordinated by the number the workflow engine gives each
+        run. Experiments with a single run are stored without a 'run' dimension, so that they can be used
         directly. Use select_best_run() or aggregate_runs() to reduce the 'run' dimension before plotting. Note that
         if all but one run fail to produce a log, the result has no 'run' dimension.
         """
@@ -839,7 +840,7 @@ class ProfilingManager(ABC, Generic[AppT]):
 
         Experiments are grouped by the number of CPUs they occupied, which is what parse_ncpus reports, so two
         layouts that fill the same compute nodes compete with each other even when they hand different numbers of
-        cores to the model components.
+        cores to the application's components.
 
         The returned list is meant to be passed to the experiments argument of the plotting methods. If two
         experiments with the same number of CPUs have exactly the same value, the first one is kept and a warning
@@ -1015,7 +1016,7 @@ class ProfilingManager(ABC, Generic[AppT]):
 
         Raises:
             ValueError: If the experiment's layout cannot be told, or names no such component.
-            NotImplementedError: If this manager's configurations have no layout to read.
+            NotImplementedError: If this manager's applications have no layout to read.
         """
         layout = self._layout(exp_name)
         if layout is None:
@@ -1043,8 +1044,8 @@ class ProfilingManager(ABC, Generic[AppT]):
         """
         if group.component is not None:
             return group.component
-        # A log the configuration declares a component for is read against that component; one it does not -
-        # a coupled profile covering several, or a log of another configuration entirely - is read against
+        # A log the application declares a component for is read against that component; one it does not -
+        # a coupled profile covering several, or a log of another application entirely - is read against
         # its own name, and a caller naming regions says which component each group is.
         return self.application.component_for_log(group.log) or group.log
 

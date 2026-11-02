@@ -1,7 +1,7 @@
 # Copyright 2025 ACCESS-NRI and contributors. See the top-level COPYRIGHT file for details.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Profiling studies of models driven by a Cylc Rose suite.
+"""Profiling studies of applications driven by a Cylc Rose suite, such as the ACCESS models ACCESS-AM3 and ACCESS-rAM3.
 
 `CylcRoseManager` is the manager for every rose suite: it runs experiments with `rose suite-run`, and reads back
 what the suite and Cylc recorded about each run - the CPUs its jobs occupied, the state its tasks reached and
@@ -35,7 +35,7 @@ _PBS_NCPUS = re.compile(r"^#PBS\s+-l\s+(?:[^\s,]+,)*ncpus=(?P<ncpus>\d+)\b", re.
 
 
 class CylcRoseManager(ProfilingManager[RoseSuiteConfiguration]):
-    """Profiling of any ACCESS model driven by a Cylc Rose suite.
+    """Profiling of any application driven by a Cylc Rose suite, such as the ACCESS models.
 
     One class for every rose suite: what tells ACCESS-AM3 from ACCESS-rAM3 is the names their
     `rose-suite.conf` files give the variables stating their parallelism, and which parsers read their task

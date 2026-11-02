@@ -38,7 +38,7 @@ from access.profiling.parser import ProfilingParser
 LogLocator = Callable[[Path], Path | None]
 """How to find one log inside an output directory.
 
-Takes the directory, returns the file, or None when the configuration that wrote the directory does not say where
+Takes the directory, returns the file, or None when the application that wrote the directory does not say where
 it is.
 """
 
@@ -61,7 +61,7 @@ def log_at(relative_path: str) -> LogLocator:
 
 @dataclass(frozen=True)
 class LogSpec:
-    """One profiling log a configuration writes, declared rather than discovered.
+    """One profiling log an application writes, declared rather than discovered.
 
     Args:
         name (str): What the log is called in the parsed data, and so the `log` a caller names in a
@@ -154,7 +154,7 @@ class Application(ABC):
             str: The name.
 
         Raises:
-            ValueError: If the layout is not a layout of this configuration.
+            ValueError: If the layout is not a layout of this application.
         """
 
     @abstractmethod
@@ -169,7 +169,7 @@ class Application(ABC):
                 directory.
 
         Raises:
-            ValueError: If the layout is not a layout of this configuration, or cannot be realised by it.
+            ValueError: If the layout is not a layout of this application, or cannot be realised by it.
         """
 
     @abstractmethod
@@ -211,7 +211,7 @@ class Application(ABC):
 
         Returns:
             str | None: The component, as the component tree names it, or None if the log is not one
-                component's alone or is not one of this configuration's.
+                component's alone or is not one of this application's.
         """
         for spec in self.logs:
             if spec.name == log_name:
