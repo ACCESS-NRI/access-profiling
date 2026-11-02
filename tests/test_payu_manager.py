@@ -1593,3 +1593,33 @@ class TestDeletingTheControlClone:
         manager.delete_experiments(experiments=["new"], remove_repo_dir=True)
         assert not clone.exists()
         assert manager.experiments == {}
+
+
+class TestOnlyPayusEntriesAreRuns:
+    """Payu names the output directory of a run outputNNN, and the directory of its job files after its number, so
+    an entry named otherwise is not a run of it, rather than one whose number cannot be read."""
+
+    @mock.patch.object(Path, "is_dir", return_value=True)
+    @mock.patch.object(
+        Path,
+        "glob",
+        side_effect=lambda pattern: {
+            "archive/payu_jobs/*/run/*.json": [
+                Path("payu_jobs/0/run/149764665.gadi-pbs.json"),
+                Path("payu_jobs/old/run/149764600.gadi-pbs.json"),
+            ],
+            "output*": [Path("output000"), Path("output_old"), Path("output001.bak")],
+        }.get(pattern, []),
+    )
+    def test_profiling_logs(self, mock_glob, mock_is_dir, manager):
+        logs = manager.profiling_logs(Path("/fake/path"))
+
+        assert set(logs["payu"]) == {0}
+        assert set(logs["component"]) == {0}
+
+    def test_archived_output(self, tmp_path):
+        (tmp_path / "archive" / "output000.bak").mkdir(parents=True)
+        assert not PayuManager._archived_output(tmp_path)
+
+        (tmp_path / "archive" / "output000").mkdir()
+        assert PayuManager._archived_output(tmp_path)

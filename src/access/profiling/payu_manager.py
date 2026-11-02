@@ -11,6 +11,7 @@ is being profiled arrives as a `PayuConfiguration`.
 
 import json
 import logging
+import re
 import subprocess
 from pathlib import Path
 
@@ -24,6 +25,9 @@ from access.profiling.payu_configuration import PayuConfiguration
 from access.profiling.payujson_parser import PayuJSONProfilingParser
 
 logger = logging.getLogger(__name__)
+
+# The name Payu gives the output directory of a run, the run number following it.
+_OUTPUT_DIR = re.compile(r"output(\d+)")
 
 # The defaults Payu applies to platform.nodesize and ncpus in payu.subcommands.run_cmd.runcmd, which
 # _requested_ncpus mirrors. They are copied rather than imported because Payu states them as bare literals in
@@ -231,7 +235,24 @@ class PayuManager(ProfilingManager[PayuConfiguration]):
         Returns:
             bool: True if the experiment has archived at least one output directory.
         """
-        return any(path.glob("archive/output[0-9][0-9][0-9]*"))
+        return bool(PayuManager._output_dirs(path))
+
+    @staticmethod
+    def _output_dirs(path: Path) -> dict[int, Path]:
+        """Returns the output directories Payu archived for an experiment, keyed by run number.
+
+        Payu names them outputNNN, NNN being the number of the run, so output003 holds the same run as
+        payu_jobs/3. Anything else in the archive whose name starts with "output" is not one of them, and is passed
+        over rather than taken for a run.
+
+        Args:
+            path (Path): Path to the Payu experiment directory.
+
+        Returns:
+            dict[int, Path]: The output directories, keyed by run number, in increasing order of it.
+        """
+        numbered = ((_OUTPUT_DIR.fullmatch(entry.name), entry) for entry in (path / "archive").glob("output*"))
+        return dict(sorted((int(match[1]), entry) for match, entry in numbered if match is not None))
 
     @staticmethod
     def _sweep_for_resubmission(branch: str, path: Path) -> None:
@@ -534,7 +555,9 @@ class PayuManager(ProfilingManager[PayuConfiguration]):
         # them. Earliest first, so that the last file recorded for a run is the one left standing.
         latest: dict[int, Path] = {}
         for job_file in sorted(path.glob("archive/payu_jobs/*/run/*.json"), key=PayuManager._attempt_order):
-            latest[int(job_file.parts[-3])] = job_file
+            # The directory is named after the run number: one named anything else is not Payu's.
+            if job_file.parts[-3].isdigit():
+                latest[int(job_file.parts[-3])] = job_file
         return latest
 
     @staticmethod
@@ -721,13 +744,11 @@ class PayuManager(ProfilingManager[PayuConfiguration]):
         for run, json_path in self._run_job_files(path).items():
             logs.setdefault("payu", {})[run] = ProfilingLog(json_path, PayuJSONProfilingParser())
 
-        # Get the logs of each component of every output directory. Payu names these outputNNN, NNN being the run
-        # number, so output003 holds the same run as payu_jobs/3.
-        output_dirs = sorted(archive.glob("output*"))
+        # Get the logs of each component of every output directory.
+        output_dirs = self._output_dirs(path)
         if not output_dirs:
             raise FileNotFoundError(f"No output files found in {path}!")
-        for output_dir in output_dirs:
-            run = int(output_dir.name.removeprefix("output"))
+        for run, output_dir in output_dirs.items():
             for name, log in self.application.component_logs(output_dir).items():
                 logs.setdefault(name, {})[run] = log
 
