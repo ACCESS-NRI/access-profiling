@@ -458,7 +458,7 @@ class PayuManager(ProfilingManager[PayuConfiguration]):
         """Returns the number of CPUs the scheduler recorded for the most recent run, if it recorded any.
 
         Payu writes one job file per run, holding the job information it read back from the scheduler. Under PBS
-        that is the output of ``qstat -f -F json``, whose Resource_List.ncpus is the request the job was charged
+        that is the output of `qstat -f -F json`, whose Resource_List.ncpus is the request the job was charged
         for - the whole-node figure, not the sum over the submodels.
 
         Every way of not finding it is a missing answer rather than an error: experiments archived before Payu
@@ -666,7 +666,7 @@ class PayuManager(ProfilingManager[PayuConfiguration]):
         replaces the count the model asks for, but is still rounded up like any other: it overrides the request,
         not the node arithmetic.
 
-        The answer hinges on the size of a compute node, which only ``platform.nodesize`` states. A
+        The answer hinges on the size of a compute node, which only `platform.nodesize` states. A
         configuration that leaves it out is submitted by Payu on nodes of _PAYU_DEFAULT_NODE_SIZE cores, so
         taking the same default here reproduces the request Payu made rather than guessing at it.
 

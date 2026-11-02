@@ -3,7 +3,7 @@
 
 """Parser for UM profiling data.
 This routine parses the inclusive timers from the UM output log
-(e.g. ``atm.fort6.pe0`` for UM7) and returns a dictionary of the
+(e.g. `atm.fort6.pe0` for UM7) and returns a dictionary of the
 profiling data. Since UM7 and UM13 provides multiple sections with timer
 output - we have chosen to use the 'Wallclock times' sub-section
 within the Inclusive Timer Summary section.
@@ -52,8 +52,8 @@ class UMProfilingParser(ProfilingParser):
     """UM profiling output parser."""
 
     # The parsed column names that will be kept. The order needs to match
-    # the order of the column names in the input data (defined as ``raw_headers``
-    # in the ``parse`` method), after discarding the ignored columns.
+    # the order of the column names in the input data (defined as `raw_headers`
+    # in the `parse` method), after discarding the ignored columns.
     _metrics = [tavg, tmed, tstd, tmax, pemax, tmin, pemin]
 
     def parse(self, file_path: str | Path | os.PathLike) -> dict:
@@ -64,7 +64,7 @@ class UMProfilingParser(ProfilingParser):
 
         Returns:
             dict: dictionary of parsed profiling data.
-                Ignores two columns ``N``, and ``% of mean`` columns.
+                Ignores two columns `N`, and `% of mean` columns.
 
                 To keep consistent column names across all parsers, the following
                 mapping is used:
@@ -83,20 +83,20 @@ class UMProfilingParser(ProfilingParser):
                 | (PE) | pemin |
 
                 Each key returns a list of values, one for each region. For
-                example, if there are 20 regions, ``stats[tavg]`` will
+                example, if there are 20 regions, `stats[tavg]` will
                 return a list with 20 values, one each for each of the regions.
 
                 The assumption is that people will want to look at the same metric
                 for *all* regions at a time; if you want to look at all metrics for
                 a single region, then you will have to first find the index for the
-                ``region``, and then extract that index from *each* of the 'metric'
+                `region`, and then extract that index from *each* of the 'metric'
                 lists.
 
                 Any number of column headers can be present at the beginning, i.e., before
-                ``ROUTINE`` (including ``N`` for UM v13+) and will be ignored when the
+                `ROUTINE` (including `N` for UM v13+) and will be ignored when the
                 header is being parsed. Such columns must contain integer values for the
                 profiling information parsing to work, otherwise (e.g., new columns with float
-                data), an ``AssertionError`` is raised.
+                data), an `AssertionError` is raised.
 
                 Parsing will fail if there are any unexpected columns at the end, either
                 at the end of the expected header, or the end of the expected columns with

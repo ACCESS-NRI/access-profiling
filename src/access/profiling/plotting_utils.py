@@ -174,10 +174,10 @@ def plot_bar_metrics(
 
     Args:
         data (dict[str, list[float]]): Mapping of experiment name to a list of metric values,
-            one per region (in the same order as ``region_labels``).
+            one per region (in the same order as `region_labels`).
         region_labels (list[str]): Ordered list of region display labels for the x-axis.
         metric (ProfilingMetric): The metric being plotted (used for axis labels and title).
-        show (bool): Whether to call ``plt.show()``. Default: True.
+        show (bool): Whether to call `plt.show()`. Default: True.
 
     Returns:
         Figure: The Matplotlib figure containing the bar chart.
