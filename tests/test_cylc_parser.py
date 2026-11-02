@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import sqlite3
+from contextlib import closing
 
 import pytest
 
@@ -38,18 +39,6 @@ def cylc_log_text():
 """
 
 
-@pytest.fixture(scope="module")
-def cylc_log_no_first_timestamp(cylc_log_text):
-    "Fixture instantiating an invalid Cylc log that is missing a timestamp in the first line."
-    return "Not a valid start to the log\n" + cylc_log_text
-
-
-@pytest.fixture(scope="module")
-def cylc_log_no_last_timestamp(cylc_log_text):
-    "Fixture instantiating an invalid Cylc log that is missing a timestamp in the last line."
-    return cylc_log_text + "\nNot a valid end to the log\n"
-
-
 def test_cylc_profiling(tmp_path, cylc_parser, cylc_profiling, cylc_log_text):
     "Tests that a Cylc log file is correctly parsed."
     cylc_log_file = tmp_path / "cylc.log"
@@ -65,10 +54,12 @@ def test_cylc_profiling(tmp_path, cylc_parser, cylc_profiling, cylc_log_text):
 
 def test_cylc_invalid_logs(tmp_path, cylc_parser, cylc_log_text):
     """Tests that an exceptions are raised when:
+    * the log is empty.
     * last line doesn't contain "DONE".
     * invalid timestamp in either the first or last line.
     """
     erroneous_content = (
+        "",  # nothing written yet
         cylc_log_text.replace("DONE", "potato"),  # last line is not done (indicating job is incomplete)
         "Invalid start to log\n" + cylc_log_text,  # first line has no timestamp
         cylc_log_text + "1234-56-78T90:12:34Z INFO - DONE",  # invalid timestamp
@@ -95,7 +86,7 @@ class TestFailedTasksAreSkipped:
             dbpath (Path): The path of the SQLite file to create.
             rows (list[tuple]): One (cycle, name, time_run, time_run_exit, run_status) tuple per task attempt.
         """
-        with sqlite3.connect(dbpath) as con:
+        with closing(sqlite3.connect(dbpath)) as con:
             con.execute(
                 "CREATE TABLE task_jobs (cycle TEXT, name TEXT, time_run TEXT, time_run_exit TEXT, run_status INTEGER)"
             )

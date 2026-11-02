@@ -10,8 +10,9 @@ parallelism, which logs to read - is data, and it belongs here.
 
 The rule that places a member is which side of that line it reads from:
 
-    The manager reads what the engine and the scheduler wrote.
-    The application reads what its own input files say.
+> The manager reads what the engine and the scheduler wrote.
+>
+> The application reads what its own input files say.
 
 So finding an engine's output directory is the manager's, because the engine chose that name, while reading
 the file that states how the work is divided is the application's, because the application chose what that
@@ -34,9 +35,12 @@ from access.config.parallel_component import ComponentLayout, ParallelComponent
 from access.profiling.experiment import ProfilingLog
 from access.profiling.parser import ProfilingParser
 
-# How to find one log inside an output directory. Takes the directory, returns the file, or None when the
-# configuration that wrote the directory does not say where it is.
 LogLocator = Callable[[Path], Path | None]
+"""How to find one log inside an output directory.
+
+Takes the directory, returns the file, or None when the application that wrote the directory does not say where
+it is.
+"""
 
 
 def log_at(relative_path: str) -> LogLocator:
@@ -57,7 +61,7 @@ def log_at(relative_path: str) -> LogLocator:
 
 @dataclass(frozen=True)
 class LogSpec:
-    """One profiling log a configuration writes, declared rather than discovered.
+    """One profiling log an application writes, declared rather than discovered.
 
     Args:
         name (str): What the log is called in the parsed data, and so the `log` a caller names in a
@@ -150,7 +154,7 @@ class Application(ABC):
             str: The name.
 
         Raises:
-            ValueError: If the layout is not a layout of this configuration.
+            ValueError: If the layout is not a layout of this application.
         """
 
     @abstractmethod
@@ -165,7 +169,7 @@ class Application(ABC):
                 directory.
 
         Raises:
-            ValueError: If the layout is not a layout of this configuration, or cannot be realised by it.
+            ValueError: If the layout is not a layout of this application, or cannot be realised by it.
         """
 
     @abstractmethod
@@ -207,7 +211,7 @@ class Application(ABC):
 
         Returns:
             str | None: The component, as the component tree names it, or None if the log is not one
-                component's alone or is not one of this configuration's.
+                component's alone or is not one of this application's.
         """
         for spec in self.logs:
             if spec.name == log_name:

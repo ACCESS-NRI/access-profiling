@@ -4,6 +4,7 @@
 import logging
 import sqlite3
 import subprocess
+from contextlib import closing
 from pathlib import Path
 from unittest import mock
 
@@ -49,7 +50,7 @@ class TestParseStatus:
         """Writes a cylc-suite.db recording one task job per given run status."""
 
         run_path.mkdir(parents=True, exist_ok=True)
-        with sqlite3.connect(run_path / "cylc-suite.db") as connection:
+        with closing(sqlite3.connect(run_path / "cylc-suite.db")) as connection, connection:
             connection.execute("CREATE TABLE task_jobs (name TEXT, run_status INTEGER)")
             connection.executemany(
                 "INSERT INTO task_jobs VALUES (?, ?)",
@@ -192,6 +193,92 @@ def test_parse_ncpus_uses_run_path(tmp_path, manager):
     assert manager.parse_ncpus(exp_path, run_path) == 6
 
 
+class TestRequestedNcpus:
+    """The CPUs a suite occupied are those its job asked PBS for, which may be more than its layout puts to work."""
+
+    @staticmethod
+    def job_script(run_path, task, *directives, cycle="19820101T0000Z", attempt="01"):
+        """Writes the job script of a task's latest attempt, with the given PBS directives, as Cylc 7 writes it."""
+        attempt_dir = run_path / "log/job" / cycle / task / attempt
+        attempt_dir.mkdir(parents=True)
+        (attempt_dir.parent / "NN").symlink_to(attempt)
+        lines = [
+            "#!/bin/bash -l",
+            "#",
+            "# ++++ THIS IS A CYLC TASK JOB SCRIPT ++++",
+            f"# Task: {task}.{cycle}",
+            "# Job submit method: pbs",
+            "",
+            "# DIRECTIVES:",
+            f"#PBS -N {task}.{cycle}.u-aa123",
+            "#PBS -l walltime=3600",
+            "#PBS -q normal",
+            *(f"#PBS {directive}" for directive in directives),
+            "#PBS -P tm70",
+            "export CYLC_DIR='/g/data/hr22/apps/cylc7/cylc_7.9.9'",
+        ]
+        (attempt_dir / "job").write_text("\n".join(lines) + "\n")
+
+    @pytest.fixture()
+    def paths(self, tmp_path):
+        """An experiment whose layout puts 6 CPUs to work, and its run directory."""
+        exp_path = tmp_path / "experiment"
+        exp_path.mkdir()
+        (exp_path / "rose-suite.conf").write_text("um_layout = 2,3\n")
+        run_path = tmp_path / "runs"
+        run_path.mkdir()
+        return exp_path, run_path
+
+    def test_the_job_of_the_layout_fills_a_node(self, manager, paths):
+        exp_path, run_path = paths
+        self.job_script(run_path, "atmos_main", "-l ncpus=48", "-l mem=192GB")
+
+        assert manager.parse_ncpus(exp_path, run_path) == 48
+
+    def test_the_smallest_request_covering_the_layout_is_that_of_its_job(self, manager, paths):
+        """Smaller jobs are other tasks, and so are larger ones, the layout's own job being what rounds it up."""
+        exp_path, run_path = paths
+        self.job_script(run_path, "install_cold", "-l ncpus=1")
+        self.job_script(run_path, "atmos_main", "-l ncpus=48")
+        self.job_script(run_path, "atmos_main", "-l ncpus=48", cycle="19820201T0000Z")
+        self.job_script(run_path, "big_postproc", "-l ncpus=96")
+
+        assert manager.parse_ncpus(exp_path, run_path) == 48
+
+    def test_only_the_latest_attempt_counts(self, manager, paths):
+        exp_path, run_path = paths
+        self.job_script(run_path, "atmos_main", "-l ncpus=48", attempt="02")
+        (run_path / "log/job/19820101T0000Z/atmos_main/01").mkdir()
+        (run_path / "log/job/19820101T0000Z/atmos_main/01/job").write_text("#PBS -l ncpus=24\n")
+
+        assert manager.parse_ncpus(exp_path, run_path) == 48
+
+    def test_a_request_among_other_resources(self, manager, paths):
+        exp_path, run_path = paths
+        self.job_script(run_path, "atmos_main", "-l mem=192GB,ncpus=48,jobfs=10GB")
+
+        assert manager.parse_ncpus(exp_path, run_path) == 48
+
+    @pytest.mark.parametrize(
+        "directives",
+        [(), ("-l ncpus=1",), ("-l select=1:ncpus=48",)],
+        ids=["no request", "no request covering the layout", "chunks"],
+    )
+    def test_without_a_request_covering_the_layout(self, manager, paths, caplog, directives):
+        """The layout's own count is reported then, as it is without a run directory."""
+        exp_path, run_path = paths
+        self.job_script(run_path, "atmos_main", *directives)
+
+        with caplog.at_level(logging.DEBUG, logger="access.profiling.cylc_manager"):
+            assert manager.parse_ncpus(exp_path, run_path) == 6
+        assert "asked PBS for the 6 CPUs of the layout" in caplog.text
+
+    def test_without_a_run_directory(self, manager, paths):
+        exp_path, _ = paths
+
+        assert manager.parse_ncpus(exp_path) == 6
+
+
 def test_parse_ncpus_with_split_layout_variable(tmp_path):
     """AM3-style layouts store x and y as two separate variables rather than one comma-separated tuple."""
 
@@ -285,20 +372,63 @@ def test_parse_ncpus_with_io_server_variable_missing_key(tmp_path):
         manager.parse_ncpus(exp_path)
 
 
-def test_add_rose_experiment_uses_new_experiment_api(manager):
-    """add_rose_experiment should populate ProfilingExperiment.path and run_path."""
+class TestAddRoseExperiment:
+    """A suite is added with the status its run directory records, or as NEW where there is no run of it."""
 
-    rose = "u-aa123"
-    experiment_path = manager.work_dir / rose
-    run_path = Path("/scratch") / "proj" / "fake-user" / "cylc-run" / rose
+    ROSE = "u-aa123"
 
-    with mock.patch("access.profiling.cylc_manager.Path.is_dir", autospec=True) as mock_is_dir:
-        mock_is_dir.side_effect = lambda path: path in {experiment_path, run_path}
-        manager.add_rose_experiment(rose, run_path=run_path)
+    @pytest.fixture()
+    def manager(self, tmp_path):
+        manager = mock_manager(tmp_path / "roses", tmp_path / "archive")
+        (manager.work_dir / self.ROSE).mkdir(parents=True)
+        return manager
 
-    assert manager.experiments[rose].path == experiment_path
-    assert manager.experiments[rose].run_path == run_path
-    assert manager.experiments[rose].status == ProfilingExperimentStatus.DONE
+    @pytest.mark.parametrize(
+        ("statuses", "expected"),
+        [
+            ([0, 0], ProfilingExperimentStatus.DONE),
+            ([0, 1], ProfilingExperimentStatus.FAILED),
+            ([0, None], ProfilingExperimentStatus.RUNNING),
+        ],
+        ids=["succeeded", "failed", "running"],
+    )
+    def test_a_suite_that_has_run(self, manager, tmp_path, statuses, expected):
+        run_path = tmp_path / "cylc-run" / self.ROSE
+        TestParseStatus._suite_db(run_path, statuses)
+
+        manager.add_rose_experiment(self.ROSE, run_path=run_path)
+
+        experiment = manager.experiments[self.ROSE]
+        assert experiment.path == manager.work_dir / self.ROSE
+        assert experiment.run_path == run_path
+        assert experiment.status == expected
+
+    @mock.patch("access.profiling.cylc_manager.subprocess.run")
+    def test_a_suite_still_to_run_is_new_and_runs(self, mock_subprocess, manager, tmp_path):
+        """Its run directory is where Cylc will run it, so it is kept, for its status to be read from once it does."""
+        run_path = tmp_path / "cylc-run" / self.ROSE
+
+        manager.add_rose_experiment(self.ROSE, run_path=run_path)
+
+        assert manager.experiments[self.ROSE].status == ProfilingExperimentStatus.NEW
+        assert manager.experiments[self.ROSE].run_path == run_path
+
+        manager.run_experiments()
+
+        mock_subprocess.assert_called_once_with(
+            ["rose", "suite-run"], cwd=manager.work_dir / self.ROSE, check=True, capture_output=True, text=True
+        )
+        assert manager.experiments[self.ROSE].status == ProfilingExperimentStatus.RUNNING
+
+        TestParseStatus._suite_db(run_path, [0])
+        manager.update_statuses()
+        assert manager.experiments[self.ROSE].status == ProfilingExperimentStatus.DONE
+
+    def test_without_a_run_directory(self, manager):
+        manager.add_rose_experiment(self.ROSE)
+
+        assert manager.experiments[self.ROSE].run_path is None
+        assert manager.experiments[self.ROSE].status == ProfilingExperimentStatus.NEW
 
 
 def test_add_rose_experiment_rejects_missing_experiment_path(manager):
@@ -309,39 +439,6 @@ def test_add_rose_experiment_rejects_missing_experiment_path(manager):
         pytest.raises(ValueError, match="does not exist or is not a directory"),
     ):
         manager.add_rose_experiment("u-aa123", run_path=Path("/scratch/proj/fake-user/cylc-run/u-aa123"))
-
-
-def test_add_rose_experiment_missing_run_path(caplog, manager):
-    """A missing or omitted Cylc run directory is allowed, but stored as None."""
-
-    rose = "u-aa123"
-    experiment_path = manager.work_dir / rose
-    run_path = Path("/scratch") / "proj" / "fake-user" / "cylc-run" / rose
-
-    with mock.patch("access.profiling.cylc_manager.Path.is_dir", autospec=True) as mock_is_dir:
-        mock_is_dir.side_effect = lambda path: path == experiment_path
-        with caplog.at_level(logging.WARNING):
-            manager.add_rose_experiment(rose, run_path=run_path)
-
-    assert manager.experiments[rose].path == experiment_path
-    assert manager.experiments[rose].run_path is None
-    assert f"Run path '{run_path}' does not exist" in caplog.text
-
-
-def test_add_rose_experiment_without_run_path(caplog, manager):
-    """Omitting run_path stores None without emitting a warning."""
-
-    rose = "u-aa123"
-    experiment_path = manager.work_dir / rose
-
-    with mock.patch("access.profiling.cylc_manager.Path.is_dir", autospec=True) as mock_is_dir:
-        mock_is_dir.side_effect = lambda path: path == experiment_path
-        with caplog.at_level(logging.WARNING):
-            manager.add_rose_experiment(rose)
-
-    assert manager.experiments[rose].path == experiment_path
-    assert manager.experiments[rose].run_path is None
-    assert "does not exist" not in caplog.text
 
 
 def test_delete_experiments_removes_path_and_run_path(tmp_path):
@@ -631,8 +728,8 @@ class TestParseRoseConf:
 def test_delete_experiments_without_a_run_directory(tmp_path, caplog):
     """An experiment added without a Cylc run directory still has its own directory deleted.
 
-    That is the state add_rose_experiment leaves behind whenever the run directory was not given or had gone
-    missing, so deletion has to cope with it rather than fail on a run path that was never there.
+    That is the state add_rose_experiment leaves behind whenever the run directory was not given, so deletion has
+    to cope with it rather than fail on a run path that was never there.
     """
 
     manager = mock_manager(tmp_path / "work", tmp_path / "archive")

@@ -1,24 +1,11 @@
 # Copyright 2025 ACCESS-NRI and contributors. See the top-level COPYRIGHT file for details.
 # SPDX-License-Identifier: Apache-2.0
 
-from unittest import mock
 
 import pytest
+from conftest import fake_parser
 
-from access.profiling.parser import ProfilingParser
 from access.profiling.rose_configuration import RoseSuiteConfiguration
-
-
-def fake_parser() -> ProfilingParser:
-    """Returns a stand-in parser.
-
-    A rose suite declares no logs in an output directory, so what the parser reads never matters here and a
-    real one would only tie this test to a log format.
-
-    Returns:
-        ProfilingParser: The stand-in.
-    """
-    return mock.Mock(spec=ProfilingParser)
 
 
 class TestRoseSuiteConfiguration:

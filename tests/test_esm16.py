@@ -13,7 +13,7 @@ from access.config.parallel_constraints import (
 )
 from access.config.parallel_domain import Domain, DomainDecompositionSpec
 from access.config.parallel_mpi_grid import MPICartesianGrid
-from conftest import decomposition_of, grid_of
+from conftest import decomposition_of, grid_of, select_layouts
 
 from access.profiling.cice5_parser import CICE5ProfilingParser
 from access.profiling.control import GitControlSource
@@ -68,21 +68,6 @@ def manager(esm16):
     )
 
 
-def _select(configuration, total_cores, **kwargs):
-    """The layouts of a configuration at a size, through the manager that searches for them.
-
-    Args:
-        configuration (ESM16Configuration): The configuration to search over.
-        total_cores (int): Cores the layouts must distribute among the components.
-        **kwargs: As for ProfilingManager.select_layouts.
-
-    Returns:
-        list[ComponentLayout]: The layouts found, fewest idle cores first.
-    """
-    manager = PayuManager(Path("/fake/test_path"), Path("/fake/archive_path"), configuration)
-    return manager.select_layouts(total_cores, **kwargs)
-
-
 @pytest.fixture(scope="function")
 def pi_control_layout(esm16):
     """The released ACCESS-ESM1.6 PI control layout, picked out of the ones the layout search returns.
@@ -91,7 +76,7 @@ def pi_control_layout(esm16):
     the same 12 cores idle. What matters here is that the released one is among them.
     """
 
-    layouts = _select(esm16, PI_CONTROL_TOTAL_CORES, allocations=PI_CONTROL_ALLOCATIONS)
+    layouts = select_layouts(esm16, PI_CONTROL_TOTAL_CORES, allocations=PI_CONTROL_ALLOCATIONS)
     released = [
         layout
         for layout in layouts
@@ -218,7 +203,7 @@ ESM16_SCALING_ALLOCATIONS = _esm16_scaling_allocations()
 def test_esm16_caller_supplied_allocations(esm16, total_cores):
     """Test that one fractional allocation strategy generates usable ACCESS-ESM1.6 layouts at every size."""
 
-    layouts = _select(esm16, total_cores, allocations=ESM16_SCALING_ALLOCATIONS)
+    layouts = select_layouts(esm16, total_cores, allocations=ESM16_SCALING_ALLOCATIONS)
     assert layouts, f"No layout found for {total_cores} cores."
 
     for layout in layouts:
@@ -239,7 +224,7 @@ def test_esm16_component_tree_bounds_layouts_on_its_own(esm16):
     returns when the caller states no preferences at all.
     """
 
-    layouts = _select(esm16, PI_CONTROL_TOTAL_CORES, max_layouts=200)
+    layouts = select_layouts(esm16, PI_CONTROL_TOTAL_CORES, max_layouts=200)
     assert layouts, "The component tree alone should still admit layouts."
 
     for layout in layouts:
@@ -439,7 +424,7 @@ class TestESM16AMIP:
         assert [component.name for component in tree.subcomponents] == [ESM16_UM7_NAME]
 
     def test_it_generates_layouts_of_the_atmosphere_alone(self, amip):
-        layouts = _select(amip, 208, max_layouts=50)
+        layouts = select_layouts(amip, 208, max_layouts=50)
 
         assert layouts
         for layout in layouts:
@@ -447,7 +432,7 @@ class TestESM16AMIP:
             assert grid_of(um7)[0] % 2 == 0, "the UM still needs an even x"
 
     def test_it_changes_the_one_submodel_it_has(self, amip):
-        layout = _select(amip, 208, max_layouts=50)[0]
+        layout = select_layouts(amip, 208, max_layouts=50)[0]
         changes = amip.config_changes(layout)
 
         (submodels,) = changes["config.yaml"]["submodels"]
@@ -461,7 +446,7 @@ class TestESM16AMIP:
         The layouts of one node leave different numbers of cores idle, and would otherwise run as jobs of as
         many different sizes, which parse_ncpus would then report and select_best_experiments set apart.
         """
-        layouts = _select(amip, 104)
+        layouts = select_layouts(amip, 104)
         assert len({layout.idle_cores for layout in layouts}) > 1, "layouts using different numbers of cores"
 
         for layout in layouts:
@@ -473,7 +458,7 @@ class TestESM16AMIP:
     def test_its_experiments_are_not_the_coupled_ones(self, amip, pi_control_layout, esm16):
         """Which is the whole point of the configuration being in the name."""
 
-        assert amip.experiment_name(_select(amip, 208, max_layouts=50)[0]).startswith("esm1p6-layout_amip_")
+        assert amip.experiment_name(select_layouts(amip, 208, max_layouts=50)[0]).startswith("esm1p6-layout_amip_")
         assert esm16.experiment_name(pi_control_layout).startswith("esm1p6-layout_piControl_")
 
 
@@ -545,7 +530,7 @@ class TestESM16WithoutAnAtmosphere:
     def ocean_ice_layout(self, ocean_ice):
         """A layout of it, picked by the ocean grid so that what it comes to can be written out in full."""
 
-        layouts = _select(ocean_ice, self.OCEAN_ICE_TOTAL_CORES, allocations=self.OCEAN_ICE_ALLOCATIONS)
+        layouts = select_layouts(ocean_ice, self.OCEAN_ICE_TOTAL_CORES, allocations=self.OCEAN_ICE_ALLOCATIONS)
         picked = [layout for layout in layouts if grid_of(layout.sub_layouts[0]) == PI_CONTROL_MOM5_GRID]
         assert len(picked) == 1, "The layout search should find the released ocean grid exactly once."
         return picked[0]
@@ -614,7 +599,7 @@ class TestESM16SeaIceThatDecomposesNothing:
     def roundrobin_layout(self, roundrobin):
         """A layout of it at the released core counts, bar the sea ice's, picked by the two process grids."""
 
-        layouts = _select(roundrobin, self.OPAQUE_TOTAL_CORES, allocations=self.OPAQUE_ALLOCATIONS)
+        layouts = select_layouts(roundrobin, self.OPAQUE_TOTAL_CORES, allocations=self.OPAQUE_ALLOCATIONS)
         picked = [
             layout
             for layout in layouts

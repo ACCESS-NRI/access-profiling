@@ -13,15 +13,15 @@ from access.profiling.control import GitControlSource
 from access.profiling.rose_configuration import RoseSuiteConfiguration
 from access.profiling.um_parser import UMProfilingParser, UMTotalRuntimeParser
 
-# The UM writes one profiling log per task, read twice: once for its regions and once for its total run time.
 UM_SUITE_PARSERS: dict = {
     "UM_regions": UMProfilingParser(),
     "UM_total": UMTotalRuntimeParser(),
 }
+"""The parsers the UM suites read their task logs with, keyed by name.
 
-# ACCESS-AM3, whose `rose-suite.conf` names the two extents of the atmosphere's process grid separately, adds
-# the I/O server's ranks to their product, and multiplies the result by the OpenMP threads each rank runs.
-# This is the arithmetic of the pbs_cpus macro in site/nci_gadi.rc: cpus(x, y, i, nt) = (x*y + i)*nt.
+The UM writes one profiling log per task, read twice: once for its regions and once for its total run time.
+"""
+
 AM3_N96E: RoseSuiteConfiguration = RoseSuiteConfiguration(
     name="n96e",
     layout_variable=("MAIN_ATM_PROCX", "MAIN_ATM_PROCY"),
@@ -30,24 +30,34 @@ AM3_N96E: RoseSuiteConfiguration = RoseSuiteConfiguration(
     cpus_per_proc_variable="MAIN_OMPTHR_ATM",
     io_server_variable="MAIN_IOS_NPROC",
 )
+"""ACCESS-AM3, whose `rose-suite.conf` names the two extents of the atmosphere's process grid separately.
 
-# The release that configuration describes. Cylc takes its control the same way Payu does - ACCESS-AM3's
-# configurations are a git repository whose releases are tags - but nothing here clones it: the suite is
-# expected to be in the working directory already, so this records what a study was run against rather than
-# fetching it.
+It adds the I/O server's ranks to their product, and multiplies the result by the OpenMP threads each rank runs.
+This is the arithmetic of the pbs_cpus macro in site/nci_gadi.rc: `cpus(x, y, i, nt) = (x*y + i)*nt`.
+"""
+
 AM3_CONFIGS_REPOSITORY: str = "git@github.com:ACCESS-NRI/ACCESS-AM3-configs.git"
+"""The repository holding the released ACCESS-AM3 configurations."""
 AM3_N96E_SOURCE: GitControlSource = GitControlSource(
     repository=AM3_CONFIGS_REPOSITORY,
     start_point="release-n96e-3.0",
 )
+"""The release `AM3_N96E` describes, as a control to profile it against.
 
-# ACCESS-rAM3, whose suite states both extents in one comma-separated variable, runs one thread per rank and
-# has no I/O server. Its suites are checked out by hand - `rosie checkout` after `mosrs-auth`, or `git clone`
-# now that the configurations are moving to git - so a study supplies its own control rather than taking one
-# from here.
+Cylc takes its control the same way Payu does - ACCESS-AM3's configurations are a git repository whose releases
+are tags - but nothing here clones it: the suite is expected to be in the working directory already, so this
+records what a study was run against rather than fetching it.
+"""
+
 RAM3: RoseSuiteConfiguration = RoseSuiteConfiguration(
     name="ram3",
     layout_variable="rg01_rs01_m01_nproc",
     parsers=UM_SUITE_PARSERS,
     experiment_prefix="ram3-layout",
 )
+"""ACCESS-rAM3, whose suite states both extents in one comma-separated variable.
+
+It runs one thread per rank and has no I/O server. Its suites are checked out by hand - `rosie checkout` after
+`mosrs-auth`, or `git clone` now that the configurations are moving to git - so a study supplies its own control
+rather than taking one from here.
+"""

@@ -23,10 +23,10 @@ from access.profiling.metrics import count, tavg
 from access.profiling.plotting_utils import RegionGroup
 
 
-class MockConfiguration(Application):
-    """The model axis these tests do not exercise, with the one member they do.
+class MockApplication(Application):
+    """The application axis these tests do not exercise, with the one member they do.
 
-    What the manager's own tests cover - parsing, archiving, bookkeeping, plotting - takes a configuration
+    What the manager's own tests cover - parsing, archiving, bookkeeping, plotting - takes an application
     only to read a layout back and to say which component a log belongs to. The rest raises, so a test that
     reached the layout search by accident would say so.
 
@@ -66,7 +66,7 @@ class MockConfiguration(Application):
         return self.layouts.get(output_dir.name)
 
 
-class MockProfilingManager(ProfilingManager[MockConfiguration]):
+class MockProfilingManager(ProfilingManager[MockApplication]):
     """Test class inheriting from ProfilingManager to test its methods.
 
     This class will simulate parsing of some profiling data.
@@ -86,7 +86,7 @@ class MockProfilingManager(ProfilingManager[MockConfiguration]):
         ncpus: list[int] | None = None,
         datasets: list[dict[str, xr.Dataset]] | None = None,
     ):
-        super().__init__(Path("/fake/work_dir"), Path("/fake/archive_dir"), MockConfiguration())
+        super().__init__(Path("/fake/work_dir"), Path("/fake/archive_dir"), MockApplication())
 
         # Pre-generate experiments
         for path in paths:
@@ -121,9 +121,12 @@ class MockProfilingManager(ProfilingManager[MockConfiguration]):
         """Simulate parsing profiling data for a given path."""
         pass
 
-    def _delete_experiment(self, name, dry_run, **kwargs):
+    def _delete_experiments(self, names, dry_run, **kwargs):
         """Record requested deletions instead of touching the filesystem."""
-        self._deleted_experiments.append((name, dry_run))
+        self._deleted_experiments.append((names, dry_run))
+
+    def run_experiments(self, retry_failed=False):
+        """Nothing to run: these tests drive the experiments' statuses themselves."""
 
     def _create_experiments(self, plans, **runner_options):
         """Record what generation decided, and register everything new."""
@@ -238,7 +241,7 @@ def test_repr(scaling_data):
 
 
 def test_repr_names_the_control_the_study_perturbs():
-    """A manager profiling the same configuration against two releases in turn must be able to say which one.
+    """A manager profiling the same application against two releases in turn must be able to say which one.
 
     The control line is printed only when there is one - test_repr covers the manager that has none - so a repr
     that dropped it would still look entirely plausible, while two studies of 'mock' became indistinguishable.
@@ -1508,3 +1511,13 @@ class TestLayoutIsReadBackOnce:
 
         assert manager._layout("expt") is None
         assert manager.experiments["expt"].layout is None
+
+
+def test_a_manager_states_how_it_runs_experiments():
+    """Every engine runs the experiments its own way, so a manager that does not say how cannot be created."""
+
+    class WithoutRunExperiments(MockProfilingManager):
+        run_experiments = ProfilingManager.run_experiments
+
+    with pytest.raises(TypeError, match="run_experiments"):
+        WithoutRunExperiments(paths=[Path("/fake/work_dir")])

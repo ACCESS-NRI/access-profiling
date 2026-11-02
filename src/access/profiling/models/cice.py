@@ -16,12 +16,12 @@ gives a rank count so many of them depends on that count. So a partitioning give
 chooses the block size itself, from the rank count the search chose and whatever scheme the control
 configures, and the search is left to choose that rank count alone.
 
-This matters because the domain, the constraints and the namelist writer have to agree, and until now they
-agreed only by hand: ACCESS-ESM1.6 hard-codes a one-dimensional domain on the grounds that the component is
-CICE5, which is not the reason - it is one-dimensional because `slenderX1` with one block row is - and
-ACCESS-OM3 turns a chosen two-dimensional process grid into block sizes for a release that distributes
-`roundrobin`, where that grid means nothing. Deriving all three from the partitioning is what keeps them
-together.
+This matters because the domain, the constraints and the namelist writer have to agree, and stated separately
+they agree only by hand. By hand is how ACCESS-ESM1.6's sea ice comes to be given a one-dimensional domain on the
+grounds that the component is CICE5, which is not the reason - it is one-dimensional because `slenderX1` with one
+block row is - and how a chosen two-dimensional process grid comes to be turned into block sizes for an
+ACCESS-OM3 release that distributes `roundrobin`, where that grid means nothing. Deriving all three from the
+partitioning is what keeps them together.
 
 Both models' sea ice is described here because this is CICE's behaviour rather than either model's: ESM1.6
 runs CICE5 and OM3 runs CICE6, and the question of what a search may choose is the same one.

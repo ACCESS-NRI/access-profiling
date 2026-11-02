@@ -8,15 +8,21 @@ from unittest import mock
 
 import pytest
 
-from access.profiling.experiment import ProfilingExperiment, ProfilingExperimentStatus, ProfilingLog
+from access.profiling.experiment import (
+    ProfilingExperiment,
+    ProfilingExperimentStatus,
+    ProfilingLog,
+    experiment_directory_walker,
+)
 from access.profiling.metrics import tavg, tmax
+from access.profiling.parser import ProfilingParser
 
 
 def test_profiling_log():
     """Test the ProfilingLog class."""
 
     # Mock parser and path
-    mock_parser = mock.MagicMock(autospec=True)
+    mock_parser = mock.Mock(spec=ProfilingParser)
     mock_parser.metrics = [tavg, tmax]
     mock_parser.parse.return_value = {
         "region": ["Region 1", "Region 2"],
@@ -47,7 +53,7 @@ def test_profiling_log():
 def test_profiling_log_duplicate_regions():
     """Test duplicate region names are renamed correctly during parsing."""
 
-    mock_parser = mock.MagicMock(autospec=True)
+    mock_parser = mock.Mock(spec=ProfilingParser)
     mock_parser.metrics = [tavg]
     mock_parser.parse.return_value = {
         "region": ["Region 1", "Region 1", "Region 2", "Region 1"],
@@ -68,7 +74,7 @@ def test_profiling_log_duplicate_regions():
 
 def test_profiling_log_hierarchical():
     """Test ProfilingLog.parse() with hierarchical (nested dict) parser output."""
-    mock_parser = mock.MagicMock(autospec=True)
+    mock_parser = mock.Mock(spec=ProfilingParser)
     mock_parser.metrics = [tavg, tmax]
     # Nested dict: no 'region' key — string keys are children, metric keys are values
     mock_parser.parse.return_value = {
@@ -92,7 +98,7 @@ def test_profiling_log_hierarchical():
 
 def test_profiling_log_with_pe():
     """Test ProfilingLog.parse() with per-PE parser output."""
-    mock_parser = mock.MagicMock(autospec=True)
+    mock_parser = mock.Mock(spec=ProfilingParser)
     mock_parser.metrics = [tavg]
     mock_parser.parse.return_value = {
         "region": ["Region 1", "Region 2"],
@@ -236,8 +242,9 @@ def test_profiling_experiment_archive_file_exists():
     exp = ProfilingExperiment(path=Path("/fake/work_dir/exp1"))
     exp.status = ProfilingExperimentStatus.DONE
 
-    with mock.patch.object(Path, "exists", return_value=True) as mock_exists, pytest.raises(FileExistsError):
-        exp.archive(Path("/fake/archive"))
+    with mock.patch.object(Path, "exists", return_value=True) as mock_exists:
+        with pytest.raises(FileExistsError):
+            exp.archive(Path("/fake/archive"))
         mock_exists.assert_called_once()
 
 
@@ -280,7 +287,8 @@ def setup_experiment_directory():
             root (Path): Root temporary directory.
             follow_symlinks (bool): Whether archiving will follow symlinks.
         Returns:
-            tuple: (list of files expected to be archived, list of all files in the experiment)
+            tuple: (list of files expected to be added to the archive, list of the symlinks inside the experiment,
+                which are kept as links relative to where they are)
         """
         # Create directories
         for dir in [
@@ -322,25 +330,32 @@ def setup_experiment_directory():
         file_link_out = root / Path("exp1/another.log")
         file_link_out.symlink_to(root / Path("another.log"))
 
-        # Lists of symlinks inside and outside experiment directory
+        # Symlinks inside the experiment directory, kept as links whether or not symlinks are followed
         links_in = [Path("exp1/latest/logs/log.txt")]
-        links_out = [Path("exp1/another.log"), Path("exp1/archive")]
 
         if follow_symlinks:
-            # Return files inside and outside experiment directory, plus links pointing to files inside
-            return files_in + files_out + links_in
+            # Return files inside and outside experiment directory, and links pointing to files inside
+            return files_in + files_out, links_in
         else:
-            # Return files inside the experiment directory, plus links pointing to files inside and outside
-            return files_in + links_in + links_out
+            # Return files inside the experiment directory, and links pointing inside: the links pointing outside,
+            # exp1/another.log and exp1/archive, are left out, as they could not be extracted
+            return files_in, links_in
 
     return _setup_experiment_directory
 
 
+def assert_links_kept(mock_tarfile, root, links):
+    """Asserts that every symlink inside the experiment was added as a link relative to where it is."""
+    assert mock_tarfile.addfile.call_count == len(links)
+    for link in links:
+        mock_tarfile.gettarinfo.assert_any_call(root / link, arcname=str(Path("experiment") / link.relative_to("exp1")))
+
+
 @mock.patch("access.profiling.experiment.tarfile.open")
-def test_profiling_experiment_archive(mock_open, tmp_path, setup_experiment_directory):
+def test_profiling_experiment_archive(mock_open, tmp_path, setup_experiment_directory, caplog):
     """Test the archive method of ProfilingExperiment whithout following symlinks."""
 
-    files = setup_experiment_directory(tmp_path, follow_symlinks=False)
+    files, links = setup_experiment_directory(tmp_path, follow_symlinks=False)
 
     # Setup mock TarFile with context manager
     mock_tarfile = mock.MagicMock()
@@ -351,7 +366,12 @@ def test_profiling_experiment_archive(mock_open, tmp_path, setup_experiment_dire
     exp.status = ProfilingExperimentStatus.DONE
 
     # Archive experiment with no exclude patterns, not following symlinks (default)
-    exp.archive(Path("/fake/archive"))
+    with caplog.at_level(logging.INFO, logger="access.profiling.experiment"):
+        exp.archive(Path("/fake/archive"))
+
+    # The links pointing outside the experiment directory are left out, and said to be
+    for link in ["exp1/another.log", "exp1/archive"]:
+        assert f"Leaving {tmp_path / link} out of the archive" in caplog.text
 
     # Check calls
     assert exp.status == ProfilingExperimentStatus.ARCHIVED  # Status should be updated to ARCHIVED
@@ -365,13 +385,14 @@ def test_profiling_experiment_archive(mock_open, tmp_path, setup_experiment_dire
         else:
             arcname = Path("experiment") / file
         mock_tarfile.add.assert_any_call(tmp_path / file, arcname=arcname)
+    assert_links_kept(mock_tarfile, tmp_path, links)
 
 
 @mock.patch("access.profiling.experiment.tarfile.open")
 def test_profiling_experiment_archive_follow_symlinks(mock_open, tmp_path, setup_experiment_directory):
     """Test the archive method of ProfilingExperiment when following symlinks."""
 
-    files = setup_experiment_directory(tmp_path, follow_symlinks=True)
+    files, links = setup_experiment_directory(tmp_path, follow_symlinks=True)
 
     # Setup mock TarFile with context manager
     mock_tarfile = mock.MagicMock()
@@ -396,13 +417,14 @@ def test_profiling_experiment_archive_follow_symlinks(mock_open, tmp_path, setup
         else:
             arcname = Path("experiment") / file
         mock_tarfile.add.assert_any_call(tmp_path / file, arcname=arcname)
+    assert_links_kept(mock_tarfile, tmp_path, links)
 
 
 @mock.patch("access.profiling.experiment.tarfile.open")
 def test_profiling_experiment_archive_with_filters(mock_open, tmp_path, setup_experiment_directory):
     """Test the archive method of ProfilingExperiment with exclude patterns."""
 
-    files = setup_experiment_directory(tmp_path, follow_symlinks=True)
+    files, links = setup_experiment_directory(tmp_path, follow_symlinks=True)
     files_to_archive = []
     for file in files:
         # Exclude files that match the exclude patterns
@@ -439,6 +461,7 @@ def test_profiling_experiment_archive_with_filters(mock_open, tmp_path, setup_ex
         else:
             arcname = Path("experiment") / file
         mock_tarfile.add.assert_any_call(tmp_path / file, arcname=arcname)
+    assert_links_kept(mock_tarfile, tmp_path, links)
 
 
 @mock.patch("access.profiling.experiment.tarfile.open")
@@ -475,3 +498,139 @@ def test_profiling_experiment_archive_with_run_path(mock_open, tmp_path):
     # run_path cleared after archiving
     assert exp.run_path is None
     assert exp.path == Path("/fake/archive.tar.gz")
+
+
+class TestSymlinksInsideTheExperiment:
+    """A symlink to something inside the experiment is archived as a link, whatever it points to and whether symlinks
+    are followed, so that what it points to is archived once, where it is, and the link still points at it once the
+    archive is extracted."""
+
+    @staticmethod
+    def make_experiment(root: Path) -> Path:
+        """An experiment with an absolute symlink to a directory in it, and a relative one to a file."""
+        exp = root / "exp1"
+        (exp / "archive" / "output001").mkdir(parents=True)
+        (exp / "archive" / "output001" / "timings.txt").write_text("timings")
+        (exp / "latest").symlink_to(exp / "archive" / "output001")
+        (exp / "archive" / "timings.txt").symlink_to("output001/timings.txt")
+        return exp
+
+    @staticmethod
+    def done(path: Path) -> ProfilingExperiment:
+        experiment = ProfilingExperiment(path=path)
+        experiment.status = ProfilingExperimentStatus.DONE
+        return experiment
+
+    @pytest.mark.parametrize("follow_symlinks", [True, False])
+    def test_the_walk_keeps_them(self, tmp_path, follow_symlinks):
+        exp = self.make_experiment(tmp_path)
+
+        walked = set(experiment_directory_walker(exp, Path("experiment"), exp, follow_symlinks=follow_symlinks))
+
+        assert walked == {
+            (exp / "archive/output001/timings.txt", Path("experiment/archive/output001/timings.txt")),
+            (exp / "latest", Path("experiment/latest")),
+            (exp / "archive/timings.txt", Path("experiment/archive/timings.txt")),
+        }
+
+    @pytest.mark.parametrize("follow_symlinks", [True, False])
+    def test_the_archive_extracts_with_them(self, tmp_path, follow_symlinks):
+        """The links are made relative, which is also what lets the archive be extracted at all, the data filter
+        refusing links to absolute paths."""
+        experiment = self.done(self.make_experiment(tmp_path))
+
+        experiment.archive(tmp_path / "archived", follow_symlinks=follow_symlinks)
+
+        with experiment.directory() as (path, _):
+            assert (path / "latest").readlink() == Path("archive/output001")
+            assert (path / "archive/timings.txt").readlink() == Path("output001/timings.txt")
+            assert (path / "latest/timings.txt").read_text() == "timings"
+            assert (path / "archive/timings.txt").read_text() == "timings"
+            assert sorted(p.name for p in path.rglob("*") if p.is_file() and not p.is_symlink()) == ["timings.txt"]
+
+    def test_a_link_met_outside_that_points_back_inside(self, tmp_path):
+        """Payu keeps an experiment's outputs outside it, in its laboratory, behind a symlink that is followed. A
+        link there to a file of the experiment is kept relative to where it lands in the archive."""
+        exp = tmp_path / "exp1"
+        exp.mkdir()
+        (exp / "config.yaml").write_text("model: access-esm1.6\n")
+        lab_output = tmp_path / "lab" / "output001"
+        lab_output.mkdir(parents=True)
+        (lab_output / "config.yaml").symlink_to(exp / "config.yaml")
+        (exp / "archive").symlink_to(tmp_path / "lab")
+        experiment = self.done(exp)
+
+        experiment.archive(tmp_path / "archived", follow_symlinks=True)
+
+        with experiment.directory() as (path, _):
+            assert (path / "archive/output001/config.yaml").readlink() == Path("../../config.yaml")
+            assert (path / "archive/output001/config.yaml").read_text() == "model: access-esm1.6\n"
+
+
+class TestWhatIsLeftOut:
+    """What archiving leaves out: links it could not extract, and what the exclusion patterns name, matched in the
+    archive rather than on disk."""
+
+    @staticmethod
+    def done(path: Path, run_path: Path | None = None) -> ProfilingExperiment:
+        experiment = ProfilingExperiment(path=path, run_path=run_path)
+        experiment.status = ProfilingExperimentStatus.DONE
+        return experiment
+
+    @staticmethod
+    def archived(path: Path) -> list[Path]:
+        """Everything an extracted directory holds, files and links alike, relative to it."""
+        return sorted(entry.relative_to(path) for entry in path.rglob("*") if entry.is_file() or entry.is_symlink())
+
+    def test_a_link_outside_is_left_out_when_links_are_not_followed(self, tmp_path, caplog):
+        """Kept as a link, it could not be extracted: the data filter refuses links pointing outside the archive."""
+        exp = tmp_path / "exp1"
+        exp.mkdir()
+        (exp / "timings.txt").write_text("timings")
+        (tmp_path / "shared").mkdir()
+        (tmp_path / "shared" / "forcing.nc").write_text("forcing")
+        (exp / "shared").symlink_to(tmp_path / "shared")
+        experiment = self.done(exp)
+
+        with caplog.at_level(logging.INFO, logger="access.profiling.experiment"):
+            experiment.archive(tmp_path / "archived")
+
+        with experiment.directory() as (path, _):
+            assert self.archived(path) == [Path("timings.txt")]
+        assert f"Leaving {exp / 'shared'} out of the archive" in caplog.text
+
+    def test_a_root_that_is_a_symlink_is_archived_as_what_it_points_to(self, tmp_path):
+        """As a Cylc run directory is, when the runs are kept on another file system."""
+        exp = tmp_path / "u-aa123"
+        exp.mkdir()
+        (exp / "rose-suite.conf").write_text("um_layout = 2,3\n")
+        runs = tmp_path / "scratch" / "cylc-run" / "u-aa123"
+        (runs / "log").mkdir(parents=True)
+        (runs / "log" / "db").write_text("tasks")
+        (tmp_path / "cylc-run").mkdir()
+        (tmp_path / "cylc-run" / "u-aa123").symlink_to(runs)
+        experiment = self.done(exp, run_path=tmp_path / "cylc-run" / "u-aa123")
+
+        experiment.archive(tmp_path / "archived")
+
+        with experiment.directory() as (_, run_path):
+            assert run_path is not None
+            assert self.archived(run_path) == [Path("log/db")]
+
+    def test_the_patterns_are_matched_in_the_archive(self, tmp_path):
+        """A directory above the experiment named like an excluded one excludes nothing, and a link to a directory,
+        kept as a link, is excluded by its own name."""
+        exp = tmp_path / "share" / "exp1"
+        (exp / "restart000").mkdir(parents=True)
+        (exp / "restart000" / "ocean.res").write_text("restart")
+        (exp / "restart_latest").symlink_to(exp / "restart000")
+        (exp / "timings.txt").write_text("timings")
+        (exp / "output.nc").write_text("output")
+        experiment = self.done(exp)
+
+        experiment.archive(
+            tmp_path / "archived", exclude_dirs=["share", "restart*"], exclude_files=["*.nc"], follow_symlinks=True
+        )
+
+        with experiment.directory() as (path, _):
+            assert self.archived(path) == [Path("timings.txt")]

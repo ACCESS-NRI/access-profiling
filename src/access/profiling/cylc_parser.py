@@ -3,6 +3,7 @@
 
 """Parser for Cylc log files. The data to be parsed is written in the following form:
 
+```text
 2025-10-17T00:51:12Z INFO - Suite server: url=... pid=152868
 2025-10-17T00:51:12Z INFO - Run: (re)start=0 log=1
 2025-10-17T00:51:12Z INFO - Cylc version: 7.9.9
@@ -13,6 +14,7 @@
 ...
 2025-10-17T01:36:23Z INFO - Suite shutting down - AUTOMATIC
 2025-10-17T01:36:30Z INFO - DONE
+```
 
 The differences between the first and last time-stamp are used to determine the
 total pipeline walltime.
@@ -20,6 +22,7 @@ total pipeline walltime.
 
 import os
 import sqlite3
+from contextlib import closing
 from datetime import datetime
 from pathlib import Path
 
@@ -33,18 +36,23 @@ class CylcProfilingParser(ProfilingParser):
     _metrics = [tmax]
 
     def parse(self, file_path: str | Path | os.PathLike) -> dict:
-        """Implements "parse" abstract method to parse the Cycle suite run log.
+        """Implements "parse" abstract method to parse the Cylc suite run log.
 
         Args:
-            file_path (str | Path | os.PathLike): String containing the suite run log.
+            file_path (str | Path | os.PathLike): Path to the suite run log.
 
         Returns:
             dict: Parsed timing information.
 
         Raises:
-            ValueError: when the last line does not contain "DONE".
+            ValueError: when the file is empty, when the last line does not contain "DONE", or when the first or
+                the last line does not start with a valid timestamp.
+            TypeError: If file_path cannot be converted to a valid Path object.
+            FileNotFoundError: If file_path doesn't exist or isn't a file.
         """
         lines = _read_text_file(file_path).splitlines()
+        if not lines:
+            raise ValueError(f"Cylc log {file_path} is empty.")
 
         first_line = lines[0]
         last_line = lines[-1]
@@ -75,13 +83,13 @@ class CylcDBReader(ProfilingParser):
     _metrics = [tmax]
 
     def parse(self, file_path: str | Path | os.PathLike) -> dict:
-        """Implements "read" abstract method of CylcDBReader to parse the Cylc Rose task database.
+        """Implements "parse" abstract method to parse the task jobs of a Cylc suite database.
 
         Args:
             file_path (str | Path | os.PathLike): The path to the SQLite database.
 
         Returns:
-            dict: Read timing information.
+            dict: Parsed timing information.
 
         Raises:
             FileNotFoundError: When the provided database file doesn't exist.
@@ -91,7 +99,8 @@ class CylcDBReader(ProfilingParser):
 
         dbpath = _test_file(file_path)
 
-        with sqlite3.connect(dbpath) as con:
+        # A connection used as a context manager only ends a transaction, so it is closed explicitly.
+        with closing(sqlite3.connect(dbpath)) as con:
             cur = con.cursor()
 
             # collect and validate table columns . Return type: list of tuples

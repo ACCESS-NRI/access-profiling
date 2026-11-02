@@ -1,10 +1,20 @@
 # Copyright 2025 ACCESS-NRI and contributors. See the top-level COPYRIGHT file for details.
 # SPDX-License-Identifier: Apache-2.0
 
+"""Profiling studies of applications driven by a Cylc Rose suite, such as the ACCESS models ACCESS-AM3 and ACCESS-rAM3.
+
+`CylcRoseManager` is the manager for every rose suite: it runs experiments with `rose suite-run`, and reads back
+what the suite and Cylc recorded about each run - the CPUs its jobs occupied, the state its tasks reached and
+the profiling logs they wrote. Experiments are not generated for a suite: they are added from suites already
+in the working directory. What is being profiled arrives as a `RoseSuiteConfiguration`.
+"""
+
 import logging
+import re
 import shutil
 import sqlite3
 import subprocess
+from contextlib import closing
 from pathlib import Path
 
 from access.profiling.cylc_parser import CylcDBReader, CylcProfilingParser
@@ -19,9 +29,13 @@ from access.profiling.rose_configuration import RoseSuiteConfiguration
 
 logger = logging.getLogger(__name__)
 
+# The PBS request for CPUs in a job script, as Cylc writes the directive - `#PBS -l ncpus=576` - possibly after
+# other resources in the same list.
+_PBS_NCPUS = re.compile(r"^#PBS\s+-l\s+(?:[^\s,]+,)*ncpus=(?P<ncpus>\d+)\b", re.MULTILINE)
+
 
 class CylcRoseManager(ProfilingManager[RoseSuiteConfiguration]):
-    """Profiling of any ACCESS model driven by a Cylc Rose suite.
+    """Profiling of any application driven by a Cylc Rose suite, such as the ACCESS models.
 
     One class for every rose suite: what tells ACCESS-AM3 from ACCESS-rAM3 is the names their
     `rose-suite.conf` files give the variables stating their parallelism, and which parsers read their task
@@ -57,22 +71,70 @@ class CylcRoseManager(ProfilingManager[RoseSuiteConfiguration]):
         )
 
     def parse_ncpus(self, path: Path, run_path: Path | None = None) -> int:
-        """Parses the number of CPUs used in a given Cylc/Rose experiment, from the model layout.
+        """Parses the number of CPUs a given Cylc/Rose experiment occupied.
 
-        Finding the configuration file is this manager's, since where a rose suite keeps it and how it is
-        written is the runner's business; what its variables are called, and so how many CPUs they come to, is
-        the suite's and is answered by the configuration.
+        The layout is read first: finding the configuration file is this manager's, since where a rose suite
+        keeps it and how it is written is the runner's business, while what its variables are called, and so how
+        many CPUs they come to, is the suite's and is answered by the configuration.
 
-        Unlike the Payu manager, this reports the cores the layout puts to work rather than the ones the job
-        occupied: it does not yet round up to whole compute nodes the way PayuManager.parse_ncpus does, though
-        the configuration does state the node size. Scaling studies whose sizes are not multiples of the node
-        size will therefore group experiments by a slightly smaller count than they were charged for, until
-        this is implemented.
+        The job that runs the layout may occupy more CPUs than the layout puts to work, to fill whole compute
+        nodes, and the scheduler charges for those. So, as PayuManager.parse_ncpus reads what the scheduler was
+        asked for, this reads the PBS requests in the job scripts Cylc submitted, and reports the smallest that
+        covers the layout: that of the job that ran it. Where no job script covers the layout - no run directory,
+        no job submitted to PBS - the layout's own count is reported. See _requested_ncpus.
 
         Args:
             path (Path): Path to the experiment directory. Must contain a rose-suite.conf file.
             run_path (Path | None): Optional path to a separate runs directory. Its run configuration is
-                preferred over the one in path when present, since it records what the run actually used.
+                preferred over the one in path when present, since it records what the run actually used, and
+                its job scripts say what the run's jobs asked PBS for.
+
+        Returns:
+            int: Number of CPUs the experiment occupied, including any left idle to fill whole compute nodes.
+
+        Raises:
+            FileNotFoundError: If neither configuration file exists.
+            ValueError: If a variable the configuration names is not set in the file that was found.
+        """
+        layout_cpus = self._layout_ncpus(path, run_path)
+        if run_path is None:
+            return layout_cpus
+
+        covering = [ncpus for ncpus in self._requested_ncpus(run_path) if ncpus >= layout_cpus]
+        if not covering:
+            logger.debug(f"No job in {run_path} asked PBS for the {layout_cpus} CPUs of the layout, or more.")
+            return layout_cpus
+        return min(covering)
+
+    @staticmethod
+    def _requested_ncpus(run_path: Path) -> list[int]:
+        """Returns the numbers of CPUs the jobs of a suite's run asked PBS for.
+
+        Cylc writes the directives of a task's job into the script it submits, at
+        log/job/<cycle>/<task>/NN/job for the latest attempt at it, so a job submitted to PBS has a `#PBS -l
+        ncpus=<n>` line there. A job asking for chunks with `select` instead, or not submitted to PBS, says
+        nothing here.
+
+        Args:
+            run_path (Path): Path to the Cylc run directory.
+
+        Returns:
+            list[int]: The request of every job script that makes one, in no particular order.
+        """
+        requests = []
+        for script in run_path.glob("log/job/*/*/NN/job"):
+            match = _PBS_NCPUS.search(script.read_text(errors="replace"))
+            if match is not None:
+                requests.append(int(match["ncpus"]))
+        return requests
+
+    def _layout_ncpus(self, path: Path, run_path: Path | None) -> int:
+        """Returns the number of CPUs the layout of a suite puts to work, from its rose-suite.conf.
+
+        Args:
+            path (Path): Path to the experiment directory.
+            run_path (Path | None): Optional path to a separate runs directory, whose run configuration is
+                preferred.
 
         Returns:
             int: Number of CPUs the layout puts to work.
@@ -81,8 +143,6 @@ class CylcRoseManager(ProfilingManager[RoseSuiteConfiguration]):
             FileNotFoundError: If neither configuration file exists.
             ValueError: If a variable the configuration names is not set in the file that was found.
         """
-        # TODO: round up to whole compute nodes, as PayuManager.parse_ncpus does, using the node size from the
-        # Rose/Cylc configuration.
         # both the run and original config will store cpu information
         config_paths = []
         if run_path is not None:
@@ -110,10 +170,15 @@ class CylcRoseManager(ProfilingManager[RoseSuiteConfiguration]):
     def add_rose_experiment(self, rose: str, run_path: Path | None = None) -> None:
         """Adds the given rose as an experiment to this manager.
 
+        The experiment takes the status the suite database in its run directory records, as parse_status reads
+        it: DONE once every task has succeeded, FAILED once one has not, and RUNNING while some are still going. A
+        suite with no run recorded there is NEW, which is what run_experiments runs.
+
         Args:
             rose (str): The rose to add as an experiment.
-            run_path (Path | None): Path to the Cylc run directory holding the results. If not provided, or if the
-                provided directory does not exist, archiving will only include the experiment files.
+            run_path (Path | None): Path to the Cylc run directory of the suite, where its results are, or will be
+                once it runs: it does not have to exist yet. Without it, nothing the suite records can be read, so
+                the suite stays NEW, a run of it is never seen to finish, and its logs cannot be parsed.
 
         Raises:
             ValueError: If the experiment path does not exist.
@@ -122,12 +187,10 @@ class CylcRoseManager(ProfilingManager[RoseSuiteConfiguration]):
         if not experiment_path.is_dir():
             raise ValueError(f"Experiment path '{experiment_path}' does not exist or is not a directory.")
 
-        if run_path is not None and not run_path.is_dir():
-            logger.warning(f"Run path '{run_path}' does not exist. Archiving will only include experiment files.")
-            run_path = None
-
-        self.experiments[rose] = ProfilingExperiment(path=experiment_path, run_path=run_path)
-        self.experiments[rose].status = ProfilingExperimentStatus.DONE
+        experiment = ProfilingExperiment(path=experiment_path, run_path=run_path)
+        status = self.parse_status(experiment_path, run_path)
+        experiment.status = status if status is not None else ProfilingExperimentStatus.NEW
+        self.experiments[rose] = experiment
 
     def run_experiments(self, retry_failed: bool = False) -> None:
         """Runs Rose Cylc experiments via `rose suite-run` for profiling data generation.
@@ -172,32 +235,33 @@ class CylcRoseManager(ProfilingManager[RoseSuiteConfiguration]):
                 logger.warning(f"[{name}] {line}")
             exp.status = ProfilingExperimentStatus.RUNNING
 
-    def _delete_experiment(self, name: str, dry_run: bool, **kwargs) -> None:
-        """Deletes the experiment and run directories of a single Rose Cylc experiment.
+    def _delete_experiments(self, names: list[str], dry_run: bool, **kwargs) -> None:
+        """Deletes the experiment and run directories of Rose Cylc experiments.
 
         Args:
-            name (str): Name of the experiment to delete.
+            names (list[str]): Names of the experiments to delete.
             dry_run (bool): If True, logs what would be deleted without making any changes.
             **kwargs: Ignored. Accepted so that this stays substitutable for the base method, whose callers
                 may pass options other runners take.
         """
-        exp = self.experiments[name]
-        exp_path = exp.path
-        run_path = exp.run_path
-        if dry_run:
-            logger.info(f"Dry run: would delete experiment directory '{exp_path}' and run directory '{run_path}'.")
-            return
-        if exp_path.is_dir():
-            logger.info(f"Deleting experiment directory '{exp_path}'.")
-            shutil.rmtree(exp_path)
-        else:
-            logger.warning(f"Experiment directory '{exp_path}' does not exist. Skipping deletion.")
-        if run_path is not None:
-            if run_path.is_dir():
-                logger.info(f"Deleting run directory '{run_path}'.")
-                shutil.rmtree(run_path)
+        for name in names:
+            exp = self.experiments[name]
+            exp_path = exp.path
+            run_path = exp.run_path
+            if dry_run:
+                logger.info(f"Dry run: would delete experiment directory '{exp_path}' and run directory '{run_path}'.")
+                continue
+            if exp_path.is_dir():
+                logger.info(f"Deleting experiment directory '{exp_path}'.")
+                shutil.rmtree(exp_path)
             else:
-                logger.warning(f"Run directory '{run_path}' does not exist. Skipping deletion.")
+                logger.warning(f"Experiment directory '{exp_path}' does not exist. Skipping deletion.")
+            if run_path is not None:
+                if run_path.is_dir():
+                    logger.info(f"Deleting run directory '{run_path}'.")
+                    shutil.rmtree(run_path)
+                else:
+                    logger.warning(f"Run directory '{run_path}' does not exist. Skipping deletion.")
 
     def archive_experiments(
         self,
@@ -251,8 +315,9 @@ class CylcRoseManager(ProfilingManager[RoseSuiteConfiguration]):
             logger.debug(f"No Cylc suite database at {cylcdb}.")
             return None
 
+        # A connection used as a context manager only ends a transaction, so it is closed explicitly.
         try:
-            with sqlite3.connect(f"file:{cylcdb}?mode=ro", uri=True) as connection:
+            with closing(sqlite3.connect(f"file:{cylcdb}?mode=ro", uri=True)) as connection:
                 statuses = [row[0] for row in connection.execute("SELECT run_status FROM task_jobs")]
         except sqlite3.Error as error:
             logger.debug(f"Could not read task statuses from {cylcdb}: {error}.")
@@ -274,9 +339,14 @@ class CylcRoseManager(ProfilingManager[RoseSuiteConfiguration]):
         Args:
             path (Path): Path to the experiment directory.
             run_path (Path | None): Path to the Cylc run directory.
+
         Returns:
             dict[str, dict[int, ProfilingLog]]: Dictionary mapping log names to their logs, keyed by run number.
                 Cylc workflows have no concept of repeated runs, so every log is returned as the single run 0.
+
+        Raises:
+            ValueError: If no run directory is given.
+            RuntimeError: If the run directory holds no task job logs.
         """
         if run_path is None:
             raise ValueError("Cylc run_path is required to locate profiling logs.")

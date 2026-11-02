@@ -1,7 +1,17 @@
 # Copyright 2025 ACCESS-NRI and contributors. See the top-level COPYRIGHT file for details.
 # SPDX-License-Identifier: Apache-2.0
 
+"""The experiments a profiling study is made of, and the profiling logs they produce.
+
+A `ProfilingExperiment` is one experiment held by a manager: the directory it runs in, the status it has reached
+and, once they are known, the cores it occupied and the layout it ran. Once finished it can be archived to a
+tarball, and it is read from the tarball after that. A `ProfilingLog` pairs one log file with the parser that
+reads it, and an `ExperimentPlan` is an experiment a manager has decided to create, before any workflow engine
+has touched it.
+"""
+
 import logging
+import os
 import tarfile
 import tempfile
 from contextlib import contextmanager
@@ -36,7 +46,7 @@ class ProfilingLog:
         filepath (Path): Path to the log file.
         parser (ProfilingParser): Parser to use for this log file.
         optional (bool): Whether this log might be missing or does not contain parsable data. If True, no error should
-        be raised if the log is missing or unparsable. Defaults to False.
+            be raised if the log is missing or unparsable. Defaults to False.
     """
 
     filepath: Path  # Path to the log file
@@ -50,7 +60,12 @@ class ProfilingLog:
 
     @property
     def optional(self) -> bool:
-        """bool: Whether this log might not be present."""
+        """Returns whether this log might not be present.
+
+        Returns:
+            bool: True if the log might be missing or might not contain parsable data, in which case a manager
+                skips it rather than raising.
+        """
         return self._optional
 
     def parse(self) -> xr.Dataset:
@@ -58,11 +73,11 @@ class ProfilingLog:
 
         Accepts all three parser output formats (see parser.py module docstring):
 
-        - **Flat**: standard 1D Dataset over the ``region`` dimension.
+        - **Flat**: standard 1D Dataset over the `region` dimension.
         - **Hierarchical nested dict**: automatically flattened via
-          :func:`flatten_hierarchical` before building the Dataset.
-        - **Per-PE**: produces a 2D Dataset with both ``region`` and ``pe`` dimensions.
-          Use :func:`aggregate_pe_data` on the result to compute summary statistics.
+          `flatten_hierarchical` before building the Dataset.
+        - **Per-PE**: produces a 2D Dataset with both `region` and `pe` dimensions.
+          Use `aggregate_pe_data` on the result to compute summary statistics.
 
         Returns:
            xr.Dataset: Parsed profiling data.
@@ -115,37 +130,110 @@ class ExperimentPlan:
 
 
 class ProfilingExperimentStatus(Enum):
-    """Enumeration representing the status of a profiling experiment."""
+    """Enumeration representing the status of a profiling experiment.
 
-    NEW = 1  # Experiment has been created but not started
-    RUNNING = 2  # Experiment is running or is queued
-    DONE = 3  # Experiment has finished successfully
-    FAILED = 4  # Experiment ran but did not finish successfully
-    ARCHIVED = 5  # Experiment has been archived
+    A status is kept in memory, on the experiment, so it does not outlive the session. A manager brings it up to
+    date with what the workflow engine recorded in `ProfilingManager.update_statuses`, which archiving, parsing and
+    running experiments all call first. `CylcRoseManager.add_rose_experiment` starts a suite from those records
+    too.
+
+    Attributes:
+        NEW: Experiment has been created but not started. Every experiment a manager generates starts here, as
+            does a suite added with no run recorded, but since a status does not outlive the session, this only
+            says that this manager has not submitted it: `update_statuses` moves it on if the engine has records
+            of a run.
+        RUNNING: Experiment is running or is queued. Set by `run_experiments` once it has submitted the
+            experiment, and by `update_statuses` while the engine's records say a run is under way.
+        DONE: Experiment has finished successfully. Set by `update_statuses` from the engine's records, and by
+            `add_experiment_from_directory`, which takes the experiment it adds to be complete. Only a DONE
+            experiment is archived, and only a DONE or an ARCHIVED one is parsed.
+        FAILED: Experiment ran but did not finish successfully. Set by `update_statuses` from the engine's
+            records. `run_experiments(retry_failed=True)` runs it again, and
+            `generate_scaling_experiments(regenerate_failed=True)` regenerates it first.
+        ARCHIVED: Experiment has been archived. Set by `ProfilingExperiment.archive`, and from the start for an
+            experiment created from a tarball. It is final: `update_statuses` leaves an archived experiment alone.
+    """
+
+    NEW = 1
+    RUNNING = 2
+    DONE = 3
+    FAILED = 4
+    ARCHIVED = 5
+
+
+def _target_inside(link: Path, root: Path) -> Path | None:
+    """Returns where a symlink points relative to the directory being archived, if it points inside it.
+
+    Args:
+        link (Path): The symlink.
+        root (Path): The directory being archived.
+
+    Returns:
+        Path | None: The target of the link relative to root, or None if the target is outside root.
+    """
+    target = link.resolve()
+    real_root = root.resolve()
+    return target.relative_to(real_root) if target.is_relative_to(real_root) else None
+
+
+def _excluded(file: Path, name: Path, exclude_dirs: list[str], exclude_files: list[str]) -> bool:
+    """Returns whether an entry of the walk is left out of the archive by the exclusion patterns.
+
+    The patterns are matched against the entry's path in the archive, so that the directories above the one being
+    archived never match, and a file is matched by the name it is archived under.
+
+    Args:
+        file (Path): The entry on disk, as the walk yields it.
+        name (Path): Its path in the archive, relative to the directory being archived.
+        exclude_dirs (list[str]): Directory patterns: an entry in a matching directory is left out, and so is a
+            symlink to a directory that is kept as a link and matches one itself.
+        exclude_files (list[str]): File patterns, matched against the entry itself.
+
+    Returns:
+        bool: True if the entry is left out.
+    """
+    directories = list(name.parents)[:-1]  # the last is the directory being archived itself
+    if file.is_symlink() and file.is_dir():
+        directories.append(name)
+    if any(directory.match(pattern) for directory in directories for pattern in exclude_dirs):
+        return True
+    return any(name.match(pattern) for pattern in exclude_files)
 
 
 def experiment_directory_walker(path: Path, arcname: Path, root: Path, follow_symlinks: bool = False):
     """Walks through the experiment directory, yielding files and corresponding names in the archive.
 
     Symlinks are treated in a special manner.
-        - if the target is inside the experiment directory, the symlink itself is always returned
-        - if follow_symlinks is True and the target is a directory, then the all contents in the target directory are
-            recursively iterated
-        - if follow_symlinks is True and the target is a file, then the target file name is returned, not the symlink
-        - if follow_symlinks is False, then the symlink itself is returned for both files and directories
+
+    - if the target is inside the experiment directory, the symlink itself is always returned, whether the target
+      is a file or a directory, so that what it points to is archived once, where it is
+    - if follow_symlinks is True and the target is a directory, then all the contents of the target directory are
+      recursively iterated
+    - if follow_symlinks is True and the target is a file, then the target file name is returned, not the symlink
+    - if follow_symlinks is False and the target is outside the experiment directory, then the symlink is left out,
+      and logged at INFO: kept as a link, it could not be extracted, since the data filter ProfilingExperiment
+      directory extracts archives with refuses links that point outside the archive
 
     Args:
         path (Path): Path to walk through.
         arcname (Path): Archive name for the current path.
+        root (Path): The directory being archived, which the walk started from. A symlink whose target is inside it
+            counts as being inside the experiment directory.
         follow_symlinks (bool): Whether to follow symlinks. Defaults to False.
 
     Yields:
         Tuple[Path, Path]: A tuple containing the file path and its archive name.
     """
     if path.is_symlink():
-        if not follow_symlinks:
-            # Add symlink itself without following
+        if _target_inside(path, root) is not None:
+            # Add symlink itself without following: what a symlink inside the experiment points to is archived
+            # where it is
             yield path, arcname
+        elif not follow_symlinks:
+            logger.info(
+                f"Leaving {path} out of the archive: it links outside the experiment, to {path.resolve()}, and "
+                "symlinks are not followed."
+            )
         else:
             target = path.resolve()
             if target.is_dir():
@@ -154,9 +242,6 @@ def experiment_directory_walker(path: Path, arcname: Path, root: Path, follow_sy
                     yield from experiment_directory_walker(
                         child, Path(arcname) / child.name, root, follow_symlinks=follow_symlinks
                     )
-            elif target.absolute().is_relative_to(root.absolute()):
-                # Target is within the experiment directory, so add symlink as is
-                yield path, arcname
             else:
                 # Target is outside the experiment directory, add the target file instead
                 yield target, arcname
@@ -193,13 +278,22 @@ class ProfilingExperiment:
             path contents are stored under experiment/ and run_path contents under runs/.
         layout (ComponentLayout | None): Layout the experiment runs, where it is known at construction.
             None (the default) leaves it to be read back from the configuration when it is asked for.
+
+    Attributes:
+        path (Path): Path to the experiment directory, or to its tarball once it has been archived.
+        run_path (Path | None): Path to a separate runs directory, or None. Always None once the experiment has
+            been archived, its runs being in the tarball.
+        status (ProfilingExperimentStatus): Status of the experiment. NEW at construction, or ARCHIVED where path
+            is a tarball.
+        ncpus (int | None): CPUs the experiment occupied, or None while that is still unknown.
+        layout (ComponentLayout | None): Layout the experiment runs, or None while that is unknown.
     """
 
-    path: Path  # Path to the experiment directory
-    run_path: Path | None  # Path to a separate runs directory, or None
-    status: ProfilingExperimentStatus = ProfilingExperimentStatus.NEW  # Status of the experiment
-    ncpus: int | None = None  # CPUs the experiment occupied, or None while that is still unknown
-    layout: ComponentLayout | None = None  # Layout the experiment runs, or None while that is unknown
+    path: Path
+    run_path: Path | None
+    status: ProfilingExperimentStatus = ProfilingExperimentStatus.NEW
+    ncpus: int | None = None
+    layout: ComponentLayout | None = None
 
     def __init__(self, path: Path, run_path: Path | None = None, layout: ComponentLayout | None = None) -> None:
         self.path = path
@@ -289,14 +383,15 @@ class ProfilingExperiment:
 
         Only experiments with status DONE will be archived. No error will be raised if the experiment is not DONE.
 
-        Symlinks to files and directories inside the experiment directory will be include as symlinks. Symlinks to files
-        and directories outside the experiment directory will be followed if follow_symlinks is True, otherwise they
-        will be included as symlinks. path contents are stored under experiment/ in the archive. If
-        run_path is set, its contents are stored under runs/ in the archive.
+        Symlinks to files and directories inside the experiment directory will be included as symlinks, pointing
+        to their targets relative to where they are in the archive, so that they still point at them once the archive
+        is extracted. Symlinks to files and directories outside the experiment directory will be followed if
+        follow_symlinks is True, otherwise they will be included as symlinks. path contents are stored under
+        experiment/ in the archive. If run_path is set, its contents are stored under runs/ in the archive.
 
         Args:
             archive_path (Path): Path to the archive destination. This should include the file name, but without
-            the .tar.gz suffix.
+                the .tar.gz suffix.
             exclude_dirs (list[str] | None): Directory patterns to exclude when archiving.
             exclude_files (list[str] | None): File patterns to exclude when archiving.
             follow_symlinks (bool): Whether to follow symlinks when archiving. Defaults to False.
@@ -326,16 +421,23 @@ class ProfilingExperiment:
         )
 
         with tarfile.open(archive_file, mode) as tar:
-            for root, prefix in paths_to_walk:
+            for path, prefix in paths_to_walk:
+                # A directory reached through a symlink, as a Cylc run directory often is, is archived as what it
+                # points to, rather than as the one link.
+                root = path.resolve()
                 for file, arcname in experiment_directory_walker(root, prefix, root, follow_symlinks=follow_symlinks):
-                    # Skip if file is inside an excluded directory pattern
-                    if any(any(parent.match(pat) for pat in exclude_dirs) for parent in file.parents):
-                        continue
-                    # Skip if the file itself matches an excluded filename pattern
-                    if any(file.match(pat) for pat in exclude_files):
+                    if _excluded(file, arcname.relative_to(prefix), exclude_dirs, exclude_files):
                         continue
                     logger.debug(f"Archiving file: {file} as {arcname}")
-                    tar.add(file, arcname=arcname)
+                    inside = _target_inside(file, root) if file.is_symlink() else None
+                    if inside is None:
+                        tar.add(file, arcname=arcname)
+                        continue
+                    # Rewritten relative to the link's place in the archive, which also keeps it extractable at all:
+                    # the data filter directory() extracts with refuses a link to an absolute path.
+                    link = tar.gettarinfo(file, arcname=str(arcname))
+                    link.linkname = os.path.relpath(prefix / inside, arcname.parent)
+                    tar.addfile(link)
 
         self.status = ProfilingExperimentStatus.ARCHIVED
         self.path = archive_file

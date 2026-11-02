@@ -114,7 +114,7 @@ def test_the_control_decides_the_clone_directory():
 
     assert manager._repository_directory == "config", "the Payu default, with no control to say otherwise"
 
-    manager.control = GitControlSource("https://example.com/repo", "commit", _directory="ctrl-clone")
+    manager.control = GitControlSource("https://example.com/repo", "commit", directory="ctrl-clone")
     assert manager._repository_directory == "ctrl-clone"
 
 
@@ -323,6 +323,91 @@ class TestParseStatus:
         job_file.with_suffix(".json.lock").write_text("")
         job_file.with_suffix(".json.12-00-00.tmp").write_text("{ not json either")
         assert manager.parse_status(tmp_path) == ProfilingExperimentStatus.DONE
+
+
+class TestKilledJobs:
+    """A run killed before Payu could record a verdict on it, told apart from one still going by asking PBS."""
+
+    JOB = "149764665.gadi-pbs"
+    WITHOUT_VERDICT = {"stage": "model-run", "scheduler_job_id": JOB, "scheduler_type": "pbs"}
+
+    @staticmethod
+    def reply(stdout="", returncode=0, stderr=""):
+        """What qstat answers, as subprocess.run returns it."""
+        return subprocess.CompletedProcess(args=["qstat"], returncode=returncode, stdout=stdout, stderr=stderr)
+
+    def job_in_state(self, state):
+        return self.reply(json.dumps({"Jobs": {self.JOB: {"job_state": state}}}))
+
+    @mock.patch("access.profiling.payu_manager.subprocess.run")
+    def test_a_finished_job_without_a_verdict_was_killed(self, mock_run, manager, tmp_path):
+        write_job_file(tmp_path, 0, self.WITHOUT_VERDICT)
+        mock_run.return_value = self.job_in_state("F")
+
+        assert manager.parse_status(tmp_path) == ProfilingExperimentStatus.FAILED
+        mock_run.assert_called_once_with(
+            ["qstat", "-x", "-f", "-F", "json", self.JOB], capture_output=True, text=True, timeout=60
+        )
+
+    @pytest.mark.parametrize("state", ["Q", "H", "R", "E"])
+    @mock.patch("access.profiling.payu_manager.subprocess.run")
+    def test_a_job_pbs_still_holds_is_running(self, mock_run, manager, tmp_path, state):
+        write_job_file(tmp_path, 0, self.WITHOUT_VERDICT)
+        mock_run.return_value = self.job_in_state(state)
+
+        assert manager.parse_status(tmp_path) == ProfilingExperimentStatus.RUNNING
+
+    @mock.patch("access.profiling.payu_manager.subprocess.run")
+    def test_a_job_pbs_no_longer_knows_was_killed(self, mock_run, manager, tmp_path):
+        """PBS forgets finished jobs once their history expires, and nothing is running them by then."""
+
+        write_job_file(tmp_path, 0, self.WITHOUT_VERDICT)
+        mock_run.return_value = self.reply(returncode=153, stderr=f"qstat: Unknown Job Id {self.JOB}\n")
+
+        assert manager.parse_status(tmp_path) == ProfilingExperimentStatus.FAILED
+
+    @pytest.mark.parametrize(
+        "error", [FileNotFoundError("qstat"), subprocess.TimeoutExpired(["qstat"], 60)], ids=["no qstat", "timeout"]
+    )
+    @mock.patch("access.profiling.payu_manager.subprocess.run")
+    def test_without_an_answer_the_run_is_taken_to_be_going(self, mock_run, manager, tmp_path, error):
+        write_job_file(tmp_path, 0, self.WITHOUT_VERDICT)
+        mock_run.side_effect = error
+
+        assert manager.parse_status(tmp_path) == ProfilingExperimentStatus.RUNNING
+
+    @mock.patch("access.profiling.payu_manager.subprocess.run")
+    def test_another_pbs_error_says_nothing_new(self, mock_run, manager, tmp_path):
+        write_job_file(tmp_path, 0, self.WITHOUT_VERDICT)
+        mock_run.return_value = self.reply(returncode=1, stderr="qstat: cannot connect to server gadi-pbs\n")
+
+        assert manager.parse_status(tmp_path) == ProfilingExperimentStatus.RUNNING
+
+    @pytest.mark.parametrize("stdout", ["not json", json.dumps({"Jobs": {"another.gadi-pbs": {"job_state": "F"}}})])
+    @mock.patch("access.profiling.payu_manager.subprocess.run")
+    def test_a_reply_that_cannot_be_read_says_nothing_new(self, mock_run, manager, tmp_path, stdout):
+        write_job_file(tmp_path, 0, self.WITHOUT_VERDICT)
+        mock_run.return_value = self.reply(stdout)
+
+        assert manager.parse_status(tmp_path) == ProfilingExperimentStatus.RUNNING
+
+    @pytest.mark.parametrize(
+        "job_info",
+        [{"stage": "model-run", "scheduler_job_id": JOB, "scheduler_type": "slurm"}, {"stage": "model-run"}],
+    )
+    @mock.patch("access.profiling.payu_manager.subprocess.run")
+    def test_only_a_pbs_job_is_asked_about(self, mock_run, manager, tmp_path, job_info):
+        write_job_file(tmp_path, 0, job_info)
+
+        assert manager.parse_status(tmp_path) == ProfilingExperimentStatus.RUNNING
+        mock_run.assert_not_called()
+
+    @mock.patch("access.profiling.payu_manager.subprocess.run")
+    def test_a_run_with_a_verdict_needs_no_question(self, mock_run, manager, tmp_path):
+        write_job_file(tmp_path, 0, self.WITHOUT_VERDICT | {"payu_run_status": 0})
+
+        assert manager.parse_status(tmp_path) == ProfilingExperimentStatus.DONE
+        mock_run.assert_not_called()
 
 
 class TestLatestAttempt:
@@ -1376,7 +1461,7 @@ def test_delete_experiments_rejects_unmanaged_experiments(mock_experiment_runner
 
 @mock.patch("access.profiling.payu_manager.ExperimentRunner")
 def test_delete_experiments_valid_experiments(mock_experiment_runner, manager):
-    """delete_experiments deletes each selected branch individually via ExperimentRunner."""
+    """delete_experiments deletes the selected branches, in the order given, in a single call to ExperimentRunner."""
     manager.experiments.clear()
     manager.experiments["branch1"] = mock.MagicMock(status=ProfilingExperimentStatus.NEW, path=Path("branch1"))
     manager.experiments["branch2"] = mock.MagicMock(status=ProfilingExperimentStatus.NEW, path=Path("branch2"))
@@ -1384,32 +1469,13 @@ def test_delete_experiments_valid_experiments(mock_experiment_runner, manager):
 
     runner = mock_experiment_runner.return_value
 
-    manager.delete_experiments(experiments=["branch3", "branch1"])
+    manager.delete_experiments(experiments=["branch3", "branch1", "branch3"])
 
-    mock_experiment_runner.assert_called_with({"test_path": manager.work_dir, "repository_directory": "config"})
-
-    assert runner.delete_experiments.call_count == 2
-    deleted_branches = set()
-    for _, kwargs in runner.delete_experiments.call_args_list:
-        assert len(kwargs["branches"]) == 1
-        deleted_branches.add(kwargs["branches"][0])
-        assert kwargs["dry_run"] is False
-        assert kwargs["remove_repo_dir"] is False
-    assert deleted_branches == {"branch3", "branch1"}
-
-
-@mock.patch("access.profiling.payu_manager.ExperimentRunner")
-def test_delete_experiments_forwards_remove_repo_dir(mock_experiment_runner, manager):
-    """delete_experiments forwards remove_repo_dir to the runner for each branch."""
-    manager.experiments.clear()
-    manager.experiments["branch1"] = mock.MagicMock(status=ProfilingExperimentStatus.NEW, path=Path("branch1"))
-
-    runner = mock_experiment_runner.return_value
-
-    manager.delete_experiments(experiments=["branch1"], remove_repo_dir=True)
-
-    _, kwargs = runner.delete_experiments.call_args
-    assert kwargs["remove_repo_dir"] is True
+    mock_experiment_runner.assert_called_once_with({"test_path": manager.work_dir, "repository_directory": "config"})
+    runner.delete_experiments.assert_called_once_with(
+        branches=["branch3", "branch1"], hard=True, dry_run=False, remove_repo_dir=False
+    )
+    assert set(manager.experiments) == {"branch2"}
 
 
 @mock.patch("access.profiling.payu_manager.ExperimentRunner")
@@ -1422,6 +1488,8 @@ def test_delete_experiments_dry_run_does_not_modify_state(mock_experiment_runner
     manager.delete_experiments(experiments=["branch1"], dry_run=True)
 
     assert set(manager.experiments.keys()) == {"branch1", "branch2"}
+    _, kwargs = mock_experiment_runner.return_value.delete_experiments.call_args
+    assert kwargs["dry_run"] is True
 
 
 @mock.patch("access.profiling.payu_manager.ExperimentRunner")
@@ -1434,3 +1502,124 @@ def test_delete_experiments_non_dry_run_removes_from_state(mock_experiment_runne
     manager.delete_experiments(experiments=["branch1"], dry_run=False)
 
     assert set(manager.experiments.keys()) == {"branch2"}
+
+
+class TestDeletingTheControlClone:
+    """remove_repo_dir removes the clone of the control only once no experiment left may still be run from it.
+
+    The clone holds the branch of every experiment, and the runner clones the experiments' own directories from it
+    and pulls corrections from it on resubmission, so the runner left to itself would have removed it while
+    experiments still needed it.
+    """
+
+    @staticmethod
+    def manager_holding(tmp_path, statuses):
+        """A manager under tmp_path holding an experiment of each of the given statuses, keyed by name."""
+        manager = PayuManager(tmp_path, tmp_path / "archive", MockPayuConfiguration(), MOCK_CONTROL)
+        for name, status in statuses.items():
+            manager.experiments[name] = ProfilingExperiment(path=tmp_path / name / "config")
+            manager.experiments[name].status = status
+        return manager
+
+    @pytest.mark.parametrize(
+        "status",
+        [ProfilingExperimentStatus.NEW, ProfilingExperimentStatus.RUNNING, ProfilingExperimentStatus.FAILED],
+        ids=lambda status: status.name,
+    )
+    @mock.patch("access.profiling.payu_manager.ExperimentRunner")
+    def test_an_experiment_that_may_still_be_run_keeps_it(self, mock_runner, tmp_path, caplog, status):
+        manager = self.manager_holding(tmp_path, {"deleted": ProfilingExperimentStatus.DONE, "left": status})
+
+        with caplog.at_level(logging.INFO, logger="access.profiling.payu_manager"):
+            manager.delete_experiments(experiments=["deleted"], remove_repo_dir=True)
+
+        mock_runner.return_value.delete_experiments.assert_called_once_with(
+            branches=["deleted"], hard=True, dry_run=False, remove_repo_dir=False
+        )
+        assert f"Keeping the clone of the control in '{tmp_path / 'config'}'" in caplog.text
+        assert f"'left' ({status.name})" in caplog.text
+
+    @pytest.mark.parametrize(
+        "left",
+        [{}, {"done": ProfilingExperimentStatus.DONE, "archived": ProfilingExperimentStatus.ARCHIVED}],
+        ids=["nothing left", "only finished experiments left"],
+    )
+    @mock.patch("access.profiling.payu_manager.ExperimentRunner")
+    def test_with_none_left_it_goes(self, mock_runner, tmp_path, left):
+        """What the deleted experiments were does not matter, only what is left."""
+        manager = self.manager_holding(tmp_path, {"deleted": ProfilingExperimentStatus.NEW} | left)
+
+        manager.delete_experiments(experiments=["deleted"], remove_repo_dir=True)
+
+        mock_runner.return_value.delete_experiments.assert_called_once_with(
+            branches=["deleted"], hard=True, dry_run=False, remove_repo_dir=True
+        )
+
+    @mock.patch("access.profiling.payu_manager.ExperimentRunner")
+    def test_a_run_finished_since_it_was_last_looked_at_does_not_keep_it(self, mock_runner, tmp_path):
+        manager = self.manager_holding(
+            tmp_path, {"deleted": ProfilingExperimentStatus.DONE, "finished": ProfilingExperimentStatus.RUNNING}
+        )
+        write_job_file(tmp_path / "finished" / "config", 0, {"stage": "model-run", "payu_run_status": 0})
+
+        manager.delete_experiments(experiments=["deleted"], remove_repo_dir=True)
+
+        assert manager.experiments["finished"].status == ProfilingExperimentStatus.DONE
+        _, kwargs = mock_runner.return_value.delete_experiments.call_args
+        assert kwargs["remove_repo_dir"] is True
+
+    @mock.patch("experiment_runner.experiment_runner.subprocess.run")
+    def test_through_the_runner(self, mock_sweep, tmp_path):
+        """The clone outlives the deletion of a finished experiment while a NEW one, which has no directory of its
+        own yet, is left, and goes with the last of them. A dry run removes nothing."""
+        manager = self.manager_holding(
+            tmp_path, {"finished": ProfilingExperimentStatus.DONE, "new": ProfilingExperimentStatus.NEW}
+        )
+        clone = tmp_path / "config"
+        clone.mkdir()
+        (tmp_path / "finished" / "config").mkdir(parents=True)
+
+        manager.delete_experiments(all_experiments=True, dry_run=True, remove_repo_dir=True)
+        assert clone.is_dir() and (tmp_path / "finished").is_dir()
+        mock_sweep.assert_not_called()
+
+        manager.delete_experiments(experiments=["finished"], remove_repo_dir=True)
+        assert clone.is_dir()
+        assert not (tmp_path / "finished").exists()
+        mock_sweep.assert_called_once_with(
+            ["payu", "sweep", "--hard"], cwd=tmp_path / "finished" / "config", check=True, text=True
+        )
+
+        manager.delete_experiments(experiments=["new"], remove_repo_dir=True)
+        assert not clone.exists()
+        assert manager.experiments == {}
+
+
+class TestOnlyPayusEntriesAreRuns:
+    """Payu names the output directory of a run outputNNN, and the directory of its job files after its number, so
+    an entry named otherwise is not a run of it, rather than one whose number cannot be read."""
+
+    @mock.patch.object(Path, "is_dir", return_value=True)
+    @mock.patch.object(
+        Path,
+        "glob",
+        side_effect=lambda pattern: {
+            "archive/payu_jobs/*/run/*.json": [
+                Path("payu_jobs/0/run/149764665.gadi-pbs.json"),
+                Path("payu_jobs/old/run/149764600.gadi-pbs.json"),
+            ],
+            "output*": [Path("output000"), Path("output_old"), Path("output001.bak")],
+        }.get(pattern, []),
+    )
+    def test_profiling_logs(self, mock_glob, mock_is_dir, manager):
+        logs = manager.profiling_logs(Path("/fake/path"))
+
+        assert set(logs["payu"]) == {0}
+        assert set(logs["component"]) == {0}
+
+    def test_archived_output(self, tmp_path):
+        (tmp_path / "archive" / "output000.bak").mkdir(parents=True)
+        assert not PayuManager._archived_output(tmp_path)
+
+        (tmp_path / "archive" / "output000").mkdir()
+        assert PayuManager._archived_output(tmp_path)

@@ -64,21 +64,48 @@ class RoseSuiteConfiguration(Application):
 
     @property
     def logs(self) -> tuple[LogSpec, ...]:
-        # A rose suite's logs are one per task per cycle, so they are found by walking the run directory
-        # rather than by naming files in an output directory. The manager does that walking, using `parsers`.
+        """Returns no logs, since a rose suite's are not found by name.
+
+        A rose suite's logs are one per task per cycle, so they are found by walking the run directory rather
+        than by naming files in an output directory. The manager does that walking, using `parsers`.
+
+        Returns:
+            tuple[LogSpec, ...]: An empty tuple.
+        """
         return ()
 
     @property
     def parallel_component(self) -> ParallelComponent:
+        """Not supported for Rose suites: the package does not generate their layouts.
+
+        Raises:
+            NotImplementedError: Always. A rose suite states its parallelism in `rose-suite.conf`, which
+                nothing here searches over.
+        """
         raise NotImplementedError(self._unsupported)
 
     def experiment_name(self, layout: ComponentLayout) -> str:
+        """Not supported for Rose suites: the package does not generate their layouts.
+
+        Raises:
+            NotImplementedError: Always.
+        """
         raise NotImplementedError(self._unsupported)
 
     def config_changes(self, layout: ComponentLayout) -> dict:
+        """Not supported for Rose suites: the package does not generate their layouts.
+
+        Raises:
+            NotImplementedError: Always.
+        """
         raise NotImplementedError(self._unsupported)
 
     def parse_layout(self, output_dir: Path) -> ComponentLayout | None:
+        """Not supported for Rose suites: the package does not read a layout back out of a suite.
+
+        Raises:
+            NotImplementedError: Always.
+        """
         raise NotImplementedError(self._unsupported)
 
     def occupied_cpus(self, rose_conf: dict, source: str = "the rose configuration") -> int:

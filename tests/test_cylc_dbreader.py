@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import sqlite3
+from contextlib import closing
 from pathlib import Path
 
 import pytest
@@ -22,7 +23,7 @@ def create_db(test_file, table_name, columns):
         ("20250101T0000Z", "task1", "2025-01-01T00:00:00Z", "2025-01-02T00:00:00Z", 0),
         ("20250101T0000Z", "task2", "2025-01-01T00:00:00Z", "2025-01-01T00:00:10Z", 0),
     ]
-    with sqlite3.connect(test_file) as con:
+    with closing(sqlite3.connect(test_file)) as con:
         cur = con.cursor()
         cur.execute(
             """

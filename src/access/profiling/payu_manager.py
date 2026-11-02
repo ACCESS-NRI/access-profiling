@@ -1,8 +1,17 @@
 # Copyright 2025 ACCESS-NRI and contributors. See the top-level COPYRIGHT file for details.
 # SPDX-License-Identifier: Apache-2.0
 
+"""Profiling studies of applications driven by Payu, such as the ACCESS models ACCESS-ESM1.6 and ACCESS-OM3.
+
+`PayuManager` is the manager for every application Payu runs: it generates experiments as branches of a clone of the
+control with the experiment generator, runs them with the experiment runner, and reads back what Payu and the
+scheduler recorded about each run - the CPUs it occupied, the state it reached and the profiling logs it wrote. What
+is being profiled arrives as a `PayuConfiguration`.
+"""
+
 import json
 import logging
+import re
 import subprocess
 from pathlib import Path
 
@@ -16,6 +25,9 @@ from access.profiling.payu_configuration import PayuConfiguration
 from access.profiling.payujson_parser import PayuJSONProfilingParser
 
 logger = logging.getLogger(__name__)
+
+# The name Payu gives the output directory of a run, the run number following it.
+_OUTPUT_DIR = re.compile(r"output(\d+)")
 
 # The defaults Payu applies to platform.nodesize and ncpus in payu.subcommands.run_cmd.runcmd, which
 # _requested_ncpus mirrors. They are copied rather than imported because Payu states them as bare literals in
@@ -44,12 +56,12 @@ def _walltime_string(hours: float) -> str:
 
 
 class PayuManager(ProfilingManager[PayuConfiguration]):
-    """Profiling of any ACCESS model driven by Payu.
+    """Profiling of any application driven by Payu, such as the ACCESS models.
 
-    One class for every Payu model: what is being profiled arrives as a PayuConfiguration, so ACCESS-ESM1.6
-    and ACCESS-OM3 are two values rather than two subclasses. What is written here is the engine - the
+    One class for every application Payu runs: what is being profiled arrives as a PayuConfiguration, so
+    ACCESS-ESM1.6 and ACCESS-OM3 are two values rather than two subclasses. What is written here is the engine - the
     experiment generator and runner, Payu's own output layout, and the job records the scheduler leaves
-    behind - and none of it is any one model's.
+    behind - and none of it is any one application's.
 
     Args:
         work_dir (Path): Working directory where profiling experiments will be generated and run.
@@ -90,6 +102,9 @@ class PayuManager(ProfilingManager[PayuConfiguration]):
 
         Args:
             value (int): Number of repetitions.
+
+        Raises:
+            ValueError: If value is negative.
         """
         if value < 0:
             raise ValueError("Number of runs must be at least 0.")
@@ -220,7 +235,24 @@ class PayuManager(ProfilingManager[PayuConfiguration]):
         Returns:
             bool: True if the experiment has archived at least one output directory.
         """
-        return any(path.glob("archive/output[0-9][0-9][0-9]*"))
+        return bool(PayuManager._output_dirs(path))
+
+    @staticmethod
+    def _output_dirs(path: Path) -> dict[int, Path]:
+        """Returns the output directories Payu archived for an experiment, keyed by run number.
+
+        Payu names them outputNNN, NNN being the number of the run, so output003 holds the same run as
+        payu_jobs/3. Anything else in the archive whose name starts with "output" is not one of them, and is passed
+        over rather than taken for a run.
+
+        Args:
+            path (Path): Path to the Payu experiment directory.
+
+        Returns:
+            dict[int, Path]: The output directories, keyed by run number, in increasing order of it.
+        """
+        numbered = ((_OUTPUT_DIR.fullmatch(entry.name), entry) for entry in (path / "archive").glob("output*"))
+        return dict(sorted((int(match[1]), entry) for match, entry in numbered if match is not None))
 
     @staticmethod
     def _sweep_for_resubmission(branch: str, path: Path) -> None:
@@ -325,9 +357,11 @@ class PayuManager(ProfilingManager[PayuConfiguration]):
             experiments (list[str] | None): List of experiments (branches) to delete.
             all_experiments (bool): If True, deletes all experiments managed by this instance.
             dry_run (bool): If True, performs a dry run without deleting files. Defaults to False.
-            remove_repo_dir (bool): If True, removes the base repository directory if no branches are using it.
+            remove_repo_dir (bool): If True, also removes the clone of the control under the working directory,
+                which holds the branch of every experiment. It is kept anyway while an experiment left after the
+                deletion is NEW, RUNNING or FAILED, and so may still be run from it.
         """
-        # remove_repo_dir would already be forwarded to _delete_experiment via the base class **kwargs, but this
+        # remove_repo_dir would already be forwarded to _delete_experiments via the base class **kwargs, but this
         # override declares it explicitly so it stays a documented, discoverable and typo-checked argument of the
         # public Payu API rather than a hidden keyword convention. That deliberately narrows the base method,
         # which accepts any keyword: widening it back would let a misspelled one through to be swallowed, so
@@ -339,16 +373,47 @@ class PayuManager(ProfilingManager[PayuConfiguration]):
             remove_repo_dir=remove_repo_dir,
         )
 
-    def _delete_experiment(self, name: str, dry_run: bool, remove_repo_dir: bool = False, **kwargs) -> None:
-        """Deletes a single Payu experiment (branch) via the experiment runner.
+    def _delete_experiments(self, names: list[str], dry_run: bool, remove_repo_dir: bool = False, **kwargs) -> None:
+        """Deletes Payu experiments (branches) via the experiment runner, in a single call to it.
+
+        The clone of the control under the working directory holds the branch of every experiment, and the
+        runner clones each experiment's own directory from it and pulls corrections from it when it submits an
+        experiment again. An experiment that may still be run therefore needs it: a NEW one, whose branch is
+        nowhere else, and a RUNNING or FAILED one, which may have to be run again. So remove_repo_dir is only
+        passed on to the runner when no experiment left after the deletion is one of those, and the statuses
+        are brought up to date first, since a run may have finished since they were last looked at. Finished
+        experiments do not need the clone, their directories being clones of their own.
+
+        The experiments left are not given to the runner as its running_branches: it would take each of them
+        to need the clone for as long as its directory exists, finished or not.
 
         Args:
-            name (str): Name of the experiment (branch) to delete.
+            names (list[str]): Names of the experiments (branches) to delete.
             dry_run (bool): If True, performs a dry run without deleting files.
-            remove_repo_dir (bool): If True, removes the base repository directory if no branches are using it.
+            remove_repo_dir (bool): If True, also removes the clone of the control, unless an experiment left
+                after the deletion may still be run from it. Which ones keep it are logged at INFO.
             **kwargs: Ignored. Accepted so that this stays substitutable for the base method, whose callers
                 may pass options other runners take.
         """
+        if remove_repo_dir:
+            self.update_statuses()
+            still_to_run = {
+                ProfilingExperimentStatus.NEW,
+                ProfilingExperimentStatus.RUNNING,
+                ProfilingExperimentStatus.FAILED,
+            }
+            needing = [
+                f"'{name}' ({exp.status.name})"
+                for name, exp in self.experiments.items()
+                if name not in names and exp.status in still_to_run
+            ]
+            if needing:
+                logger.info(
+                    f"Keeping the clone of the control in '{self.work_dir / self._repository_directory}', which "
+                    f"experiments that may still be run need: {', '.join(needing)}."
+                )
+                remove_repo_dir = False
+
         runner_config = {
             "test_path": self.work_dir,
             "repository_directory": self._repository_directory,
@@ -357,7 +422,7 @@ class PayuManager(ProfilingManager[PayuConfiguration]):
         runner = ExperimentRunner(runner_config)
 
         runner.delete_experiments(
-            branches=[name],
+            branches=names,
             hard=True,
             dry_run=dry_run,
             remove_repo_dir=remove_repo_dir,
@@ -398,6 +463,7 @@ class PayuManager(ProfilingManager[PayuConfiguration]):
         Args:
             path (Path): Path to the Payu experiment directory. Must contain a config.yaml file.
             run_path (Path | None): Optional path to a separate runs directory. Unused for Payu experiments.
+
         Returns:
             int: Number of CPUs the experiment occupied, including any left idle to fill whole compute nodes.
         """
@@ -413,7 +479,7 @@ class PayuManager(ProfilingManager[PayuConfiguration]):
         """Returns the number of CPUs the scheduler recorded for the most recent run, if it recorded any.
 
         Payu writes one job file per run, holding the job information it read back from the scheduler. Under PBS
-        that is the output of ``qstat -f -F json``, whose Resource_List.ncpus is the request the job was charged
+        that is the output of `qstat -f -F json`, whose Resource_List.ncpus is the request the job was charged
         for - the whole-node figure, not the sum over the submodels.
 
         Every way of not finding it is a missing answer rather than an error: experiments archived before Payu
@@ -489,7 +555,9 @@ class PayuManager(ProfilingManager[PayuConfiguration]):
         # them. Earliest first, so that the last file recorded for a run is the one left standing.
         latest: dict[int, Path] = {}
         for job_file in sorted(path.glob("archive/payu_jobs/*/run/*.json"), key=PayuManager._attempt_order):
-            latest[int(job_file.parts[-3])] = job_file
+            # The directory is named after the run number: one named anything else is not Payu's.
+            if job_file.parts[-3].isdigit():
+                latest[int(job_file.parts[-3])] = job_file
         return latest
 
     @staticmethod
@@ -531,8 +599,9 @@ class PayuManager(ProfilingManager[PayuConfiguration]):
         a run job never reaches the "exited" stage that collate and sync jobs end at.
 
         A run killed outright - a walltime limit, a node failure - never reaches that finally block, so its
-        job file stays at the stage it died in and this keeps reporting it as running. Telling that apart from
-        a run still going needs the scheduler, which this does not ask.
+        job file stays at the stage it died in. Telling that apart from a run still going needs the scheduler,
+        so a run without a verdict is reported failed when PBS says its job is over, and running otherwise,
+        including when the scheduler cannot be asked. See _job_is_over.
 
         Args:
             path (Path): Path to the Payu experiment directory.
@@ -547,7 +616,11 @@ class PayuManager(ProfilingManager[PayuConfiguration]):
 
         run_status = job_info.get("payu_run_status")
         if run_status is None:
-            # Still under way, as far as anything written down says.
+            # Nothing written down says the run is over, but a job killed before Payu could say so would read
+            # the same, so the scheduler is asked.
+            if self._job_is_over(job_info):
+                logger.debug(f"The job of the latest run of {path} is over, but Payu recorded no verdict on it.")
+                return ProfilingExperimentStatus.FAILED
             return ProfilingExperimentStatus.RUNNING
 
         if run_status == 0:
@@ -558,6 +631,49 @@ class PayuManager(ProfilingManager[PayuConfiguration]):
         model_status = job_info.get("payu_model_run_status")
         logger.debug(f"Payu reports run status {run_status} (model run status {model_status}) for {path}.")
         return ProfilingExperimentStatus.FAILED
+
+    @staticmethod
+    def _job_is_over(job_info: dict) -> bool:
+        """Returns whether the scheduler says the job a Payu job file records is over.
+
+        Only PBS is asked, with `qstat -x`, which also reports jobs that have finished. A job it reports in the
+        finished state is over, and so is one it no longer knows, its history having expired: either way, nothing
+        is still running it. A job in any other state - queued, held, running, exiting - is not over.
+
+        A job that cannot be asked about is taken not to be over either, so that its run reads as running, as
+        the job file alone says: a job file that names no PBS job, a machine without qstat, a qstat that does
+        not answer within a minute, or a reply that cannot be read. Those are logged at DEBUG.
+
+        Args:
+            job_info (dict): The parsed job file of a run.
+
+        Returns:
+            bool: True if PBS says the job is over, False otherwise.
+        """
+        job_id = job_info.get("scheduler_job_id")
+        if job_info.get("scheduler_type") != "pbs" or not job_id:
+            return False
+
+        try:
+            reply = subprocess.run(
+                ["qstat", "-x", "-f", "-F", "json", job_id], capture_output=True, text=True, timeout=60
+            )
+        except (OSError, subprocess.TimeoutExpired) as error:
+            logger.debug(f"Could not ask PBS about job {job_id}: {error}.")
+            return False
+
+        if reply.returncode != 0:
+            if "Unknown Job Id" in reply.stderr:
+                return True
+            logger.debug(f"PBS could not report on job {job_id}: {reply.stderr.strip()}")
+            return False
+
+        try:
+            state = json.loads(reply.stdout)["Jobs"][job_id]["job_state"]
+        except (json.JSONDecodeError, KeyError, TypeError) as error:
+            logger.debug(f"Could not read the state of job {job_id} from what PBS reported: {error!r}.")
+            return False
+        return state == "F"
 
     @staticmethod
     def _requested_ncpus(payu_config: dict) -> int:
@@ -573,7 +689,7 @@ class PayuManager(ProfilingManager[PayuConfiguration]):
         replaces the count the model asks for, but is still rounded up like any other: it overrides the request,
         not the node arithmetic.
 
-        The answer hinges on the size of a compute node, which only ``platform.nodesize`` states. A
+        The answer hinges on the size of a compute node, which only `platform.nodesize` states. A
         configuration that leaves it out is submitted by Payu on nodes of _PAYU_DEFAULT_NODE_SIZE cores, so
         taking the same default here reproduces the request Payu made rather than guessing at it.
 
@@ -609,8 +725,12 @@ class PayuManager(ProfilingManager[PayuConfiguration]):
         Args:
             path (Path): Path to the experiment directory.
             run_path (Path | None): Optional path to a separate runs directory. Unused for Payu experiments.
+
         Returns:
             dict[str, dict[int, ProfilingLog]]: Dictionary mapping log names to their logs, keyed by run number.
+
+        Raises:
+            FileNotFoundError: If the experiment has no archive directory, or no output directory in it.
         """
         logs: dict[str, dict[int, ProfilingLog]] = {}
 
@@ -624,13 +744,11 @@ class PayuManager(ProfilingManager[PayuConfiguration]):
         for run, json_path in self._run_job_files(path).items():
             logs.setdefault("payu", {})[run] = ProfilingLog(json_path, PayuJSONProfilingParser())
 
-        # Get the logs of each component of every output directory. Payu names these outputNNN, NNN being the run
-        # number, so output003 holds the same run as payu_jobs/3.
-        output_dirs = sorted(archive.glob("output*"))
+        # Get the logs of each component of every output directory.
+        output_dirs = self._output_dirs(path)
         if not output_dirs:
             raise FileNotFoundError(f"No output files found in {path}!")
-        for output_dir in output_dirs:
-            run = int(output_dir.name.removeprefix("output"))
+        for run, output_dir in output_dirs.items():
             for name, log in self.application.component_logs(output_dir).items():
                 logs.setdefault(name, {})[run] = log
 

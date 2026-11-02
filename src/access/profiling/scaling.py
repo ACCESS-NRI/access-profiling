@@ -13,37 +13,47 @@ from access.profiling.metrics import ProfilingMetric
 from access.profiling.plotting_utils import calculate_column_widths
 
 
-def parallel_speedup(stats: xr.Dataset, metric: ProfilingMetric) -> xr.DataArray:
+def parallel_speedup(stats: xr.Dataset, metric: ProfilingMetric, xcoordinate: str = "ncpus") -> xr.DataArray:
     """Calculates the parallel speedup from scaling data.
+
+    The speedup is relative to the point where xcoordinate is smallest. xcoordinate may be a dimension of the data
+    or any other coordinate along one, such as a number of nodes kept along the CPUs.
 
     Args:
         stats (Dataset): Scaling data, stored as a xarray dataset.
         metric (ProfilingMetric): Metric to use for the speedup calculation.
+        xcoordinate (str): The coordinate the data scales along, e.g. "ncpus" (the default).
 
     Returns:
         DataArray: Parallel speedup.
+
     Raises:
         ValueError: If metric units are not time (e.g., seconds).
     """
     if stats[metric].pint.dimensionality != "[time]":
         raise ValueError("Metric units must be time (e.g., seconds)!")
-    speedup = stats[metric].sel(ncpus=stats["ncpus"].min()) / stats[metric]
+    x = stats[xcoordinate]
+    (dim,) = x.dims
+    speedup = stats[metric].isel({dim: int(x.argmin(dim))}, drop=True) / stats[metric]
     speedup.name = "speedup"
     return speedup
 
 
-def parallel_efficiency(stats: xr.Dataset, metric: ProfilingMetric) -> xr.DataArray:
+def parallel_efficiency(stats: xr.Dataset, metric: ProfilingMetric, xcoordinate: str = "ncpus") -> xr.DataArray:
     """Calculates the parallel efficiency from scaling data.
 
     Args:
         stats (Dataset): Scaling data, stored as a xarray dataset.
         metric (ProfilingMetric): Metric to use for the efficiency calculation.
+        xcoordinate (str): The coordinate the data scales along, e.g. "ncpus" (the default). See
+            parallel_speedup.
 
     Returns:
         DataArray: Parallel efficiency.
     """
-    speedup = parallel_speedup(stats, metric)
-    eff = speedup * (speedup.ncpus.min() / speedup.ncpus)
+    speedup = parallel_speedup(stats, metric, xcoordinate)
+    x = stats[xcoordinate]
+    eff = speedup * (x.min() / x)
     eff = eff.pint.to("percent")
     eff.name = "parallel efficiency"
     return eff
@@ -57,11 +67,11 @@ def plot_scaling_metrics(
     first_col_fraction: float = 0.4,
     show: bool = True,
 ) -> Figure:
-    """Plots parallel speedup and efficiency from a list of datasets
+    """Plots parallel speedup and efficiency from a list of datasets.
 
     Args:
         stats (list[xr.Dataset]): The raw times to plot.
-        metric (ProfilinMetric): The metric to plot for each stat.
+        metric (ProfilingMetric): The metric to plot for each stat.
         xcoordinate (str): The x-axis variable e.g. "ncpus".
         xlabel (str | None): Optional custom label for the x-axis of both subplots. If None, the
             default label derived from xcoordinate is kept.
@@ -72,7 +82,10 @@ def plot_scaling_metrics(
         Figure: The Matplotlib figure on which the scaling plots and table are plotted on.
 
     Raises:
-        ValueError: If region_labels is non-empty
+        ValueError: If the metric is not a time, if first_col_fraction is not between 0.0 (inclusive) and 1.0
+            (exclusive), or if a dataset holds a different number of xcoordinate values from the first one, which
+            leaves the table of timings with rows of different lengths.
+        IndexError: If stats is empty.
     """
 
     # setup plots
@@ -97,19 +110,20 @@ def plot_scaling_metrics(
     tbl = [[xlabel if xlabel is not None else xcoordinate] + list(reference[xcoordinate].values)]  # first row
     for stat in stats:
         # calculate efficiency and speedup
-        efficiency = parallel_efficiency(stat, metric)
-        speedup = parallel_speedup(stat, metric)
+        efficiency = parallel_efficiency(stat, metric, xcoordinate)
+        speedup = parallel_speedup(stat, metric, xcoordinate)
 
-        # plots speedup and efficiency on their respective axes.
+        # plots speedup and efficiency on their respective axes. Regions are selected by name, whichever order
+        # the dimensions of the data come in.
         for region in stat.region.values:
-            speedup.loc[region, :].plot.line(x=xcoordinate, ax=ax1, marker="o", label=region)
-            efficiency.loc[region, :].plot.line(x=xcoordinate, ax=ax2, marker="o", label=region)
+            speedup.sel(region=region).plot.line(x=xcoordinate, ax=ax1, marker="o", label=region)
+            efficiency.sel(region=region).plot.line(x=xcoordinate, ax=ax2, marker="o", label=region)
             # find max efficiency for setting efficiency axis
             # pint compares a bare number against a percent Quantity's fractional (base-unit) magnitude rather
             # than its percent magnitude, so dequantify first or values above 100% get silently dropped.
-            max_eff = max(max_eff, float(efficiency.loc[region, :].max().pint.dequantify()))
+            max_eff = max(max_eff, float(efficiency.sel(region=region).max().pint.dequantify()))
 
-            tbl.append([region] + [f"{val:.2f}" for val in stat[metric].loc[:, region].pint.dequantify().values])
+            tbl.append([region] + [f"{val:.2f}" for val in stat[metric].sel(region=region).pint.dequantify().values])
 
     # ideal speedup/scaling
     minx = reference[xcoordinate].values.min()
@@ -160,7 +174,7 @@ def plot_component_scaling(
     This asks a different question from plot_scaling_metrics. That one reads every component against the
     whole job, which is what a scaling study costs; this one reads each component against its own cores,
     which is what tells you whether giving the ocean more of them bought anything. Two components therefore
-    sit on different points of the same axis, and the lines are labelled with both the component and the
+    sit on different points of the same axis, and the lines are labelled with both the log and the
     region so that the two can be told apart - region names are only made unique within one log, so two
     components may well each have a "Total".
 
@@ -192,10 +206,10 @@ def plot_component_scaling(
     sooner and waits longer on the components that have not.
 
     Args:
-        stats (list[tuple[str, xr.Dataset]]): The data to plot, each dataset labelled by the log its regions
-            came from. Each holds those regions against the cores their component was given, its region
-            coordinate being the label each curve is to carry.
-        metric (ProfilingMetric): The metric to plot, which labels the axis and titles the figure.
+        stats (list[xr.Dataset]): The data to plot, one dataset per group of regions. Each holds those regions
+            against the cores their component was given, its region coordinate being the label each curve is to
+            carry.
+        metric (ProfilingMetric): The metric to plot, which labels the y axis unless ylabel is given.
         xcoordinate (str): The coordinate holding the core counts. Default: "ncpus".
         xlabel (str | None): Optional label for the x-axis. If None, a default naming the component's own
             cores is used, since the coordinate name alone reads as the whole job's.

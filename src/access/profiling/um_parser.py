@@ -3,7 +3,7 @@
 
 """Parser for UM profiling data.
 This routine parses the inclusive timers from the UM output log
-(e.g. ``atm.fort6.pe0`` for UM7) and returns a dictionary of the
+(e.g. `atm.fort6.pe0` for UM7) and returns a dictionary of the
 profiling data. Since UM7 and UM13 provides multiple sections with timer
 output - we have chosen to use the 'Wallclock times' sub-section
 within the Inclusive Timer Summary section.
@@ -52,8 +52,8 @@ class UMProfilingParser(ProfilingParser):
     """UM profiling output parser."""
 
     # The parsed column names that will be kept. The order needs to match
-    # the order of the column names in the input data (defined as ``raw_headers``
-    # in the ``read``` method), after discarding the ignored columns.
+    # the order of the column names in the input data (defined as `raw_headers`
+    # in the `parse` method), after discarding the ignored columns.
     _metrics = [tavg, tmed, tstd, tmax, pemax, tmin, pemin]
 
     def parse(self, file_path: str | Path | os.PathLike) -> dict:
@@ -63,51 +63,49 @@ class UMProfilingParser(ProfilingParser):
             file_path (str | Path | os.PathLike): file to parse.
 
         Returns:
-            stats (dict): dictionary of parsed profiling data.
-                    Ignores two columns ``N``, and ``% over mean`` columns.
+            dict: dictionary of parsed profiling data.
+                Ignores two columns `N`, and `% of mean` columns.
 
-                    To keep consistent column names across all parsers, the following
-                    mapping is used:
-                        ==================  ==================
-                        UM column name      Standard metric
-                        ==================  ==================
-                        N                   - (ignored)
-                        ROUTINE             region
-                        MEAN                tavg
-                        MEDIAN              tmed
-                        SD                  tstd
-                        % of mean           - (ignored)
-                        MAX                 tmax
-                        (PE)                pemax
-                        MIN                 tmin
-                        (PE)                pemin
-                        ==================  ==================
-                    Each key returns a list of values, one for each region. For
-                    example, if there are 20 regions, ``stats['tavg']`` will
-                    return a list with 20 values, one each for each of the regions.
+                To keep consistent column names across all parsers, the following
+                mapping is used:
 
-                    The assumption is that people will want to look at the same metric
-                    for *all* regions at a time; if you want to look at all metrics for
-                    a single region, then you will have to first find the index for the
-                    ``region``, and then extract that index from *each* of the 'metric'
-                    lists.
+                | UM column name | Standard metric |
+                |---|---|
+                | N | - (ignored) |
+                | ROUTINE | region |
+                | MEAN | tavg |
+                | MEDIAN | tmed |
+                | SD | tstd |
+                | % of mean | - (ignored) |
+                | MAX | tmax |
+                | (PE) | pemax |
+                | MIN | tmin |
+                | (PE) | pemin |
 
-                    Any number of column headers can be present at the beginning, i.e., before
-                    ``ROUTINE`` (including ``N`` for UM v13+) and will be ignored when the
-                    header is being parsed. Such columns must contain integer values for the
-                    profiling information parsing to work, otherwise (e.g., new columns with float
-                    data), an ``AssertionError`` is raised.
+                Each key returns a list of values, one for each region. For
+                example, if there are 20 regions, `stats[tavg]` will
+                return a list with 20 values, one each for each of the regions.
 
-                    Parsing will fail if there are any unexpected columns at the end, either
-                    at the end of the expected header, or the end of the expected columns with
-                    profiling data (regardless of type of the column value)
+                The assumption is that people will want to look at the same metric
+                for *all* regions at a time; if you want to look at all metrics for
+                a single region, then you will have to first find the index for the
+                `region`, and then extract that index from *each* of the 'metric'
+                lists.
+
+                Any number of column headers can be present at the beginning, i.e., before
+                `ROUTINE` (including `N` for UM v13+) and will be ignored when the
+                header is being parsed. Such columns must contain integer values for the
+                profiling information parsing to work, otherwise (e.g., new columns with float
+                data), a `ValueError` is raised.
+
+                Parsing will fail if there are any unexpected columns at the end, either
+                at the end of the expected header, or the end of the expected columns with
+                profiling data (regardless of type of the column value)
 
         Raises:
-            ValueError: If the UM version number can not be found in the input string data.
-            ValueError: If a match for any of header, footer or section (i.e., empty section)
-                        is not found.
-            AssertionError: If the expected format is not found in *all* of the lines within the
-                            profiling section.
+            ValueError: If a match for the header or the footer is not found, if there is no section between
+                them, the footer coming before the header, or if the expected format is not found in *all* of the
+                lines within the profiling section.
             TypeError: If file_path cannot be converted to a valid Path object.
             FileNotFoundError: If file_path doesn't exist or isn't a file.
         """
@@ -196,29 +194,28 @@ class UMProfilingParser(ProfilingParser):
         num_lines = len(profiling_section.strip().split("\n"))
         logger.debug(f"Found {num_lines} lines in profiling section")
         if len(stats["region"]) != num_lines:
-            raise AssertionError(f"Expected {num_lines} regions, found {len(stats['region'])}.")
+            raise ValueError(f"Expected {num_lines} regions in {file_path}, found {len(stats['region'])}.")
 
         logger.info(f"Found {len(stats['region'])} regions with profiling info")
         return stats
 
 
-"""Example UM7 runtime log snippet to be parsed for total wallclock runtime:
-
-```
- END OF RUN - TIMER OUTPUT
- Timer information is for whole run
- PE                      0  Elapsed CPU Time:    3943.63426200007     
- PE                      0   Elapsed Wallclock Time:    3943.80157899974     
- 
- Total Elapsed CPU Time:    820297.910506003     
- Maximum Elapsed Wallclock Time:    3944.07699399998     
- Speedup:    207.982225436750     
-```
-"""
-
-
 class UMTotalRuntimeParser(ProfilingParser):
-    """Parser for UM total runtime from the UM log file."""
+    """Parser for UM total runtime from the UM log file.
+
+    Example UM7 runtime log snippet to be parsed for total wallclock runtime:
+
+    ```text
+     END OF RUN - TIMER OUTPUT
+     Timer information is for whole run
+     PE                      0  Elapsed CPU Time:    3943.63426200007
+     PE                      0   Elapsed Wallclock Time:    3943.80157899974
+
+     Total Elapsed CPU Time:    820297.910506003
+     Maximum Elapsed Wallclock Time:    3944.07699399998
+     Speedup:    207.982225436750
+    ```
+    """
 
     _metrics = [tmax]
 
@@ -226,13 +223,15 @@ class UMTotalRuntimeParser(ProfilingParser):
         """Parse UM total runtime from a file.
 
         Args:
-            file_path (str | Path | os.PathLike): input string to parse.
+            file_path (str | Path | os.PathLike): file to parse.
 
         Returns:
             dict: dictionary of parsed profiling data.
 
         Raises:
-            ValueError: If no matching total runtime line is found.
+            ValueError: If no matching total runtime line is found, or if the file is not a text file.
+            TypeError: If file_path cannot be converted to a valid Path object.
+            FileNotFoundError: If file_path doesn't exist or isn't a file.
         """
         stream = _read_text_file(file_path)
         total_runtime_pattern = re.compile(
