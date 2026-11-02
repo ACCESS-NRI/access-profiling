@@ -176,6 +176,30 @@ def _target_inside(link: Path, root: Path) -> Path | None:
     return target.relative_to(real_root) if target.is_relative_to(real_root) else None
 
 
+def _excluded(file: Path, name: Path, exclude_dirs: list[str], exclude_files: list[str]) -> bool:
+    """Returns whether an entry of the walk is left out of the archive by the exclusion patterns.
+
+    The patterns are matched against the entry's path in the archive, so that the directories above the one being
+    archived never match, and a file is matched by the name it is archived under.
+
+    Args:
+        file (Path): The entry on disk, as the walk yields it.
+        name (Path): Its path in the archive, relative to the directory being archived.
+        exclude_dirs (list[str]): Directory patterns: an entry in a matching directory is left out, and so is a
+            symlink to a directory that is kept as a link and matches one itself.
+        exclude_files (list[str]): File patterns, matched against the entry itself.
+
+    Returns:
+        bool: True if the entry is left out.
+    """
+    directories = list(name.parents)[:-1]  # the last is the directory being archived itself
+    if file.is_symlink() and file.is_dir():
+        directories.append(name)
+    if any(directory.match(pattern) for directory in directories for pattern in exclude_dirs):
+        return True
+    return any(name.match(pattern) for pattern in exclude_files)
+
+
 def experiment_directory_walker(path: Path, arcname: Path, root: Path, follow_symlinks: bool = False):
     """Walks through the experiment directory, yielding files and corresponding names in the archive.
 
@@ -186,7 +210,9 @@ def experiment_directory_walker(path: Path, arcname: Path, root: Path, follow_sy
     - if follow_symlinks is True and the target is a directory, then all the contents of the target directory are
       recursively iterated
     - if follow_symlinks is True and the target is a file, then the target file name is returned, not the symlink
-    - if follow_symlinks is False, then the symlink itself is returned for both files and directories
+    - if follow_symlinks is False and the target is outside the experiment directory, then the symlink is left out,
+      and logged at INFO: kept as a link, it could not be extracted, since the data filter ProfilingExperiment
+      directory extracts archives with refuses links that point outside the archive
 
     Args:
         path (Path): Path to walk through.
@@ -199,10 +225,15 @@ def experiment_directory_walker(path: Path, arcname: Path, root: Path, follow_sy
         Tuple[Path, Path]: A tuple containing the file path and its archive name.
     """
     if path.is_symlink():
-        if not follow_symlinks or _target_inside(path, root) is not None:
+        if _target_inside(path, root) is not None:
             # Add symlink itself without following: what a symlink inside the experiment points to is archived
             # where it is
             yield path, arcname
+        elif not follow_symlinks:
+            logger.info(
+                f"Leaving {path} out of the archive: it links outside the experiment, to {path.resolve()}, and "
+                "symlinks are not followed."
+            )
         else:
             target = path.resolve()
             if target.is_dir():
@@ -390,13 +421,12 @@ class ProfilingExperiment:
         )
 
         with tarfile.open(archive_file, mode) as tar:
-            for root, prefix in paths_to_walk:
+            for path, prefix in paths_to_walk:
+                # A directory reached through a symlink, as a Cylc run directory often is, is archived as what it
+                # points to, rather than as the one link.
+                root = path.resolve()
                 for file, arcname in experiment_directory_walker(root, prefix, root, follow_symlinks=follow_symlinks):
-                    # Skip if file is inside an excluded directory pattern
-                    if any(any(parent.match(pat) for pat in exclude_dirs) for parent in file.parents):
-                        continue
-                    # Skip if the file itself matches an excluded filename pattern
-                    if any(file.match(pat) for pat in exclude_files):
+                    if _excluded(file, arcname.relative_to(prefix), exclude_dirs, exclude_files):
                         continue
                     logger.debug(f"Archiving file: {file} as {arcname}")
                     inside = _target_inside(file, root) if file.is_symlink() else None

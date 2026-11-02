@@ -328,16 +328,16 @@ def setup_experiment_directory():
         file_link_out = root / Path("exp1/another.log")
         file_link_out.symlink_to(root / Path("another.log"))
 
-        # Lists of symlinks inside and outside experiment directory
+        # Symlinks inside the experiment directory, kept as links whether or not symlinks are followed
         links_in = [Path("exp1/latest/logs/log.txt")]
-        links_out = [Path("exp1/another.log"), Path("exp1/archive")]
 
         if follow_symlinks:
             # Return files inside and outside experiment directory, and links pointing to files inside
             return files_in + files_out, links_in
         else:
-            # Return files inside the experiment directory plus links pointing outside, and links pointing inside
-            return files_in + links_out, links_in
+            # Return files inside the experiment directory, and links pointing inside: the links pointing outside,
+            # exp1/another.log and exp1/archive, are left out, as they could not be extracted
+            return files_in, links_in
 
     return _setup_experiment_directory
 
@@ -350,7 +350,7 @@ def assert_links_kept(mock_tarfile, root, links):
 
 
 @mock.patch("access.profiling.experiment.tarfile.open")
-def test_profiling_experiment_archive(mock_open, tmp_path, setup_experiment_directory):
+def test_profiling_experiment_archive(mock_open, tmp_path, setup_experiment_directory, caplog):
     """Test the archive method of ProfilingExperiment whithout following symlinks."""
 
     files, links = setup_experiment_directory(tmp_path, follow_symlinks=False)
@@ -364,7 +364,12 @@ def test_profiling_experiment_archive(mock_open, tmp_path, setup_experiment_dire
     exp.status = ProfilingExperimentStatus.DONE
 
     # Archive experiment with no exclude patterns, not following symlinks (default)
-    exp.archive(Path("/fake/archive"))
+    with caplog.at_level(logging.INFO, logger="access.profiling.experiment"):
+        exp.archive(Path("/fake/archive"))
+
+    # The links pointing outside the experiment directory are left out, and said to be
+    for link in ["exp1/another.log", "exp1/archive"]:
+        assert f"Leaving {tmp_path / link} out of the archive" in caplog.text
 
     # Check calls
     assert exp.status == ProfilingExperimentStatus.ARCHIVED  # Status should be updated to ARCHIVED
@@ -558,3 +563,72 @@ class TestSymlinksInsideTheExperiment:
         with experiment.directory() as (path, _):
             assert (path / "archive/output001/config.yaml").readlink() == Path("../../config.yaml")
             assert (path / "archive/output001/config.yaml").read_text() == "model: access-esm1.6\n"
+
+
+class TestWhatIsLeftOut:
+    """What archiving leaves out: links it could not extract, and what the exclusion patterns name, matched in the
+    archive rather than on disk."""
+
+    @staticmethod
+    def done(path: Path, run_path: Path | None = None) -> ProfilingExperiment:
+        experiment = ProfilingExperiment(path=path, run_path=run_path)
+        experiment.status = ProfilingExperimentStatus.DONE
+        return experiment
+
+    @staticmethod
+    def archived(path: Path) -> list[Path]:
+        """Everything an extracted directory holds, files and links alike, relative to it."""
+        return sorted(entry.relative_to(path) for entry in path.rglob("*") if entry.is_file() or entry.is_symlink())
+
+    def test_a_link_outside_is_left_out_when_links_are_not_followed(self, tmp_path, caplog):
+        """Kept as a link, it could not be extracted: the data filter refuses links pointing outside the archive."""
+        exp = tmp_path / "exp1"
+        exp.mkdir()
+        (exp / "timings.txt").write_text("timings")
+        (tmp_path / "shared").mkdir()
+        (tmp_path / "shared" / "forcing.nc").write_text("forcing")
+        (exp / "shared").symlink_to(tmp_path / "shared")
+        experiment = self.done(exp)
+
+        with caplog.at_level(logging.INFO, logger="access.profiling.experiment"):
+            experiment.archive(tmp_path / "archived")
+
+        with experiment.directory() as (path, _):
+            assert self.archived(path) == [Path("timings.txt")]
+        assert f"Leaving {exp / 'shared'} out of the archive" in caplog.text
+
+    def test_a_root_that_is_a_symlink_is_archived_as_what_it_points_to(self, tmp_path):
+        """As a Cylc run directory is, when the runs are kept on another file system."""
+        exp = tmp_path / "u-aa123"
+        exp.mkdir()
+        (exp / "rose-suite.conf").write_text("um_layout = 2,3\n")
+        runs = tmp_path / "scratch" / "cylc-run" / "u-aa123"
+        (runs / "log").mkdir(parents=True)
+        (runs / "log" / "db").write_text("tasks")
+        (tmp_path / "cylc-run").mkdir()
+        (tmp_path / "cylc-run" / "u-aa123").symlink_to(runs)
+        experiment = self.done(exp, run_path=tmp_path / "cylc-run" / "u-aa123")
+
+        experiment.archive(tmp_path / "archived")
+
+        with experiment.directory() as (_, run_path):
+            assert run_path is not None
+            assert self.archived(run_path) == [Path("log/db")]
+
+    def test_the_patterns_are_matched_in_the_archive(self, tmp_path):
+        """A directory above the experiment named like an excluded one excludes nothing, and a link to a directory,
+        kept as a link, is excluded by its own name."""
+        exp = tmp_path / "share" / "exp1"
+        (exp / "restart000").mkdir(parents=True)
+        (exp / "restart000" / "ocean.res").write_text("restart")
+        (exp / "restart_latest").symlink_to(exp / "restart000")
+        (exp / "timings.txt").write_text("timings")
+        (exp / "output.nc").write_text("output")
+        experiment = self.done(exp)
+
+        experiment.archive(
+            tmp_path / "archived", exclude_dirs=["share", "restart*"], exclude_files=["*.nc"], follow_symlinks=True
+        )
+
+        with experiment.directory() as (path, _):
+            assert self.archived(path) == [Path("timings.txt")]
