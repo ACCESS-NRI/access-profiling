@@ -565,6 +565,20 @@ class ProfilingManager(ABC, Generic[AppT]):
                 The ones being regenerated are left out, being held already.
         """
 
+    @abstractmethod
+    def run_experiments(self, retry_failed: bool = False) -> None:
+        """Runs the experiments this manager holds that have not run, with its workflow engine.
+
+        Every NEW experiment is submitted, and so is every FAILED one where retry_failed asks for it, and each is
+        marked RUNNING once the engine has taken it. The statuses are brought up to date first, since a status does
+        not outlive the session and an experiment held as NEW may have run in an earlier one. The method returns
+        once the experiments are submitted, without waiting for them to finish.
+
+        Args:
+            retry_failed (bool): Whether to run the experiments whose runs failed as well as the new ones. False
+                (the default) runs only the new ones.
+        """
+
     def archive_experiments(
         self,
         exclude_dirs: list[str] | None = None,

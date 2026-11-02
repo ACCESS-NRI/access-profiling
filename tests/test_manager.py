@@ -125,6 +125,9 @@ class MockProfilingManager(ProfilingManager[MockConfiguration]):
         """Record requested deletions instead of touching the filesystem."""
         self._deleted_experiments.append((names, dry_run))
 
+    def run_experiments(self, retry_failed=False):
+        """Nothing to run: these tests drive the experiments' statuses themselves."""
+
     def _create_experiments(self, plans, **runner_options):
         """Record what generation decided, and register everything new."""
         self._created_plans.append(plans)
@@ -1508,3 +1511,13 @@ class TestLayoutIsReadBackOnce:
 
         assert manager._layout("expt") is None
         assert manager.experiments["expt"].layout is None
+
+
+def test_a_manager_states_how_it_runs_experiments():
+    """Every engine runs the experiments its own way, so a manager that does not say how cannot be created."""
+
+    class WithoutRunExperiments(MockProfilingManager):
+        run_experiments = ProfilingManager.run_experiments
+
+    with pytest.raises(TypeError, match="run_experiments"):
+        WithoutRunExperiments(paths=[Path("/fake/work_dir")])
