@@ -24,3 +24,14 @@ Add, delete or edit the list below to add known abbreviations to the site.
 *[PBS]: Portable Batch System
 *[VDI]: Virtual Desktop Interface
 *[NIWA]: New Zealand National Institute of Water and Atmospheric Research
+*[PE]: Processing element (one MPI process)
+*[PEs]: Processing elements (MPI processes)
+*[PET]: Persistent execution thread (ESMF's name for a PE)
+*[PETs]: Persistent execution threads (ESMF's name for PEs)
+*[MPI]: Message Passing Interface
+*[ESMF]: Earth System Modeling Framework
+*[NUOPC]: National Unified Operational Prediction Capability
+*[CMEPS]: Community Mediator for Earth Prediction Systems
+*[CDEPS]: Community Data Models for Earth Prediction Systems
+*[FMS]: Flexible Modeling System
+*[CICE]: The Los Alamos sea ice model
