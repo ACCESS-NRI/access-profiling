@@ -20,8 +20,11 @@ The package is built on two axes. A **manager** (`ProfilingManager`) drives one 
 runs, archives and parses experiments, and reads what the engine and the scheduler wrote. An **application**
 (`Application`) describes what is profiled: its component tree, how a layout is written into its input files and
 read back out, and which logs it writes. A study is a manager of one engine handed one application and a control.
-The docstrings of the abstract classes say what a subclass of each implements, and the module docstrings say why
-the code is the way it is; this file adds what an agent changing the code needs on top of them.
+
+**Read the [developer guide](documentation/docs/pages/developer-guide/index.md) first.** It describes the two axes
+at length, the abstract classes and what a subclass of each implements, and how a study is generated, and the
+module docstrings say why the code is the way it is. This file does not repeat them; it adds what an agent changing
+the code needs on top of them.
 
 ## Working here
 
@@ -36,9 +39,10 @@ the code is the way it is; this file adds what an agent changing the code needs 
 - **Surgical changes.** Every changed line traces to the request. Match the surrounding style; don't refactor,
   reformat or "improve" adjacent code. Remove what your change orphans; mention pre-existing dead code rather than
   deleting it.
-- **The docstrings follow the code.** They describe the behaviour and its reasons in detail, so a change of
-  behaviour updates the docstrings and comments that describe it, in the same change: grep `src/` for the names you
-  touched.
+- **The documentation follows the code.** The docstrings, the [user guide](documentation/docs/pages/user-guide/) and
+  the [ACCESS models](documentation/docs/pages/access/) pages describe the behaviour in detail, so a change of
+  behaviour updates the docstrings and pages that describe it, in the same change: grep `src/` and
+  `documentation/docs/pages` for the names you touched. The strict build catches a broken reference, not stale prose.
 - **Be honest.** Report what you ran and what it showed: a failing test, a check you skipped, a test that passes
   without binding.
 
@@ -77,6 +81,8 @@ src/access/profiling/
   om3.py                OM3Configuration, OM3_MC_25KM and its control source
   um_suites.py          AM3_N96E, RAM3, their control source and UM_SUITE_PARSERS
 
+documentation/          The MkDocs site, published on Read the Docs: pages in docs/pages/, figures drawn by
+                        scripts/generate_figures.py
 conda/                  The conda recipe, for the accessnri channel
 ```
 
@@ -101,7 +107,10 @@ same text, and stay side by side in every application so that they do not drift 
 
 **Public names.** The names a study uses most are re-exported from `access.profiling` and listed in its `__all__`,
 the only one in the package, which `test_init.py` checks against what it imports; everything else is imported
-from the module that defines it, and `access.profiling.models` exports nothing.
+from the module that defines it, and `access.profiling.models` exports nothing. The API reference is generated
+from the docstrings, on pages in `documentation/docs/pages/api/` that are each a run of `::: access.profiling.<module>`
+blocks, one page per concept. A new module needs a block on the right page and a row in the table of
+`api/index.md`; a new page needs an entry in the `nav` of `mkdocs.yml`, or the strict build fails.
 
 ## Invariants
 
@@ -114,8 +123,9 @@ from the module that defines it, and `access.profiling.models` exports nothing.
   statistic. A second `ProfilingMetric("maximum time", ...)` is another key, not an equal one.
 - **`ProfilingLog.parse` builds the dataset, not the parser.** It flattens a hierarchical result, adds a `pe`
   dimension for per-PE data and quantifies each metric with its units; a parser returns the plain dict, in one of
-  the three shapes the class docstring of `ProfilingParser` describes, with every metric it declares, or
-  `ProfilingLog.parse` raises `KeyError`. A parser raises `ValueError` on a log not in its format.
+  the three shapes [Adding a parser](documentation/docs/pages/developer-guide/adding-a-parser.md) describes, with
+  every metric it declares, or `ProfilingLog.parse` raises `KeyError`. A parser raises `ValueError` on a log not
+  in its format.
 - **The order of `_metrics` is load-bearing** in `UMProfilingParser`, which builds its regular expression for a
   region in that order, and in `FMSProfilingParser`, which zips them with the column labels.
 - New metrics are named `<base>_<stat>_<dimension>`, as the module docstring of `metrics.py` lays out; the
@@ -178,7 +188,7 @@ from the module that defines it, and `access.profiling.models` exports nothing.
 - **`CICEPartitioning` must stay hashable**: `_choose_blocks` is cached on it with `functools.cache`.
 - **`config_changes` returns what experiment-generator merges into the control, in its format**: a list is wrapped
   in another list, and `"PRESERVE"` holds a position, because the generator merges lists by position and truncates
-  them. The module docstring of `models/esm16.py` has the details.
+  them. [Adding an application](documentation/docs/pages/developer-guide/adding-an-application.md) has the details.
   The keys of the generator's and the runner's configurations, `model_type`, `submodels` and the keys of Payu's
   `config.yaml` are other libraries' words: don't rename them.
 
@@ -249,14 +259,24 @@ python -m pytest tests/test_esm16.py -q --no-cov   # a fast run of one file
 ruff format .
 ruff check .
 pre-commit run --all-files       # what CI's formatting job runs
+python documentation/scripts/generate_figures.py   # after changing the plotting functions
 ```
 
 `python -m pytest` writes `.coverage`, `coverage.xml` and `htmlcov/` into the repository root; all three are
-ignored.
+ignored. The documentation is built in an environment of its own, the way CI builds it:
 
-CI (`.github/workflows/ci.yml`) runs pre-commit, a PyPA build, a conda build, and pytest on 3.11, 3.12 and 3.13 with
-the coverage uploaded to Codecov. Releases are tag-driven (`v*`, to PyPI and the accessnri conda channel); there
-is nothing to run locally for one.
+```shell
+pip install -r documentation/requirements.txt
+READTHEDOCS_CANONICAL_URL=https://access-profiling.access-hive.org.au/latest/ \
+    mkdocs build --strict -f documentation/mkdocs.yml
+```
+
+The variable stands in for the one Read the Docs sets, without which the build refuses to run. The date at the
+foot of each page comes from git, so a page that has not been committed yet makes the strict build warn.
+
+CI (`.github/workflows/ci.yml`) runs pre-commit, a PyPA build, a conda build, pytest on 3.11, 3.12 and 3.13 with the
+coverage uploaded to Codecov, and the strict documentation build. Releases are tag-driven (`v*`, to PyPI and the
+accessnri conda channel); there is nothing to run locally for one.
 
 ## Conventions
 
@@ -268,10 +288,18 @@ is nothing to run locally for one.
 - Parameters and return values are annotated, with `X | None` and built-in generics and without
   `from __future__ import annotations`. Tests are the exception.
 - Data types are `@dataclass(frozen=True)`; `__post_init__` validates, and normalises with `object.__setattr__`.
-- **Docstrings are Google style with Markdown markup**: a blank line before each section,
-  `name (type): description`, single backticks, and fenced blocks for examples and for samples of the logs a parser
-  reads. The reason for a rule is written once, in the module docstring or in a comment beside the code it explains.
+- **Docstrings are Google style with Markdown markup**, as
+  [Contributing](documentation/docs/pages/developer-guide/contributing.md) sets out: a blank line before each
+  section, `name (type): description`, single backticks, and fenced blocks for examples and for samples of the logs
+  a parser reads. mkdocstrings renders them and CI builds strictly, so a docstring it cannot read fails the build.
+  The reason for a rule is written once, in the module docstring or in a comment beside the code it explains.
 - What a subclass must provide is declared abstract in its base class, `_`-prefixed members included
   (`_create_experiments`, `_delete_experiments`), except `_metrics`, which a parser sets as a class attribute or in
-  `__init__`.
+  `__init__`. `_`-prefixed names are left out of the API reference, so the contracts table of the developer guide
+  lists them all.
+- `documentation/` comes from the ACCESS-NRI template,
+  [documentation-infra](https://github.com/ACCESS-NRI/documentation-infra), and is kept so that it can be updated
+  from there: `hooks/`, `overrides/`, `docs/css/`, `docs/js/`, `docs/fontello/`, `docs/assets/logos/`,
+  `requirements.txt` and `.readthedocs.yaml` stay as copied, and `mkdocs.yml` and `abbreviations.md` are changed
+  only where the template marks them for it.
 - Credit the agent in commit messages, with a `Co-Authored-By:` trailer.
