@@ -28,7 +28,9 @@ from access.profiling.manager import ProfilingManager
 from access.profiling.metrics import ProfilingMetric
 from access.profiling.models.cice import CICEPartitioning, CICEPartitioningMode
 from access.profiling.models.components import CICEComponent, MOM5Component, UMComponent
+from access.profiling.models.esm15 import ESM15Configuration
 from access.profiling.models.esm16 import ESM16_PI_CONTROL, ESM16_PI_CONTROL_SOURCE, ESM16Configuration
+from access.profiling.models.om2 import OM2Configuration
 from access.profiling.models.om3 import OM3_MC_25KM, OM3_MC_25KM_SOURCE, OM3Configuration
 from access.profiling.models.um_suites import AM3_N96E, AM3_N96E_SOURCE, RAM3
 from access.profiling.parser import ProfilingParser
@@ -58,6 +60,7 @@ __all__ = [
     "CylcDBReader",
     "CylcProfilingParser",
     "CylcRoseManager",
+    "ESM15Configuration",
     "ESM16_PI_CONTROL",
     "ESM16_PI_CONTROL_SOURCE",
     "ESM16Configuration",
@@ -69,6 +72,7 @@ __all__ = [
     "log_at",
     "LogSpec",
     "MOM5Component",
+    "OM2Configuration",
     "OM3_MC_25KM",
     "OM3_MC_25KM_SOURCE",
     "OM3Configuration",

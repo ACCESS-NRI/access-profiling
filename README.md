@@ -16,7 +16,7 @@ reads the profiling logs they write into one form, and selects, plots and compar
 
 It implements this for the climate models developed at [ACCESS-NRI](https://github.com/ACCESS-NRI), which run on
 NCI's Gadi. For them it has the Payu and Cylc Rose workflow engines, parsers for the timers of FMS, ESMF, CICE and
-the UM, and presets for ACCESS-ESM1.6, ACCESS-OM3, ACCESS-AM3 and ACCESS-rAM3.
+the UM, and presets for ACCESS-ESM1.5, ACCESS-ESM1.6, ACCESS-OM2, ACCESS-OM3, ACCESS-AM3 and ACCESS-rAM3.
 
 ## Key features
 
@@ -38,7 +38,8 @@ the UM, and presets for ACCESS-ESM1.6, ACCESS-OM3, ACCESS-AM3 and ACCESS-rAM3.
 
 - Managers for Payu, through experiment-generator and experiment-runner, and for Cylc Rose suites.
 - Parsers for the timers of FMS (MOM5 and MOM6), ESMF, CICE and the UM, and for Payu's and Cylc's own records.
-- Presets for ACCESS-ESM1.6 and ACCESS-OM3, driven by Payu, and for ACCESS-AM3 and ACCESS-rAM3, driven by Cylc and
+- Presets for ACCESS-ESM1.5, ACCESS-ESM1.6, ACCESS-OM2 and ACCESS-OM3, driven by Payu, and for ACCESS-AM3 and
+  ACCESS-rAM3, driven by Cylc and
   Rose.
 
 ## Documentation

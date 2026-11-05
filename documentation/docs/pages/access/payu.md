@@ -1,7 +1,8 @@
 # Experiments with Payu
 
 [`PayuManager`][access.profiling.payu_manager.PayuManager] is the manager for applications run with
-[Payu](https://payu.readthedocs.io/en/stable/), as the ACCESS-ESM1.6 and ACCESS-OM3 presets are. It generates
+[Payu](https://payu.readthedocs.io/en/stable/), as the presets of ACCESS-ESM1.5, ACCESS-ESM1.6, ACCESS-OM2 and
+ACCESS-OM3 are. It generates
 their experiments with [experiment-generator](https://access-experiment-generator.access-hive.org.au/), submits
 them on NCI's Gadi with [experiment-runner](https://access-experiment-runner.access-hive.org.au/), and reads what
 Payu records about every run. [Generating and running experiments](../user-guide/experiments.md) goes through a
@@ -30,6 +31,25 @@ The Payu manager takes one option of its own in
 follow the format of [experiment-generator](https://access-experiment-generator.access-hive.org.au/), in which
 `"REMOVE"` deletes a key. [Generating the experiments](../user-guide/experiments.md#generating-the-experiments) shows
 the options the releases of ACCESS-ESM1.6 and ACCESS-OM3 need.
+
+The releases of ACCESS-OM2 need two more. Their ocean runs on a masked layout: a mask table of the land-only ranks,
+named after the process grid it was made for, is among the ocean submodel's inputs, and MOM5 refuses to run another
+process grid with it, so the generated layouts, which run unmasked, need it gone. The `input` list of a submodel is
+merged by position, so the option restates the ocean's inputs without the table, in the ocean's slot:
+
+```python
+control_options = {"config.yaml": {"submodels": ["PRESERVE", {"input": [...]}, "PRESERVE"]}}
+```
+
+Payu's own `mask: true` on the ocean submodel is the alternative, where a reference table `mask_table.<masked>.<nx>x<ny>`
+exists among the inputs for every layout of the study. And the `-4.1` and `_bgc` releases run a CICE5 compiled for
+their layout, where the presets write the grid and the blocks for the runtime-grid `cice_auscom.exe` of
+`access-om2/2026.08.002` and later, which the `+wombatlite` releases run already, so the options of an older release
+load that module as well:
+
+```python
+control_options["config.yaml"]["modules"] = {"use": ["/g/data/vk83/modules"], "load": ["access-om2/2026.08.002"]}
+```
 
 The control is cloned into the working directory, under `config`, and the control options are committed there on
 a branch named `ctrl`. Every experiment is then a branch of `ctrl`, named after its layout, carrying the changes the

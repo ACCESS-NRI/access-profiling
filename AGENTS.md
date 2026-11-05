@@ -7,8 +7,8 @@ Guidance for AI coding agents working in `access-profiling`.
 A Python library from ACCESS-NRI for profiling parallel applications. A study generates one experiment per parallel
 layout over a range of core counts, runs them through a workflow engine, parses the profiling logs they write into
 `xr.Dataset`s quantified with pint, and selects and plots the best layouts. The package is generic in both the
-application and the engine, and ships implementations for the ACCESS climate models: ACCESS-ESM1.6 and ACCESS-OM3
-run with Payu, and UM suites run with Cylc and Rose.
+application and the engine, and ships implementations for the ACCESS climate models: ACCESS-ESM1.5, ACCESS-ESM1.6,
+ACCESS-OM2 and ACCESS-OM3 run with Payu, and UM suites run with Cylc and Rose.
 
 Python >= 3.11.4, which the `filter="data"` tarball extraction in `experiment.py` needs; CI covers 3.11–3.13. The
 layout search (`ParallelComponent`, `iter_layouts`, the allocation strategies and the constraints) and the parsers of
@@ -77,9 +77,11 @@ src/access/profiling/
   cylc_manager.py       CylcRoseManager: rose suite-run and the Cylc suite database
 
   ── models/: the ACCESS models, as data ──
-  cice.py               CICEPartitioning: CICE's block distribution, for ESM1.6 and OM3 alike
+  cice.py               CICEPartitioning: CICE's block distribution, for ESM1.6, OM2 and OM3 alike
   components.py         UMComponent, MOM5Component, CICEComponent: the codes the Payu models are put together from
+  esm15.py              ESM15Configuration, ESM15_PREINDUSTRIAL, ESM15_HISTORICAL and their control sources
   esm16.py              ESM16Configuration, ESM16_PI_CONTROL, ESM16_AMIP and the control source
+  om2.py                OM2Configuration, OM2_1DEG, OM2_025DEG, OM2_01DEG
   om3.py                OM3Configuration, OM3_MC_25KM and its control source, and the development configurations
   um_suites.py          AM3_N96E, RAM3, their control source and UM_SUITE_PARSERS
 
@@ -225,7 +227,7 @@ blocks, one page per concept. A new module needs a block on the right page and a
 | `test_cylc_dbreader.py` | `CylcDBReader`, together with `TestFailedTasksAreSkipped` in `test_cylc_parser.py` |
 | `test_cice.py` | `models/cice.py`, the block partitioning, not the CICE parser |
 | `test_components.py` | `models/components.py`, the components the Payu models are put together from |
-| `test_esm16.py`, `test_om3.py` | their model, and `PayuManager` driving it end to end |
+| `test_esm15.py`, `test_esm16.py`, `test_om2.py`, `test_om3.py` | their model, and `PayuManager` driving it end to end |
 | `test_init.py` | `__init__.py`: that `__all__` lists exactly what the package imports |
 
 Coverage is **100% of lines** across `access.profiling`, and a change keeps it there, error paths included. Nothing

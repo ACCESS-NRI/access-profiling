@@ -11,6 +11,10 @@ together from the components of the codes they run, or of
 
 ::: access.profiling.models.esm16
 
+::: access.profiling.models.esm15
+
+::: access.profiling.models.om2
+
 ::: access.profiling.models.om3
 
 ::: access.profiling.models.cice

@@ -172,12 +172,24 @@ class PlainComponent(PayuComponent):
         token (str): How `experiment_name` abbreviates it.
         n_ranks (int | None): The rank count the model fixes, or None where the search chooses it.
         logs (tuple[LogSpec, ...]): The profiling logs it writes, if any.
+
+    Raises:
+        ValueError: If the rank count is fixed to something nothing could run on.
     """
 
     name: str
     token: str
     n_ranks: int | None = None
     logs: tuple[LogSpec, ...] = ()
+
+    def __post_init__(self) -> None:
+        # Checked here rather than when the constraint is built, so that a configuration pinning a component
+        # to no ranks is refused when it is built instead of once the search reads its tree.
+        if self.n_ranks is not None and self.n_ranks < 1:
+            raise ValueError(
+                f"PlainComponent {self.name!r} is pinned to {self.n_ranks} rank(s), which nothing could run "
+                "on: n_ranks must be positive."
+            )
 
     @property
     def domain(self) -> None:
