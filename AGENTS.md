@@ -109,7 +109,8 @@ manager reads what the engine and the scheduler wrote; the application reads wha
 `config_changes` writes a layout into those files and `parse_layout` reads it back out: they are inverses over the
 same text, and stay side by side in every application so that they do not drift apart.
 
-**Public names.** The names a study uses most are re-exported from `access.profiling` and listed in its `__all__`,
+**Public names.** The types a study is written with are re-exported from `access.profiling` and listed in its `__all__`,
+the presets and their control sources never (they are imported from their model module),
 the only one in the package, which `test_init.py` checks against what it imports; everything else is imported
 from the module that defines it, and `access.profiling.models` exports nothing. The API reference is generated
 from the docstrings, on pages in `documentation/docs/pages/api/` that are each a run of `::: access.profiling.<module>`
@@ -190,8 +191,9 @@ blocks, one page per concept. A new module needs a block on the right page and a
   every model Payu couples as submodels, so a model adds no code for that. A component's `name` and `token` are
   user-facing: the first keys allocation strategies, the second appears in every experiment name.
 - **Presets are module-level values with a docstring on the line after**, which is what puts them in the API
-  reference. A model ships one control source, beside its preset rather than on it, and not one per release of its
-  configurations repository.
+  reference. A model ships a preset per distinct layout, and a control source per configuration, beside the presets
+  rather than on them: at the configuration's latest release tag, or at its `dev-*` branch while it has no release,
+  named `<MODEL>_<CONFIGURATION>_SOURCE`, with the preset it goes with in its docstring.
 - **A model's component tree holds requirements only**, what is true of every layout of it; a study's preferences
   belong in its allocation strategy (the docstring of `SubmodelsConfiguration.parallel_component`).
 - **The OM3 presets choose CICE6's blocks from the rank count** (`OM3_CICE6_BLOCKS_PER_RANK_RANGE`), as the

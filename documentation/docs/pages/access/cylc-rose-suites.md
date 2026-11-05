@@ -79,7 +79,8 @@ the run.
 A manager is created as any other, with the suite's configuration and, optionally, its control:
 
 ```python
-from access.profiling import AM3_N96E, AM3_N96E_SOURCE, CylcRoseManager
+from access.profiling import CylcRoseManager
+from access.profiling.models.um_suites import AM3_N96E, AM3_N96E_SOURCE
 
 manager = CylcRoseManager(
     work_dir=Path("/scratch/tm70/model_scaling/roses"),

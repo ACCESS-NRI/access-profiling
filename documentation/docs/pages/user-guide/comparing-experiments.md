@@ -26,7 +26,8 @@ create one for each model:
     ```python
     from pathlib import Path
 
-    from access.profiling import ESM16_PI_CONTROL, PayuManager
+    from access.profiling import PayuManager
+    from access.profiling.models.esm16 import ESM16_PI_CONTROL
 
     manager = PayuManager(
         work_dir=Path("/scratch/tm70/comparisons/ACCESS-ESM1.6"),
@@ -40,7 +41,8 @@ create one for each model:
     ```python
     from pathlib import Path
 
-    from access.profiling import OM3_MC_25KM, PayuManager
+    from access.profiling import PayuManager
+    from access.profiling.models.om3 import OM3_MC_25KM
 
     manager = PayuManager(
         work_dir=Path("/scratch/tm70/comparisons/ACCESS-OM3"),

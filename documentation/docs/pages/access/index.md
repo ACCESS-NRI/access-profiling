@@ -45,17 +45,37 @@ submodel its cores, and into the files stating each component's decomposition: `
 
 The other released configurations, historical, esm-piControl, the scenario runs and so on, share the grids,
 the components and the core counts of the pre-industrial control. They differ in name, so that their experiments
-do not share names, and in their control. To profile the historical configuration, for example, make a copy of the
-preset under its name, and point a control source at its release:
+do not share names, and in their control, and the package ships the control of each at its latest release:
+
+| Configuration | Control | Release |
+|---|---|---|
+| `piControl` | `ESM16_PI_CONTROL_SOURCE` | `release-piControl-2.1` |
+| `historical` | `ESM16_HISTORICAL_SOURCE` | `release-historical-1.3` |
+| `amip` | `ESM16_AMIP_SOURCE` | `release-amip-1.0` |
+| `esm-piControl` | `ESM16_ESM_PICONTROL_SOURCE` | `release-esm-piControl-2.1` |
+| `esm-historical` | `ESM16_ESM_HISTORICAL_SOURCE` | `release-esm-historical-1.3` |
+| `1pctCO2` | `ESM16_1PCTCO2_SOURCE` | `release-1pctCO2-1.0` |
+| `1pctCO2-bgc` | `ESM16_1PCTCO2_BGC_SOURCE` | `release-1pctCO2-bgc-1.0` |
+| `1pctCO2-rad` | `ESM16_1PCTCO2_RAD_SOURCE` | `release-1pctCO2-rad-1.0` |
+| `abrupt-0p5xCO2` | `ESM16_ABRUPT_0P5XCO2_SOURCE` | `release-abrupt-0p5xCO2-2.0` |
+| `abrupt-2xCO2` | `ESM16_ABRUPT_2XCO2_SOURCE` | `release-abrupt-2xCO2-2.0` |
+| `abrupt-4xCO2` | `ESM16_ABRUPT_4XCO2_SOURCE` | `release-abrupt-4xCO2-1.0` |
+| `esm-flat10` | `ESM16_ESM_FLAT10_SOURCE` | `release-esm-flat10-1.0` |
+| `esm-flat10-cdr` | `ESM16_ESM_FLAT10_CDR_SOURCE` | `release-esm-flat10-cdr-1.0` |
+| `esm-flat10-zec` | `ESM16_ESM_FLAT10_ZEC_SOURCE` | `release-esm-flat10-zec-1.0` |
+| `scen7-h` | `ESM16_SCEN7_H_SOURCE` | `release-scen7-h-1.0` |
+| `scen7-vl` | `ESM16_SCEN7_VL_SOURCE` | `release-scen7-vl-1.0` |
+| `esm-scen7-h` | `ESM16_ESM_SCEN7_H_SOURCE` | `release-esm-scen7-h-1.0` |
+| `esm-scen7-vl` | `ESM16_ESM_SCEN7_VL_SOURCE` | `release-esm-scen7-vl-1.0` |
+
+To profile one of them, pair the preset under its name with its control:
 
 ```python
 from dataclasses import replace
 
-from access.profiling import ESM16_PI_CONTROL, GitControlSource
-from access.profiling.models.esm16 import ESM16_CONFIGS_REPOSITORY
+from access.profiling.models.esm16 import ESM16_HISTORICAL_SOURCE, ESM16_PI_CONTROL
 
 historical = replace(ESM16_PI_CONTROL, name="historical")
-historical_source = GitControlSource(ESM16_CONFIGS_REPOSITORY, "release-historical-1.1")
 ```
 
 The AMIP configuration runs the atmosphere alone, with no ocean, no sea ice and nothing to couple, and is the
@@ -95,7 +115,7 @@ decompositions.
 | | |
 |---|---|
 | Presets | [`OM2_1DEG`][access.profiling.models.om2.OM2_1DEG], [`OM2_025DEG`][access.profiling.models.om2.OM2_025DEG] and [`OM2_01DEG`][access.profiling.models.om2.OM2_01DEG], one per resolution: the forcing and the biogeochemistry of a release change its core counts, not how it is parallelised |
-| Control | A `GitControlSource` of [`OM2_CONFIGS_REPOSITORY`][access.profiling.models.om2.OM2_CONFIGS_REPOSITORY] at the release, such as `release-1deg_jra55_ryf-4.1` |
+| Controls | One per released configuration, at its latest release: [`OM2_1DEG_JRA55_RYF_SOURCE`][access.profiling.models.om2.OM2_1DEG_JRA55_RYF_SOURCE] and the others in the table below |
 | Manager | `PayuManager` |
 | Components | `YATM`, the data atmosphere, on one core; `MOM5` on the grid of the resolution, 360 × 300, 1440 × 1080 or 3600 × 2700; `CICE5` on the same grid |
 | Whole model | `ACCESS-OM2 1deg`, `ACCESS-OM2 025deg` and `ACCESS-OM2 01deg` |
@@ -124,12 +144,37 @@ executables compiled for their layout, so a study of one loads that module.
 
 YATM writes no timers this package reads.
 
+The forcing and the biogeochemistry of a release change its core counts and not its parallelisation, so each
+release is profiled with the preset of its resolution, under its own name where several share a working directory,
+and with its own control:
+
+| Configuration | Control | Release |
+|---|---|---|
+| `1deg_jra55_ryf` | `OM2_1DEG_JRA55_RYF_SOURCE` | `release-1deg_jra55_ryf-4.1` |
+| `1deg_jra55_ryf_bgc` | `OM2_1DEG_JRA55_RYF_BGC_SOURCE` | `release-1deg_jra55_ryf_bgc-3.0` |
+| `1deg_jra55_ryf+wombatlite` | `OM2_1DEG_JRA55_RYF_WOMBATLITE_SOURCE` | `release-1deg_jra55_ryf+wombatlite-3.0` |
+| `1deg_jra55_iaf` | `OM2_1DEG_JRA55_IAF_SOURCE` | `release-1deg_jra55_iaf-4.1` |
+| `1deg_jra55_iaf_bgc` | `OM2_1DEG_JRA55_IAF_BGC_SOURCE` | `release-1deg_jra55_iaf_bgc-3.0` |
+| `1deg_jra55_iaf+wombatlite` | `OM2_1DEG_JRA55_IAF_WOMBATLITE_SOURCE` | `release-1deg_jra55_iaf+wombatlite-3.0` |
+| `025deg_jra55_ryf` | `OM2_025DEG_JRA55_RYF_SOURCE` | `release-025deg_jra55_ryf-4.1` |
+| `025deg_jra55_ryf_bgc` | `OM2_025DEG_JRA55_RYF_BGC_SOURCE` | `release-025deg_jra55_ryf_bgc-3.0` |
+| `025deg_jra55_ryf+wombatlite` | `OM2_025DEG_JRA55_RYF_WOMBATLITE_SOURCE` | `release-025deg_jra55_ryf+wombatlite-3.0` |
+| `025deg_jra55_iaf` | `OM2_025DEG_JRA55_IAF_SOURCE` | `release-025deg_jra55_iaf-4.1` |
+| `025deg_jra55_iaf_bgc` | `OM2_025DEG_JRA55_IAF_BGC_SOURCE` | `release-025deg_jra55_iaf_bgc-3.0` |
+| `025deg_jra55_iaf+wombatlite` | `OM2_025DEG_JRA55_IAF_WOMBATLITE_SOURCE` | `release-025deg_jra55_iaf+wombatlite-3.0` |
+| `01deg_jra55_ryf` | `OM2_01DEG_JRA55_RYF_SOURCE` | `release-01deg_jra55_ryf-4.1` |
+| `01deg_jra55_ryf_bgc` | `OM2_01DEG_JRA55_RYF_BGC_SOURCE` | `release-01deg_jra55_ryf_bgc-3.0` |
+| `01deg_jra55_ryf+wombatlite` | `OM2_01DEG_JRA55_RYF_WOMBATLITE_SOURCE` | `release-01deg_jra55_ryf+wombatlite-3.0` |
+| `01deg_jra55_iaf` | `OM2_01DEG_JRA55_IAF_SOURCE` | `release-01deg_jra55_iaf-4.1` |
+| `01deg_jra55_iaf_bgc` | `OM2_01DEG_JRA55_IAF_BGC_SOURCE` | `release-01deg_jra55_iaf_bgc-3.0` |
+| `01deg_jra55_iaf+wombatlite` | `OM2_01DEG_JRA55_IAF_WOMBATLITE_SOURCE` | `release-01deg_jra55_iaf+wombatlite-3.0` |
+
 ## ACCESS-OM3
 
 | | |
 |---|---|
 | Presets | [`OM3_MC_25KM`][access.profiling.models.om3.OM3_MC_25KM], MOM6 and CICE6 at 25 km, which every released configuration is; and, under development, [`OM3_MC_100KM`][access.profiling.models.om3.OM3_MC_100KM] and [`OM3_MCW_100KM`][access.profiling.models.om3.OM3_MCW_100KM] at 100 km, without and with WW3, [`OM3_MC_8KM`][access.profiling.models.om3.OM3_MC_8KM] at 8 km, and the pan-Antarctic regional configurations at 4 km, [`OM3_MC_PANAN4KM`][access.profiling.models.om3.OM3_MC_PANAN4KM] and, with ice shelves, [`OM3_MC_PANAN4KM_ISF`][access.profiling.models.om3.OM3_MC_PANAN4KM_ISF] |
-| Control | [`OM3_MC_25KM_SOURCE`][access.profiling.models.om3.OM3_MC_25KM_SOURCE], `release-MC_25km_jra_ryf-2.0-beta` of `access-om3-configs` |
+| Controls | One per released configuration, at its latest release, and one per configuration under development, at its `dev-*` branch: [`OM3_MC_25KM_JRA_RYF_SOURCE`][access.profiling.models.om3.OM3_MC_25KM_JRA_RYF_SOURCE] and the others in the table below |
 | Manager | `PayuManager` |
 | Components | `shared`, the range of cores `cpl`, `atm`, `ice` and `rof` take turns on, `ocn` beside it, and `wav` beside that where there are waves; all on the configuration's grid, 1440 × 1152 at 25 km |
 | Whole model | `ACCESS-OM3 MC-25km`, `ACCESS-OM3 MC-100km`, and so on |
@@ -158,6 +203,24 @@ remove through its control options, as shown in
 All three model logs are optional, so a run that does not write one of them is still parsed. The ESMF summary
 times the whole coupled model, so its regions need a `component` in the groups that plot them against
 component cores.
+
+Every release so far is the 25 km configuration, and the others are under development on `dev-*` branches, which
+the package points at too:
+
+| Configuration | Control | Release |
+|---|---|---|
+| `MC_25km_jra_ryf` | `OM3_MC_25KM_JRA_RYF_SOURCE` | `release-MC_25km_jra_ryf-2.0-beta` |
+| `MC_25km_jra_iaf` | `OM3_MC_25KM_JRA_IAF_SOURCE` | `release-MC_25km_jra_iaf-2.0-beta` |
+| `MC_25km_jra_ryf+wombatlite` | `OM3_MC_25KM_JRA_RYF_WOMBATLITE_SOURCE` | `release-MC_25km_jra_ryf+wombatlite-1.0-beta` |
+| `MC_25km_jra_iaf+wombatlite` | `OM3_MC_25KM_JRA_IAF_WOMBATLITE_SOURCE` | `release-MC_25km_jra_iaf+wombatlite-1.0-beta` |
+| `MC_100km_jra_ryf` | `OM3_MC_100KM_JRA_RYF_SOURCE` | `dev-MC_100km_jra_ryf` |
+| `MC_100km_jra_iaf` | `OM3_MC_100KM_JRA_IAF_SOURCE` | `dev-MC_100km_jra_iaf` |
+| `MC_100km_jra_ryf+wombatlite` | `OM3_MC_100KM_JRA_RYF_WOMBATLITE_SOURCE` | `dev-MC_100km_jra_ryf+wombatlite` |
+| `MC_100km_jra_iaf+wombatlite` | `OM3_MC_100KM_JRA_IAF_WOMBATLITE_SOURCE` | `dev-MC_100km_jra_iaf+wombatlite` |
+| `MCW_100km_era_iaf` | `OM3_MCW_100KM_ERA_IAF_SOURCE` | `dev-MCW_100km_era_iaf` |
+| `MC_8km_jra_ryf` | `OM3_MC_8KM_JRA_RYF_SOURCE` | `dev-MC_8km_jra_ryf` |
+| `MC_panan4km_jra_ryf` | `OM3_MC_PANAN4KM_JRA_RYF_SOURCE` | `dev-MC_panan4km_jra_ryf` |
+| `MC_panan4km_jra_ryf+isf` | `OM3_MC_PANAN4KM_JRA_RYF_ISF_SOURCE` | `dev-MC_panan4km_jra_ryf+isf` |
 
 A configuration on another grid, or whose sea ice distributes its blocks differently, needs no code: it is an
 [`OM3Configuration`][access.profiling.models.om3.OM3Configuration] with a `CICEPartitioning` of its own, as the

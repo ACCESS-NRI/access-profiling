@@ -65,7 +65,8 @@ where they are kept once they have finished. We start by creating it:
 ```python
 from pathlib import Path
 
-from access.profiling import ESM16_PI_CONTROL, ESM16_PI_CONTROL_SOURCE, PayuManager
+from access.profiling import PayuManager
+from access.profiling.models.esm16 import ESM16_PI_CONTROL, ESM16_PI_CONTROL_SOURCE
 
 manager = PayuManager(
     work_dir=Path("/scratch/tm70/model_scaling/ACCESS-ESM1.6/piControl"),

@@ -3,12 +3,12 @@
 
 """ACCESS-ESM1.6 configurations.
 
-`access-esm1.6-configs` releases a dozen of these - piControl, historical, amip, esm-piControl, esm-historical
-and the scenario runs - and they are not interchangeable for profiling purposes. Most share the N96 atmosphere
-and the one-degree ocean, but `amip` runs the atmosphere alone, and the coupled ones are indistinguishable by
-their layout: piControl-2.1 and esm-historical-1.3 have the same grids, the same components *and* the same
-core counts, so a name derived from a layout is one string for two different experiments. Which configuration
-is being profiled therefore has to be part of what identifies an experiment, and it is.
+`access-esm1.6-configs` releases eighteen of these - piControl, historical, amip, esm-piControl, esm-historical,
+the idealised CO2 runs and the scenario runs - and they are not interchangeable for profiling purposes. Most share
+the N96 atmosphere and the one-degree ocean, but `amip` runs the atmosphere alone, and the coupled ones are
+indistinguishable by their layout: piControl-2.1 and esm-historical-1.3 have the same grids, the same components
+*and* the same core counts, so a name derived from a layout is one string for two different experiments. Which
+configuration is being profiled therefore has to be part of what identifies an experiment, and it is.
 
 A configuration is put together from the components of `access.profiling.models.components`, the UM, MOM5 and
 CICE5, each the Payu submodel the control declares it as, with OASIS as a slot this package sets nothing in.
@@ -173,13 +173,8 @@ components and the same core counts, and are reached by replacing the name alone
 replace(ESM16_PI_CONTROL, name="historical")
 ```
 
-paired with a control of their own:
-
-```python
-GitControlSource(ESM16_CONFIGS_REPOSITORY, "release-historical-1.3")
-```
-
-`ESM16_AMIP` is the one released configuration with other components.
+paired with their own control, such as `ESM16_HISTORICAL_SOURCE`: the package ships one per released
+configuration, at its latest release. `ESM16_AMIP` is the one released configuration with other components.
 """
 
 ESM16_AMIP: ESM16Configuration = ESM16Configuration(name="amip", atmosphere=ESM16_N96_ATMOSPHERE)
@@ -194,9 +189,125 @@ ESM16_PI_CONTROL_SOURCE: GitControlSource = GitControlSource(
     repository=ESM16_CONFIGS_REPOSITORY,
     start_point="release-piControl-2.1",
 )
-"""The release `ESM16_PI_CONTROL` describes, as a control to profile it against.
-
-This is a convenience rather than part of the configuration: a study profiling a fork, or a later release, passes
-its own control to the manager and keeps `ESM16_PI_CONTROL`. Kept beside the preset rather than on it so that
-choosing a different release does not mean building a different configuration.
+"""The latest release of `piControl`, the pre-industrial control, which `ESM16_PI_CONTROL` describes. A control is a
+convenience rather than part of the configuration: a study profiling a fork, or another release, passes its own
+control to the manager and keeps the preset. Kept beside the presets rather than on them so that choosing a different
+release does not mean building a different configuration.
+"""
+ESM16_HISTORICAL_SOURCE: GitControlSource = GitControlSource(
+    repository=ESM16_CONFIGS_REPOSITORY,
+    start_point="release-historical-1.3",
+)
+"""The latest release of `historical`, the historical configuration, which `ESM16_PI_CONTROL` under the name
+`historical` describes.
+"""
+ESM16_AMIP_SOURCE: GitControlSource = GitControlSource(
+    repository=ESM16_CONFIGS_REPOSITORY,
+    start_point="release-amip-1.0",
+)
+"""The latest release of `amip`, the AMIP configuration, which `ESM16_AMIP` describes."""
+ESM16_ESM_PICONTROL_SOURCE: GitControlSource = GitControlSource(
+    repository=ESM16_CONFIGS_REPOSITORY,
+    start_point="release-esm-piControl-2.1",
+)
+"""The latest release of `esm-piControl`, the emissions-driven pre-industrial control, which `ESM16_PI_CONTROL` under
+the name `esm-piControl` describes.
+"""
+ESM16_ESM_HISTORICAL_SOURCE: GitControlSource = GitControlSource(
+    repository=ESM16_CONFIGS_REPOSITORY,
+    start_point="release-esm-historical-1.3",
+)
+"""The latest release of `esm-historical`, the emissions-driven historical configuration, which `ESM16_PI_CONTROL` under
+the name `esm-historical` describes.
+"""
+ESM16_1PCTCO2_SOURCE: GitControlSource = GitControlSource(
+    repository=ESM16_CONFIGS_REPOSITORY,
+    start_point="release-1pctCO2-1.0",
+)
+"""The latest release of `1pctCO2`, the 1% per year CO2 increase, which `ESM16_PI_CONTROL` under the name `1pctCO2`
+describes.
+"""
+ESM16_1PCTCO2_BGC_SOURCE: GitControlSource = GitControlSource(
+    repository=ESM16_CONFIGS_REPOSITORY,
+    start_point="release-1pctCO2-bgc-1.0",
+)
+"""The latest release of `1pctCO2-bgc`, the 1% per year CO2 increase felt by the biogeochemistry alone, which
+`ESM16_PI_CONTROL` under the name `1pctCO2-bgc` describes.
+"""
+ESM16_1PCTCO2_RAD_SOURCE: GitControlSource = GitControlSource(
+    repository=ESM16_CONFIGS_REPOSITORY,
+    start_point="release-1pctCO2-rad-1.0",
+)
+"""The latest release of `1pctCO2-rad`, the 1% per year CO2 increase felt by the radiation alone, which
+`ESM16_PI_CONTROL` under the name `1pctCO2-rad` describes.
+"""
+ESM16_ABRUPT_0P5XCO2_SOURCE: GitControlSource = GitControlSource(
+    repository=ESM16_CONFIGS_REPOSITORY,
+    start_point="release-abrupt-0p5xCO2-2.0",
+)
+"""The latest release of `abrupt-0p5xCO2`, the abrupt halving of CO2, which `ESM16_PI_CONTROL` under the name
+`abrupt-0p5xCO2` describes.
+"""
+ESM16_ABRUPT_2XCO2_SOURCE: GitControlSource = GitControlSource(
+    repository=ESM16_CONFIGS_REPOSITORY,
+    start_point="release-abrupt-2xCO2-2.0",
+)
+"""The latest release of `abrupt-2xCO2`, the abrupt doubling of CO2, which `ESM16_PI_CONTROL` under the name
+`abrupt-2xCO2` describes.
+"""
+ESM16_ABRUPT_4XCO2_SOURCE: GitControlSource = GitControlSource(
+    repository=ESM16_CONFIGS_REPOSITORY,
+    start_point="release-abrupt-4xCO2-1.0",
+)
+"""The latest release of `abrupt-4xCO2`, the abrupt quadrupling of CO2, which `ESM16_PI_CONTROL` under the name
+`abrupt-4xCO2` describes.
+"""
+ESM16_ESM_FLAT10_SOURCE: GitControlSource = GitControlSource(
+    repository=ESM16_CONFIGS_REPOSITORY,
+    start_point="release-esm-flat10-1.0",
+)
+"""The latest release of `esm-flat10`, the flat 10 GtC per year emissions, which `ESM16_PI_CONTROL` under the name `esm-
+flat10` describes.
+"""
+ESM16_ESM_FLAT10_CDR_SOURCE: GitControlSource = GitControlSource(
+    repository=ESM16_CONFIGS_REPOSITORY,
+    start_point="release-esm-flat10-cdr-1.0",
+)
+"""The latest release of `esm-flat10-cdr`, the flat 10 GtC per year emissions followed by carbon dioxide removal, which
+`ESM16_PI_CONTROL` under the name `esm-flat10-cdr` describes.
+"""
+ESM16_ESM_FLAT10_ZEC_SOURCE: GitControlSource = GitControlSource(
+    repository=ESM16_CONFIGS_REPOSITORY,
+    start_point="release-esm-flat10-zec-1.0",
+)
+"""The latest release of `esm-flat10-zec`, the flat 10 GtC per year emissions followed by zero emissions, which
+`ESM16_PI_CONTROL` under the name `esm-flat10-zec` describes.
+"""
+ESM16_SCEN7_H_SOURCE: GitControlSource = GitControlSource(
+    repository=ESM16_CONFIGS_REPOSITORY,
+    start_point="release-scen7-h-1.0",
+)
+"""The latest release of `scen7-h`, the high ScenarioMIP scenario, which `ESM16_PI_CONTROL` under the name `scen7-h`
+describes.
+"""
+ESM16_SCEN7_VL_SOURCE: GitControlSource = GitControlSource(
+    repository=ESM16_CONFIGS_REPOSITORY,
+    start_point="release-scen7-vl-1.0",
+)
+"""The latest release of `scen7-vl`, the very low ScenarioMIP scenario, which `ESM16_PI_CONTROL` under the name
+`scen7-vl` describes.
+"""
+ESM16_ESM_SCEN7_H_SOURCE: GitControlSource = GitControlSource(
+    repository=ESM16_CONFIGS_REPOSITORY,
+    start_point="release-esm-scen7-h-1.0",
+)
+"""The latest release of `esm-scen7-h`, the emissions-driven high ScenarioMIP scenario, which `ESM16_PI_CONTROL` under
+the name `esm-scen7-h` describes.
+"""
+ESM16_ESM_SCEN7_VL_SOURCE: GitControlSource = GitControlSource(
+    repository=ESM16_CONFIGS_REPOSITORY,
+    start_point="release-esm-scen7-vl-1.0",
+)
+"""The latest release of `esm-scen7-vl`, the emissions-driven very low ScenarioMIP scenario, which `ESM16_PI_CONTROL`
+under the name `esm-scen7-vl` describes.
 """

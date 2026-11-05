@@ -28,15 +28,14 @@ from access.profiling import (
     RegionGroup,            # choosing what to plot
     PayuManager,            # the managers for the workflow engines of the ACCESS models
     CylcRoseManager,
-    ESM16_PI_CONTROL,       # the presets of the ACCESS models, and their controls
-    ESM16_PI_CONTROL_SOURCE,
-    OM3_MC_25KM,
-    OM3_MC_25KM_SOURCE,
-    AM3_N96E,
-    AM3_N96E_SOURCE,
-    RAM3,
+    ESM16Configuration,     # the configuration types of the ACCESS models
+    OM3Configuration,
 )
+from access.profiling.models.esm16 import ESM16_PI_CONTROL, ESM16_PI_CONTROL_SOURCE  # a preset and its control
 ```
+
+The presets of the ACCESS models and their control sources are imported from their model modules,
+`access.profiling.models.esm16` and so on, which the [Models](models.md) page lists.
 
 The package also exports the other types a study or an application is written with. From the general layer,
 these are the base class of the managers, `ProfilingManager`, the experiments and their statuses,

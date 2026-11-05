@@ -84,7 +84,8 @@ from pathlib import Path
 
 from access.config.parallel_allocation_strategies import FixedAllocation, RootAllocation
 
-from access.profiling import ESM16_PI_CONTROL, ESM16_PI_CONTROL_SOURCE, PayuManager
+from access.profiling import PayuManager
+from access.profiling.models.esm16 import ESM16_PI_CONTROL, ESM16_PI_CONTROL_SOURCE
 from access.profiling.models.esm16 import ESM16_PI_CONTROL_CORES
 
 manager = PayuManager(

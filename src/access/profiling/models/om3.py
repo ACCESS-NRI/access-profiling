@@ -539,7 +539,8 @@ OM3_MC_25KM: OM3Configuration = OM3Configuration(name="MC-25km", sea_ice=OM3_25K
 Every ACCESS-OM3 configuration released so far is this one. The releases differ in their forcing, their
 biogeochemistry and the core counts they were run with, none of which changes how the model is parallelised.
 
-Note what the mask table costs this configuration. Its control, `OM3_MC_25KM_SOURCE`, pins MOM6's decomposition in
+Note what the mask table costs this configuration. Its controls, `OM3_MC_25KM_JRA_RYF_SOURCE` and the other 25 km
+releases, pin MOM6's decomposition in
 MOM_input with an explicit LAYOUT of 72 x 48 and a MASKTABLE naming a file of 1027 masked blocks, and ocn_ntasks is
 the layout's ranks less the masked ones: 2429. This configuration leaves the ocean's decomposition to MOM6, so a
 study has to remove LAYOUT, IO_LAYOUT and MASKTABLE and set AUTO_MASKTABLE through control_options before a
@@ -675,12 +676,65 @@ Its control asks for 2990 cores, which is not a whole number of 104-core nodes.
 
 OM3_CONFIGS_REPOSITORY: str = "git@github.com:ACCESS-NRI/access-om3-configs.git"
 """The repository holding the released ACCESS-OM3 configurations."""
-OM3_MC_25KM_SOURCE: GitControlSource = GitControlSource(
+OM3_MC_25KM_JRA_RYF_SOURCE: GitControlSource = GitControlSource(
     repository=OM3_CONFIGS_REPOSITORY,
     start_point="release-MC_25km_jra_ryf-2.0-beta",
 )
-"""The release `OM3_MC_25KM` describes, as a control to profile it against.
-
-This is a convenience rather than part of the configuration: the other 25 km releases are the same configuration
-against a different control, so a study profiling one passes its own and keeps `OM3_MC_25KM`.
+"""The latest release of `MC_25km_jra_ryf`, which `OM3_MC_25KM` describes."""
+OM3_MC_25KM_JRA_IAF_SOURCE: GitControlSource = GitControlSource(
+    repository=OM3_CONFIGS_REPOSITORY,
+    start_point="release-MC_25km_jra_iaf-2.0-beta",
+)
+"""The latest release of `MC_25km_jra_iaf`, which `OM3_MC_25KM` describes."""
+OM3_MC_25KM_JRA_RYF_WOMBATLITE_SOURCE: GitControlSource = GitControlSource(
+    repository=OM3_CONFIGS_REPOSITORY,
+    start_point="release-MC_25km_jra_ryf+wombatlite-1.0-beta",
+)
+"""The latest release of `MC_25km_jra_ryf+wombatlite`, which `OM3_MC_25KM` describes."""
+OM3_MC_25KM_JRA_IAF_WOMBATLITE_SOURCE: GitControlSource = GitControlSource(
+    repository=OM3_CONFIGS_REPOSITORY,
+    start_point="release-MC_25km_jra_iaf+wombatlite-1.0-beta",
+)
+"""The latest release of `MC_25km_jra_iaf+wombatlite`, which `OM3_MC_25KM` describes."""
+OM3_MC_100KM_JRA_RYF_SOURCE: GitControlSource = GitControlSource(
+    repository=OM3_CONFIGS_REPOSITORY,
+    start_point="dev-MC_100km_jra_ryf",
+)
+"""The development branch of `MC_100km_jra_ryf`, which has no release yet, which `OM3_MC_100KM` describes."""
+OM3_MC_100KM_JRA_IAF_SOURCE: GitControlSource = GitControlSource(
+    repository=OM3_CONFIGS_REPOSITORY,
+    start_point="dev-MC_100km_jra_iaf",
+)
+"""The development branch of `MC_100km_jra_iaf`, which has no release yet, which `OM3_MC_100KM` describes."""
+OM3_MC_100KM_JRA_RYF_WOMBATLITE_SOURCE: GitControlSource = GitControlSource(
+    repository=OM3_CONFIGS_REPOSITORY,
+    start_point="dev-MC_100km_jra_ryf+wombatlite",
+)
+"""The development branch of `MC_100km_jra_ryf+wombatlite`, which has no release yet, which `OM3_MC_100KM` describes."""
+OM3_MC_100KM_JRA_IAF_WOMBATLITE_SOURCE: GitControlSource = GitControlSource(
+    repository=OM3_CONFIGS_REPOSITORY,
+    start_point="dev-MC_100km_jra_iaf+wombatlite",
+)
+"""The development branch of `MC_100km_jra_iaf+wombatlite`, which has no release yet, which `OM3_MC_100KM` describes."""
+OM3_MCW_100KM_ERA_IAF_SOURCE: GitControlSource = GitControlSource(
+    repository=OM3_CONFIGS_REPOSITORY,
+    start_point="dev-MCW_100km_era_iaf",
+)
+"""The development branch of `MCW_100km_era_iaf`, which has no release yet, which `OM3_MCW_100KM` describes."""
+OM3_MC_8KM_JRA_RYF_SOURCE: GitControlSource = GitControlSource(
+    repository=OM3_CONFIGS_REPOSITORY,
+    start_point="dev-MC_8km_jra_ryf",
+)
+"""The development branch of `MC_8km_jra_ryf`, which has no release yet, which `OM3_MC_8KM` describes."""
+OM3_MC_PANAN4KM_JRA_RYF_SOURCE: GitControlSource = GitControlSource(
+    repository=OM3_CONFIGS_REPOSITORY,
+    start_point="dev-MC_panan4km_jra_ryf",
+)
+"""The development branch of `MC_panan4km_jra_ryf`, which has no release yet, which `OM3_MC_PANAN4KM` describes."""
+OM3_MC_PANAN4KM_JRA_RYF_ISF_SOURCE: GitControlSource = GitControlSource(
+    repository=OM3_CONFIGS_REPOSITORY,
+    start_point="dev-MC_panan4km_jra_ryf+isf",
+)
+"""The development branch of `MC_panan4km_jra_ryf+isf`, which has no release yet, which `OM3_MC_PANAN4KM_ISF`
+describes.
 """
