@@ -1,6 +1,8 @@
 # Copyright 2025 ACCESS-NRI and contributors. See the top-level COPYRIGHT file for details.
 # SPDX-License-Identifier: Apache-2.0
 
+from unittest import mock
+
 import pytest
 from access.config.parallel_component import ComponentLayout
 from access.config.parallel_constraints import ProcessGridDimEvenConstraint, SubdomainAspectRatioConstraint
@@ -176,8 +178,9 @@ class TestCICEComponent:
         }
 
     def test_it_writes_no_file_where_the_partitioning_writes_nothing(self):
-        """CICE6 taking its rank count from its communicator, with a scheme forming no process grid."""
+        """A partitioning that decides nothing a namelist states leaves the control's namelist alone."""
 
-        opaque = CICEComponent(CICEPartitioning(grid=(360, 324), distribution_type="roundrobin"), name="ice")
+        silent = CICEComponent(CICEPartitioning(grid=(360, 324), distribution_type="roundrobin"), name="ice")
 
-        assert opaque.config_changes(_undecomposed("ice", 24)) == {}
+        with mock.patch.object(CICEPartitioning, "namelist_changes", return_value={}):
+            assert silent.config_changes(_undecomposed("ice", 24)) == {}

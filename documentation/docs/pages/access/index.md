@@ -63,24 +63,25 @@ preset [`ESM16_AMIP`][access.profiling.models.esm16.ESM16_AMIP]: `release-amip-1
 
 | | |
 |---|---|
-| Preset | [`OM3_MC_25KM`][access.profiling.models.om3.OM3_MC_25KM], MOM6 and CICE6 at 25 km |
+| Presets | [`OM3_MC_25KM`][access.profiling.models.om3.OM3_MC_25KM], MOM6 and CICE6 at 25 km, which every released configuration is; and, under development, [`OM3_MC_100KM`][access.profiling.models.om3.OM3_MC_100KM] and [`OM3_MCW_100KM`][access.profiling.models.om3.OM3_MCW_100KM] at 100 km, without and with WW3, [`OM3_MC_8KM`][access.profiling.models.om3.OM3_MC_8KM] at 8 km, and the pan-Antarctic regional configurations at 4 km, [`OM3_MC_PANAN4KM`][access.profiling.models.om3.OM3_MC_PANAN4KM] and, with ice shelves, [`OM3_MC_PANAN4KM_ISF`][access.profiling.models.om3.OM3_MC_PANAN4KM_ISF] |
 | Control | [`OM3_MC_25KM_SOURCE`][access.profiling.models.om3.OM3_MC_25KM_SOURCE], `release-MC_25km_jra_ryf-2.0-beta` of `access-om3-configs` |
 | Manager | `PayuManager` |
-| Components | `shared`, the range of cores `cpl`, `atm`, `ice` and `rof` take turns on, and `ocn` beside it; all on the 1440 × 1152 tripolar grid |
-| Whole model | `ACCESS-OM3 MC-25km` |
-| Release cores | 275 for each of `cpl`, `atm`, `ice` and `rof`, and 2429 for `ocn`, on 26 nodes of 104 cores ([`OM3_MC_25KM_RELEASE_CORES`][access.profiling.models.om3.OM3_MC_25KM_RELEASE_CORES]) |
+| Components | `shared`, the range of cores `cpl`, `atm`, `ice` and `rof` take turns on, `ocn` beside it, and `wav` beside that where there are waves; all on the configuration's grid, 1440 × 1152 at 25 km |
+| Whole model | `ACCESS-OM3 MC-25km`, `ACCESS-OM3 MC-100km`, and so on |
+| Release cores | 275 for each of `cpl`, `atm`, `ice` and `rof`, and 2429 for `ocn`, on 26 nodes of 104 cores ([`OM3_MC_25KM_CORES`][access.profiling.models.om3.OM3_MC_25KM_CORES]); each development configuration's cores are beside its preset, as [`OM3_MC_100KM_CORES`][access.profiling.models.om3.OM3_MC_100KM_CORES] |
 
 The mediator (`cpl`), the data atmosphere (`atm`), the sea ice (`ice`) and the data runoff (`rof`) run in turn on the
-`shared` range, and the ocean (`ocn`) runs beside them on a range of its own. Every component has one thread per
-rank. A configuration with waves adds a `wav` range of their own. Every layout leaves at most 10% of its cores
-idle, and gives each CICE6 rank 5 to 8 blocks: the blocks are distributed roundrobin, and their size is chosen from
-the number of ranks.
+`shared` range, and the ocean (`ocn`) runs beside them on a range of its own, as do the waves (`wav`) of a
+configuration that has them. Every component has one thread per rank. Every layout leaves at most 10% of its cores
+idle, and gives each CICE6 rank 5 to 8 blocks: the blocks are distributed as the configuration's control distributes
+them, and their size is chosen from the number of ranks.
 
 A layout is written into `config.yaml`, which requests the whole budget as `ncpus`, into the `PELAYOUT_attributes`
-of `nuopc.runconfig`, and into the block size of `ice_in`. The preset leaves the ocean's decomposition to MOM6
-(`auto_ocean_layout`), so the layout search chooses no process grid for it and `MOM_input` is not changed. Note
-that the release does pin a `LAYOUT` and a `MASKTABLE` in `MOM_input`, which a study has to remove through its
-control options, as shown in [Generating the experiments](../user-guide/experiments.md#generating-the-experiments).
+of `nuopc.runconfig`, and into the block size of `ice_in`. The ocean's decomposition is left to MOM6, so the layout
+search chooses no process grid for it and `MOM_input` is not changed. Note that the 25 km release, the 8 km
+configuration and the pan-Antarctic ones pin a `LAYOUT` and a `MASKTABLE` in `MOM_input`, which a study has to
+remove through its control options, as shown in
+[Generating the experiments](../user-guide/experiments.md#generating-the-experiments).
 
 | Log | Parser | Component | Read from |
 |---|---|---|---|
@@ -93,25 +94,14 @@ All three model logs are optional, so a run that does not write one of them is s
 times the whole coupled model, so its regions need a `component` in the groups that plot them against
 component cores.
 
-Other configurations of ACCESS-OM3 are built from [`OM3Configuration`][access.profiling.models.om3.OM3Configuration]
-directly. For example, this is a 100 km configuration whose sea ice is decomposed over a process grid, and which
-has waves:
-
-```python
-from access.config.parallel_domain import Domain
-
-from access.profiling import CICEPartitioning, OM3Configuration
-
-grid = Domain(shape=(360, 324))
-om3_mcw_100km = OM3Configuration(
-    name="MCW-100km",
-    ocean=grid,
-    sea_ice=CICEPartitioning(grid=(360, 324)),
-    waves=grid,
-    atmosphere=grid,
-    runoff=grid,
-)
-```
+A configuration on another grid, or whose sea ice distributes its blocks differently, needs no code: it is an
+[`OM3Configuration`][access.profiling.models.om3.OM3Configuration] with a `CICEPartitioning` of its own, as the
+presets are. Other arrangements, such as a MOM6 layout the search chooses and writes into `MOM_input`, a data sea
+ice, or a shared realm starting at an offset within its range, are a subclass of `OM3Configuration` returning the
+components it wants from `shared` and `concurrent`, built from the package's own
+[`CICEComponent`][access.profiling.models.components.CICEComponent] and
+[`PlainComponent`][access.profiling.payu_configuration.PlainComponent]; writing the PE layout out and reading it
+back stay the base class's.
 
 ## ACCESS-AM3 and ACCESS-rAM3
 

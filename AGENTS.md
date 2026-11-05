@@ -80,7 +80,7 @@ src/access/profiling/
   cice.py               CICEPartitioning: CICE's block distribution, for ESM1.6 and OM3 alike
   components.py         UMComponent, MOM5Component, CICEComponent: the codes the Payu models are put together from
   esm16.py              ESM16Configuration, ESM16_PI_CONTROL, ESM16_AMIP and the control source
-  om3.py                OM3Configuration, OM3_MC_25KM and its control source
+  om3.py                OM3Configuration, OM3_MC_25KM and its control source, and the development configurations
   um_suites.py          AM3_N96E, RAM3, their control source and UM_SUITE_PARSERS
 
 documentation/          The MkDocs site, published on Read the Docs: pages in docs/pages/, figures drawn by
@@ -191,7 +191,10 @@ blocks, one page per concept. A new module needs a block on the right page and a
   reference. A model ships one control source, beside its preset rather than on it, and not one per release of its
   configurations repository.
 - **A model's component tree holds requirements only**, what is true of every layout of it; a study's preferences
-  belong in its allocation strategy (the docstring of `ESM16Configuration.parallel_component`).
+  belong in its allocation strategy (the docstring of `SubmodelsConfiguration.parallel_component`).
+- **The OM3 presets choose CICE6's blocks from the rank count** (`OM3_CICE6_BLOCKS_PER_RANK_RANGE`), as the
+  user's studies do, with the distribution and the processor shape their control states; a preset is named as
+  those studies archived their experiments (`MC-100km`, `MCW-100km`), so changing a name orphans an archive.
 - **`CICEPartitioning` must stay hashable**: `_choose_blocks` is cached on it with `functools.cache`.
 - **`config_changes` returns what experiment-generator merges into the control, in its format**: a list is wrapped
   in another list, and `"PRESERVE"` holds a position, because the generator merges lists by position and truncates

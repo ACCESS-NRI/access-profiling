@@ -166,13 +166,17 @@ class TestWhatIsWritten:
 
         assert partitioning.namelist_changes(2, _decomposition(2, extent=4)) == {"max_blocks": "4"}
 
-    def test_an_opaque_sea_ice_writes_nothing_but_its_rank_count(self):
-        """And not even that, where the configuration does not state one."""
+    def test_an_opaque_sea_ice_writes_its_rank_count_and_leaves_the_blocks_to_cice(self):
+        """The rank count only where the configuration states one; max_blocks as -1 in any case, since how many
+        blocks a rank holds follows from the count and a value pinned for another count would be stale."""
 
         opaque = CICEPartitioning(grid=GRID, distribution_type="roundrobin", processor_shape="square-ice")
 
-        assert opaque.namelist_changes(275) == {}
-        assert dataclasses.replace(opaque, writes_nprocs=True).namelist_changes(275) == {"nprocs": "275"}
+        assert opaque.namelist_changes(275) == {"max_blocks": "-1"}
+        assert dataclasses.replace(opaque, writes_nprocs=True).namelist_changes(275) == {
+            "nprocs": "275",
+            "max_blocks": "-1",
+        }
 
     def test_the_distribution_and_the_shape_are_never_written(self):
         """A release's distribution is a tuned choice; overwriting it would change what is being measured."""

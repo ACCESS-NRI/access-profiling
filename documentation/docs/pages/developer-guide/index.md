@@ -117,15 +117,16 @@ classDiagram
     PayuComponent <|-- CICEComponent
     PayuComponent <|-- PlainComponent
     CICEComponent --> CICEPartitioning
-    OM3Configuration --> CICEPartitioning
+    OM3Configuration --> "*" PayuComponent : shared, concurrent
 ```
 
 `PayuManager` drives `PayuConfiguration`s and `CylcRoseManager` drives `RoseSuiteConfiguration`s. The presets, such
 as `ESM16_PI_CONTROL`, are values of the configuration classes, not classes of their own. A Payu model is put
 together from components, one per code it runs, each saying what that code decomposes, writes and logs:
 `ESM16Configuration` pairs the UM, MOM5 and CICE components with the submodels its control declares, through
-`SubmodelsConfiguration`, which writes and reads the layout of any model Payu couples that way. The parsers for the
-logs of the ACCESS models, one per log format, are listed in [Log formats](../access/log-formats.md).
+`SubmodelsConfiguration`, which writes and reads the layout of any model Payu couples that way, and `OM3Configuration`
+builds the tree NUOPC lays out from the same components. The parsers for the logs of the ACCESS models, one per log
+format, are listed in [Log formats](../access/log-formats.md).
 
 ## Contracts
 
