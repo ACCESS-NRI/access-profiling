@@ -128,7 +128,7 @@ from access.profiling.application import LogSpec, log_at
 LogSpec("timings", log_at("atmosphere/timings.txt"), TimingTableParser(), component="atm")
 ```
 
-[Adding an application](adding-an-application.md#the-logs) explains the fields. A parser for the task logs of a
+[Adding an application](adding-an-application.md#the-component) explains the fields. A parser for the task logs of a
 Rose suite goes in the `parsers` of its `RoseSuiteConfiguration` instead.
 
 ## Testing it

@@ -1,10 +1,13 @@
 # Models
 
 The ACCESS models this package knows, and the presets it ships for them. Each preset is a value of an
-[application](applications.md) type: of the configuration classes on this page for the models run with Payu, or
-of [`RoseSuiteConfiguration`][access.profiling.rose_configuration.RoseSuiteConfiguration] for the Rose suites.
+[application](applications.md) type: of the configuration classes on this page for the models run with Payu, put
+together from the components of the codes they run, or of
+[`RoseSuiteConfiguration`][access.profiling.rose_configuration.RoseSuiteConfiguration] for the Rose suites.
 
 ::: access.profiling.models
+
+::: access.profiling.models.components
 
 ::: access.profiling.models.esm16
 

@@ -56,14 +56,8 @@ historical = replace(ESM16_PI_CONTROL, name="historical")
 historical_source = GitControlSource(ESM16_CONFIGS_REPOSITORY, "release-historical-1.1")
 ```
 
-The AMIP configuration runs the atmosphere alone, so it is built with the atmosphere as its only submodel:
-
-```python
-from access.profiling import ESM16Configuration
-from access.profiling.models.esm16 import ESM16_AMIP_SUBMODELS, ESM16_N96_ATMOSPHERE
-
-amip = ESM16Configuration(name="amip", atmosphere=ESM16_N96_ATMOSPHERE, submodels=ESM16_AMIP_SUBMODELS)
-```
+The AMIP configuration runs the atmosphere alone, with no ocean, no sea ice and nothing to couple, and is the
+preset [`ESM16_AMIP`][access.profiling.models.esm16.ESM16_AMIP]: `release-amip-1.0` runs it on 208 cores.
 
 ## ACCESS-OM3
 

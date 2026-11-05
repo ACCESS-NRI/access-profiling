@@ -12,7 +12,7 @@ Every log an application declares is looked for in the output of each run. Its p
 holding the metrics of every region the log times, named as the log names them;
 [Concepts](index.md#profiling-data) shows such a dataset. A log may be declared optional, when a run can
 legitimately leave it out or write it differently.
-[Adding an application](../developer-guide/adding-an-application.md#the-logs) shows how an application declares
+[Adding an application](../developer-guide/adding-an-application.md#the-component) shows how an application declares
 its logs, and [Adding a parser](../developer-guide/adding-a-parser.md) how a new log format is read.
 
 ## Metrics

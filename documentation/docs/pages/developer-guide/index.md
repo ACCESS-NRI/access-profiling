@@ -91,18 +91,41 @@ classDiagram
     class PayuConfiguration {
         <<abstract>>
         model_type
+        model_name
+    }
+    class SubmodelsConfiguration {
+        <<abstract>>
+        submodels
+    }
+    class PayuComponent {
+        <<abstract>>
+        name
+        token
+        domain
+        local_constraints
+        logs
+        config_changes(layout)
     }
     Application <|-- PayuConfiguration
     Application <|-- RoseSuiteConfiguration
-    PayuConfiguration <|-- ESM16Configuration
+    PayuConfiguration <|-- SubmodelsConfiguration
     PayuConfiguration <|-- OM3Configuration
-    ESM16Configuration --> CICEPartitioning
+    SubmodelsConfiguration <|-- ESM16Configuration
+    SubmodelsConfiguration --> "*" PayuComponent : submodels
+    PayuComponent <|-- UMComponent
+    PayuComponent <|-- MOM5Component
+    PayuComponent <|-- CICEComponent
+    PayuComponent <|-- PlainComponent
+    CICEComponent --> CICEPartitioning
     OM3Configuration --> CICEPartitioning
 ```
 
 `PayuManager` drives `PayuConfiguration`s and `CylcRoseManager` drives `RoseSuiteConfiguration`s. The presets, such
-as `ESM16_PI_CONTROL`, are values of the configuration classes, not classes of their own. The parsers for the logs
-of the ACCESS models, one per log format, are listed in [Log formats](../access/log-formats.md).
+as `ESM16_PI_CONTROL`, are values of the configuration classes, not classes of their own. A Payu model is put
+together from components, one per code it runs, each saying what that code decomposes, writes and logs:
+`ESM16Configuration` pairs the UM, MOM5 and CICE components with the submodels its control declares, through
+`SubmodelsConfiguration`, which writes and reads the layout of any model Payu couples that way. The parsers for the
+logs of the ACCESS models, one per log format, are listed in [Log formats](../access/log-formats.md).
 
 ## Contracts
 
@@ -114,7 +137,9 @@ To extend the package, you implement one of these abstract classes:
 | [`ProfilingParser`][access.profiling.parser.ProfilingParser] | `parse`, and the `_metrics` it reports | [Adding a parser](adding-a-parser.md) |
 | [`ProfilingManager`][access.profiling.manager.ProfilingManager] | `profiling_logs`, `parse_ncpus`, `parse_status`, `_create_experiments`, `run_experiments` and `_delete_experiments` | |
 | [`ControlSource`][access.profiling.control.ControlSource] | `origin` and `provenance`, and the `directory`, `label` and `start_point` attributes | |
-| [`PayuConfiguration`][access.profiling.payu_configuration.PayuConfiguration] | For an application run with Payu: as `Application`, plus the `model_type` attribute | [Adding an application](adding-an-application.md) |
+| [`PayuConfiguration`][access.profiling.payu_configuration.PayuConfiguration] | For an application run with Payu: as `Application`, plus the `model_type` and `model_name` attributes | [Adding an application](adding-an-application.md) |
+| [`SubmodelsConfiguration`][access.profiling.payu_configuration.SubmodelsConfiguration] | For a Payu model whose components are its submodels: `submodels`, from the fields of a frozen dataclass | [Adding an application](adding-an-application.md) |
+| [`PayuComponent`][access.profiling.payu_configuration.PayuComponent] | For one code of a Payu model: `domain`, `local_constraints` and `config_changes`, and the `name`, `token` and `logs` attributes | [Adding an application](adding-an-application.md) |
 
 A new workflow engine is a new subclass of `ProfilingManager`. Choosing which experiments to generate, selecting
 the best ones and plotting them are the same for every engine, so the base class implements them. A subclass only

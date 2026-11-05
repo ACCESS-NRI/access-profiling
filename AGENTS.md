@@ -70,14 +70,16 @@ src/access/profiling/
   um_parser.py          UMProfilingParser, UMTotalRuntimeParser, um_stdout
 
   ── the workflow engines ──
-  payu_configuration.py PayuConfiguration, payu_model_stdout
+  payu_configuration.py PayuConfiguration, SubmodelsConfiguration, PayuComponent, PlainComponent, PayuSubmodel,
+                        FixedRanksConstraint, payu_model_stdout
   payu_manager.py       PayuManager: experiment-generator, experiment-runner and Payu's job files
   rose_configuration.py RoseSuiteConfiguration
   cylc_manager.py       CylcRoseManager: rose suite-run and the Cylc suite database
 
   ── models/: the ACCESS models, as data ──
   cice.py               CICEPartitioning: CICE's block distribution, for ESM1.6 and OM3 alike
-  esm16.py              ESM16Configuration, ESM16_PI_CONTROL and its control source
+  components.py         UMComponent, MOM5Component, CICEComponent: the codes the Payu models are put together from
+  esm16.py              ESM16Configuration, ESM16_PI_CONTROL, ESM16_AMIP and the control source
   om3.py                OM3Configuration, OM3_MC_25KM and its control source
   um_suites.py          AM3_N96E, RAM3, their control source and UM_SUITE_PARSERS
 
@@ -167,8 +169,8 @@ blocks, one page per concept. A new module needs a block on the right page and a
 
 - **`ncpus` is the number of cores the job was charged for, in whole nodes**, not the number the layout puts to
   work (`ProfilingManager.parse_ncpus`). Selection and the scaling plots group experiments by it.
-- **The Payu models ask for the whole budget, idle cores included**: ESM1.6 writes `ncpureq`, OM3 `ncpus`. Layouts
-  of one size are therefore jobs of one size.
+- **The Payu models ask for the whole budget, idle cores included**: the submodel models write `ncpureq`
+  (`SubmodelsConfiguration.config_changes`), OM3 `ncpus`. Layouts of one size are therefore jobs of one size.
 - `PayuManager` reads the request PBS recorded in Payu's job files, and otherwise works it out from `config.yaml` the
   way Payu does, with Payu's defaults copied into `_PAYU_DEFAULT_NODE_SIZE` and `_PAYU_DEFAULT_NCPUS` because Payu
   exposes them nowhere. They have to follow Payu if it changes them.
@@ -177,9 +179,14 @@ blocks, one page per concept. A new module needs a block on the right page and a
 
 ### Applications
 
-- **An application is a frozen dataclass that validates on construction**, in `__post_init__`. `name` has a
-  default only so that the fields can be ordered, and an empty one is rejected. A variant is made with
+- **An application is a frozen, keyword-only dataclass that validates on construction**, in `__post_init__`.
+  `name` is required and an empty one is rejected; every other field has a default. A variant is made with
   `dataclasses.replace`, which validates it again.
+- **A Payu model is put together from components** (`PayuComponent`): a component states what its own code
+  decomposes, writes and logs, once, in `models/components.py`, and a configuration arranges components, deriving
+  them from its fields (`ESM16Configuration.submodels`). `SubmodelsConfiguration` writes and reads the layout of
+  every model Payu couples as submodels, so a model adds no code for that. A component's `name` and `token` are
+  user-facing: the first keys allocation strategies, the second appears in every experiment name.
 - **Presets are module-level values with a docstring on the line after**, which is what puts them in the API
   reference. A model ships one control source, beside its preset rather than on it, and not one per release of its
   configurations repository.
@@ -214,6 +221,7 @@ blocks, one page per concept. A new module needs a block on the right page and a
 | `test_esmf_summary_parser.py` | `esmf_parser.py` |
 | `test_cylc_dbreader.py` | `CylcDBReader`, together with `TestFailedTasksAreSkipped` in `test_cylc_parser.py` |
 | `test_cice.py` | `models/cice.py`, the block partitioning, not the CICE parser |
+| `test_components.py` | `models/components.py`, the components the Payu models are put together from |
 | `test_esm16.py`, `test_om3.py` | their model, and `PayuManager` driving it end to end |
 | `test_init.py` | `__init__.py`: that `__all__` lists exactly what the package imports |
 

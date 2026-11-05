@@ -27,11 +27,19 @@ from access.profiling.fms_parser import FMSProfilingParser
 from access.profiling.manager import ProfilingManager
 from access.profiling.metrics import ProfilingMetric
 from access.profiling.models.cice import CICEPartitioning, CICEPartitioningMode
+from access.profiling.models.components import CICEComponent, MOM5Component, UMComponent
 from access.profiling.models.esm16 import ESM16_PI_CONTROL, ESM16_PI_CONTROL_SOURCE, ESM16Configuration
 from access.profiling.models.om3 import OM3_MC_25KM, OM3_MC_25KM_SOURCE, OM3Configuration
 from access.profiling.models.um_suites import AM3_N96E, AM3_N96E_SOURCE, RAM3
 from access.profiling.parser import ProfilingParser
-from access.profiling.payu_configuration import PayuConfiguration
+from access.profiling.payu_configuration import (
+    FixedRanksConstraint,
+    PayuComponent,
+    PayuConfiguration,
+    PayuSubmodel,
+    PlainComponent,
+    SubmodelsConfiguration,
+)
 from access.profiling.payu_manager import PayuManager
 from access.profiling.payujson_parser import PayuJSONProfilingParser
 from access.profiling.plotting_utils import RegionGroup
@@ -43,6 +51,7 @@ __all__ = [
     "AM3_N96E_SOURCE",
     "Application",
     "CICE5ProfilingParser",
+    "CICEComponent",
     "CICEPartitioning",
     "CICEPartitioningMode",
     "ControlSource",
@@ -54,16 +63,21 @@ __all__ = [
     "ESM16Configuration",
     "ESMFSummaryProfilingParser",
     "ExistingDirectoryControlSource",
+    "FixedRanksConstraint",
     "FMSProfilingParser",
     "GitControlSource",
     "log_at",
     "LogSpec",
+    "MOM5Component",
     "OM3_MC_25KM",
     "OM3_MC_25KM_SOURCE",
     "OM3Configuration",
+    "PayuComponent",
     "PayuConfiguration",
     "PayuJSONProfilingParser",
     "PayuManager",
+    "PayuSubmodel",
+    "PlainComponent",
     "ProfilingExperiment",
     "ProfilingExperimentStatus",
     "ProfilingLog",
@@ -73,6 +87,8 @@ __all__ = [
     "RAM3",
     "RegionGroup",
     "RoseSuiteConfiguration",
+    "SubmodelsConfiguration",
+    "UMComponent",
     "UMProfilingParser",
     "UMTotalRuntimeParser",
 ]
