@@ -8,7 +8,8 @@ A Python library from ACCESS-NRI for profiling parallel applications. A study ge
 layout over a range of core counts, runs them through a workflow engine, parses the profiling logs they write into
 `xr.Dataset`s quantified with pint, and selects and plots the best layouts. The package is generic in both the
 application and the engine, and ships implementations for the ACCESS climate models: ACCESS-ESM1.5, ACCESS-ESM1.6,
-ACCESS-OM2 and ACCESS-OM3 run with Payu, and UM suites run with Cylc and Rose.
+ACCESS-OM2 and ACCESS-OM3 run with Payu, and the UM suites of ACCESS-AM3, ACCESS-rAM3 and ACCESS-CM3 run with Cylc
+and Rose.
 
 Python >= 3.11.4, which the `filter="data"` tarball extraction in `experiment.py` needs; CI covers 3.11–3.13. The
 layout search (`ParallelComponent`, `iter_layouts`, the allocation strategies and the constraints) and the parsers of
@@ -83,7 +84,7 @@ src/access/profiling/
   esm16.py              ESM16Configuration, ESM16_PI_CONTROL, ESM16_AMIP and the control source
   om2.py                OM2Configuration, OM2_1DEG, OM2_025DEG, OM2_01DEG
   om3.py                OM3Configuration, OM3_MC_25KM and its control source, and the development configurations
-  um_suites.py          AM3_N96E, RAM3, their control source and UM_SUITE_PARSERS
+  um_suites.py          AM3_N96E, AM3_N512E, RAM3, CM3_O25KM, their control sources and UM_SUITE_PARSERS
 
 documentation/          The MkDocs site, published on Read the Docs: pages in docs/pages/, figures drawn by
                         scripts/generate_figures.py

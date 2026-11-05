@@ -1,6 +1,6 @@
 # Cylc Rose suites
 
-ACCESS-AM3 and ACCESS-rAM3 run as Cylc suites configured with Rose, and
+ACCESS-AM3, ACCESS-rAM3 and ACCESS-CM3 run as Cylc suites configured with Rose, and
 [`CylcRoseManager`][access.profiling.cylc_manager.CylcRoseManager] is the manager for such suites. The package
 runs, parses and plots the experiments of a study of them, but does not generate them: each experiment is a copy of
 the suite with its own layout, prepared by hand. In this tutorial we go through the steps for ACCESS-AM3, and note
@@ -137,7 +137,8 @@ run directory:
 
 The number of CPUs of each experiment is what the job running its layout asked PBS for, as for Payu, so it counts
 the cores left idle to fill whole nodes. The layout comes from the `rose-suite.conf` its run used: the product of
-the layout variables, plus the I/O server's ranks, times the OpenMP threads of each rank. The request comes from the
+the layout variables, plus the I/O server's ranks, times the OpenMP threads of each rank, plus the cores of the
+other components a suite names, as ACCESS-CM3 names its ocean's and its sea ice's. The request comes from the
 job scripts Cylc submitted, `log/job/<cycle>/<task>/NN/job`, as the smallest `#PBS -l ncpus` that covers the
 layout. Where no job asked for that many, the layout's own count is used.
 
@@ -194,4 +195,6 @@ MY_SUITE = RoseSuiteConfiguration(
 
 `layout_variable` names either the two variables stating the extents of the process grid, or the one variable
 stating both as a comma-separated pair. `cpus_per_proc_variable` and `io_server_variable` name the variables for
-OpenMP threads and I/O server ranks, where the suite has them.
+OpenMP threads and I/O server ranks, where the suite has them, and `extra_cpus_variables` those stating the cores
+of the components the suite runs beside the atmosphere, as [`CM3_O25KM`][access.profiling.models.um_suites.CM3_O25KM]
+names ACCESS-CM3's ocean and sea ice.

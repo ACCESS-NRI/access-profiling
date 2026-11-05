@@ -113,11 +113,12 @@ timings and Cylc's suite log and task database.
 | ACCESS-ESM1.6 | `ESM16_PI_CONTROL` | Payu |
 | ACCESS-OM2 | `OM2_1DEG` | Payu |
 | ACCESS-OM3 | `OM3_MC_25KM` | Payu |
-| ACCESS-AM3 | `AM3_N96E` | Cylc and Rose |
+| ACCESS-AM3 | `AM3_N96E`, `AM3_N512E` | Cylc and Rose |
 | ACCESS-rAM3 | `RAM3` | Cylc and Rose |
+| ACCESS-CM3 | `CM3_O25KM` | Cylc and Rose |
 
-The experiments of the four Payu models are generated from a layout search, while the suites of the two others are
-prepared by hand. The profiling data of all six is parsed, plotted and compared in the same way. Other setups of
+The experiments of the four Payu models are generated from a layout search, while the suites of the three others are
+prepared by hand. The profiling data of all seven is parsed, plotted and compared in the same way. Other setups of
 these models are values of the same configuration types, so profiling one is a matter of data, not of code.
 [ACCESS models](access/index.md) describes what each preset holds. The
 [access-model-scaling](https://github.com/ACCESS-NRI/access-model-scaling) repository holds the scaling studies of

@@ -37,6 +37,9 @@ class RoseSuiteConfiguration(Application):
             the suite has one.
         io_server_variable (str | None): Name of the variable stating the number of I/O server ranks, if the
             suite has one.
+        extra_cpus_variables (tuple[str, ...]): Names of the variables stating the cores of the components the
+            suite runs beside the atmosphere, added to its total after the threads are counted, as ACCESS-CM3's
+            `suite.rc` adds its ocean's and its sea ice's.
 
     Raises:
         ValueError: If no name or no layout variable is given.
@@ -50,6 +53,7 @@ class RoseSuiteConfiguration(Application):
     experiment_prefix: str = "rose-layout"
     cpus_per_proc_variable: str | None = None
     io_server_variable: str | None = None
+    extra_cpus_variables: tuple[str, ...] = ()
 
     _unsupported = (
         "Layout generation is not supported for Cylc Rose configurations yet: a rose suite states its "
@@ -150,5 +154,10 @@ class RoseSuiteConfiguration(Application):
             if self.cpus_per_proc_variable not in rose_conf:
                 raise ValueError(f"Cannot find cpus-per-process key, {self.cpus_per_proc_variable}, in {source}.")
             n_cpus *= int(rose_conf[self.cpus_per_proc_variable])
+
+        for variable in self.extra_cpus_variables:
+            if variable not in rose_conf:
+                raise ValueError(f"Cannot find component cores key, {variable}, in {source}.")
+            n_cpus += int(rose_conf[variable])
 
         return n_cpus

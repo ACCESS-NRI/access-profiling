@@ -1,13 +1,16 @@
 # Copyright 2025 ACCESS-NRI and contributors. See the top-level COPYRIGHT file for details.
 # SPDX-License-Identifier: Apache-2.0
 
-"""The UM-based ACCESS suites driven by Cylc and Rose: ACCESS-AM3 and ACCESS-rAM3.
+"""The UM-based ACCESS suites driven by Cylc and Rose: ACCESS-AM3, ACCESS-rAM3 and ACCESS-CM3.
 
-What tells the two apart, for profiling purposes, is the names their `rose-suite.conf` gives the variables
-stating their parallelism. ACCESS-AM3 states its process grid as two variables and has an I/O server and
-OpenMP threads besides; ACCESS-rAM3 states its as one comma-separated pair and has neither. Both read their
-task logs with the same two UM parsers. None of that is code, so neither suite has any.
+What tells them apart, for profiling purposes, is the names their `rose-suite.conf` gives the variables stating
+their parallelism. ACCESS-AM3 states its process grid as two variables and has an I/O server and OpenMP threads
+besides; ACCESS-rAM3 states its as one comma-separated pair and has neither; ACCESS-CM3 states the UM's as two
+variables and adds the cores of the ocean and the sea ice it couples through NUOPC. All read their task logs with
+the same two UM parsers. None of that is code, so no suite has any.
 """
+
+from dataclasses import replace
 
 from access.profiling.control import GitControlSource
 from access.profiling.rose_configuration import RoseSuiteConfiguration
@@ -49,6 +52,16 @@ are tags - but nothing here clones it: the suite is expected to be in the workin
 records what a study was run against rather than fetching it.
 """
 
+AM3_N512E: RoseSuiteConfiguration = replace(AM3_N96E, name="n512e")
+"""ACCESS-AM3 at N512e, which states its parallelism in the same variables as N96e: the same suite under another
+name.
+"""
+AM3_N512E_SOURCE: GitControlSource = GitControlSource(
+    repository=AM3_CONFIGS_REPOSITORY,
+    start_point="release-n512e-1.0",
+)
+"""The release `AM3_N512E` describes, as a control to profile it against."""
+
 RAM3: RoseSuiteConfiguration = RoseSuiteConfiguration(
     name="ram3",
     layout_variable="rg01_rs01_m01_nproc",
@@ -61,3 +74,29 @@ It runs one thread per rank and has no I/O server. Its suites are checked out by
 `mosrs-auth`, or `git clone` now that the configurations are moving to git - so a study supplies its own control
 rather than taking one from here.
 """
+
+
+CM3_O25KM: RoseSuiteConfiguration = RoseSuiteConfiguration(
+    name="O25km",
+    layout_variable=("ATM_NPROCX", "ATM_NPROCY"),
+    parsers=UM_SUITE_PARSERS,
+    experiment_prefix="cm3-layout",
+    io_server_variable="FLUME_IOS_NPROC",
+    extra_cpus_variables=("OCN_NPROC", "ICE_NPROC"),
+)
+"""ACCESS-CM3 with its ocean at 25 km: the UM coupled to MOM6 and CICE6 through NUOPC, as a Cylc suite.
+
+Its `suite.rc` asks PBS for `ATM_NPROCX * ATM_NPROCY + OCN_NPROC + ICE_NPROC + FLUME_IOS_NPROC` cores, with one
+thread per rank, so the UM's process grid is the layout and the ocean's and the sea ice's cores are added to it.
+The UM's timers are read from the `atmos` task's `job.out`, with `ltimer` on, as for ACCESS-AM3; the logs the
+ocean and the sea ice write are not read by the Cylc manager. The older `cm3_O100km` branch states the ocean's
+cores as `OCN_NPROCX` and `OCN_NPROCY` instead, and is not described here.
+"""
+
+CM3_CONFIGS_REPOSITORY: str = "git@github.com:ACCESS-NRI/access-cm3-configs.git"
+"""The repository holding the ACCESS-CM3 configurations, one per branch, which is restricted like ACCESS-AM3's."""
+CM3_O25KM_SOURCE: GitControlSource = GitControlSource(
+    repository=CM3_CONFIGS_REPOSITORY,
+    start_point="cm3_O25km",
+)
+"""The standard branch `CM3_O25KM` describes, as a control to profile it against; ACCESS-CM3 has no release yet."""
