@@ -9,8 +9,10 @@ access-profiling implements its general parts for the ACCESS climate models deve
 - presets for each model, with the release each describes as a control.
 
 Each preset is described below: the components a layout divides cores among, the requirements every layout meets,
-the logs a run writes, and the cores the release itself runs on. The [Models API](../api/models.md) has the full
-details.
+the logs a run writes, and the cores the release itself runs on. A configuration on a branch, a fork or a commit the
+presets do not describe is read from the control's own files with its model's `from_control`, as
+[Experiments with Payu](payu.md#reading-a-configuration-from-its-control) shows. The [Models API](../api/models.md)
+has the full details.
 
 ## ACCESS-ESM1.6
 
@@ -140,7 +142,7 @@ idle, and gives each CICE6 rank 5 to 8 blocks: the blocks are distributed as the
 them, and their size is chosen from the number of ranks.
 
 A layout is written into `config.yaml`, which requests the whole budget as `ncpus`, into the `PELAYOUT_attributes`
-of `nuopc.runconfig`, and into the block size of `ice_in`. The ocean's decomposition is left to MOM6, so the layout
+of `nuopc.runconfig`, and into the grid and the block size of `ice_in`. The ocean's decomposition is left to MOM6, so the layout
 search chooses no process grid for it and `MOM_input` is not changed. Note that the 25 km release, the 8 km
 configuration and the pan-Antarctic ones pin a `LAYOUT` and a `MASKTABLE` in `MOM_input`, which a study has to
 remove through its control options, as shown in

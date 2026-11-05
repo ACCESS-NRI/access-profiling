@@ -191,8 +191,9 @@ The configurations shipped with the package are those of the ACCESS models. Each
 `src/access/profiling/models/components.py`. To add yours:
 
 1. Write the components of the codes the package does not know, the configuration class, a preset for each released
-   configuration worth shipping, and a `GitControlSource` for the release each preset describes. Give every public
-   constant a docstring, so that it appears in the API reference.
+   configuration worth shipping, and a `GitControlSource` for the release each preset describes. Give the class a
+   `from_control` reading a configuration off a control's own files, by the Payu model types its submodels name,
+   as the ACCESS models have. Give every public constant a docstring, so that it appears in the API reference.
 2. Export the class and the presets from `src/access/profiling/__init__.py`, and add them to `__all__`.
 3. Write the tests, in `tests/test_<model>.py`, and those of a new component in `tests/test_components.py`. The
    package's tests cover every line. The tests of ACCESS-ESM1.6 and ACCESS-OM3 show what to check: that every layout

@@ -212,7 +212,13 @@ blocks, one page per concept. A new module needs a block on the right page and a
   run still going from one PBS killed (`PayuManager._job_is_over`). That call has a timeout, and any failure to make
   it reads as the run still going.
 - **A control source never fetches anything**; it records where a control is. Fetching is left to the runner, which
-  keeps credential prompts out of this package (the module docstring of `control.py`).
+  keeps credential prompts out of this package (the module docstring of `control.py`). `clone_control` in
+  `payu_manager` is the one explicit fetch, through experiment-generator, and makes the clone generation would make,
+  so that generation reuses it.
+- **`from_control` reads the application's own files, never the engine's**: `config.yaml` and the CICE namelist for
+  the submodel models, `nuopc.runconfig`, `ice_in` and `MOM_input` for OM3, by the Payu model types the control
+  names, and it reproduces the preset of the same control (the OM3 readers after the blocks `replace`), which the
+  tests check.
 - **Logging** is `logging.getLogger(__name__)` in each module that logs, with no handlers and no `warnings.warn`: a
   warning to the user is a `logger.warning`. Tests assert on `caplog.text`, so rewording a message can fail one.
 

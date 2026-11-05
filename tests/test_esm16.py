@@ -645,3 +645,52 @@ def test_esm16_config_changes_refuses_a_layout_that_states_no_decomposition(esm1
 
     with pytest.raises(ValueError, match="states no decomposition"):
         esm16.config_changes(parsed)
+
+
+def _esm16_control(path: Path, submodels: list[tuple[str, str, int]], jobname: str = "piControl") -> Path:
+    """Writes a control the way the ACCESS-ESM1.6 releases are laid out: config.yaml, and CICE5's namelist."""
+
+    lines = [f"jobname: {jobname}", "model: access-esm1.6", "submodels:"]
+    for name, model, ncpus in submodels:
+        lines += [f"  - name: {name}", f"    model: {model}", f"    ncpus: {ncpus}"]
+    (path / "config.yaml").write_text("\n".join(lines) + "\n")
+    (path / "ice").mkdir()
+    (path / "ice" / "cice_in.nml").write_text(
+        "&domain_nml\n    nprocs = 12\n    processor_shape   = 'slenderX1'\n    distribution_type = 'cartesian'\n/\n"
+    )
+    return path
+
+
+COUPLED_SUBMODELS = [("atmosphere", "um", 256), ("ocean", "mom", 240), ("ice", "cice5", 12), ("coupler", "oasis", 0)]
+
+
+class TestESM16FromControl:
+    """Reading a configuration off a control's own files, by the Payu model types its submodels name."""
+
+    def test_the_coupled_release_reads_as_the_preset(self, tmp_path):
+        """The release names a CICE5 built for its grid; the configuration writes for the runtime one anyway."""
+
+        assert ESM16Configuration.from_control(_esm16_control(tmp_path, COUPLED_SUBMODELS)) == ESM16_PI_CONTROL
+
+    def test_the_name_is_the_one_given_or_the_jobname(self, tmp_path):
+        control = _esm16_control(tmp_path, COUPLED_SUBMODELS, jobname="esm-piControl")
+
+        assert ESM16Configuration.from_control(control).name == "esm-piControl"
+        assert ESM16Configuration.from_control(control, name="piControl") == ESM16_PI_CONTROL
+
+    def test_the_amip_release_reads_as_the_preset(self, tmp_path):
+        control = _esm16_control(tmp_path, [("atmosphere", "um", 208)], jobname="amip")
+
+        assert ESM16Configuration.from_control(control) == ESM16_AMIP
+
+    def test_an_access_esm1_5_control_is_told_apart_by_its_sea_ice(self, tmp_path):
+        control = _esm16_control(tmp_path, [("atmosphere", "um", 240), ("ice", "cice", 12)])
+
+        with pytest.raises(ValueError, match="ACCESS-ESM1.5"):
+            ESM16Configuration.from_control(control)
+
+    def test_a_submodel_of_another_model_is_refused(self, tmp_path):
+        control = _esm16_control(tmp_path, [("atmosphere", "yatm", 1), ("ocean", "mom", 240)])
+
+        with pytest.raises(ValueError, match=r"types \['yatm'\], which ACCESS-ESM1.6 does not run"):
+            ESM16Configuration.from_control(control)

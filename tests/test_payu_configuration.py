@@ -19,7 +19,9 @@ from access.profiling.payu_configuration import (
     PayuSubmodel,
     PlainComponent,
     SubmodelsConfiguration,
+    control_name,
     payu_model_stdout,
+    read_submodels,
     require_process_grid,
 )
 
@@ -287,3 +289,49 @@ class TestSubmodelsConfiguration:
 
         (tmp_path / "config.yaml").write_text("model: toy\n")
         assert TOY.parse_layout(tmp_path) is None
+
+
+class TestReadingAControl:
+    """What the readers of the models take from a control's config.yaml."""
+
+    CONFIG = (
+        "jobname: piControl\nmodel: access-esm1.6\nsubmodels:\n"
+        "  - name: atmosphere\n    model: um\n    ncpus: 256\n    exe: um_hg3.exe\n"
+        "  - name: coupler\n    model: oasis\n"
+    )
+
+    def test_the_submodels_come_back_in_order_with_their_types(self, tmp_path):
+        (tmp_path / "config.yaml").write_text(self.CONFIG)
+
+        submodels = read_submodels(tmp_path)
+
+        assert [(s.name, s.model, s.ncpus, s.exe) for s in submodels] == [
+            ("atmosphere", "um", 256, "um_hg3.exe"),
+            ("coupler", "oasis", None, None),
+        ]
+
+    def test_a_control_without_a_config_yaml_or_without_submodels_is_refused(self, tmp_path):
+        with pytest.raises(ValueError, match="has no config.yaml"):
+            read_submodels(tmp_path)
+
+        (tmp_path / "config.yaml").write_text("model: access-om3\n")
+        with pytest.raises(ValueError, match="declares no submodels"):
+            read_submodels(tmp_path)
+
+    def test_a_submodel_without_a_name_or_a_model_is_refused(self, tmp_path):
+        (tmp_path / "config.yaml").write_text("submodels:\n  - name: atmosphere\n    ncpus: 256\n")
+
+        with pytest.raises(ValueError, match="states no name or no model"):
+            read_submodels(tmp_path)
+
+    def test_the_name_is_the_one_given_or_else_the_jobname(self, tmp_path):
+        (tmp_path / "config.yaml").write_text(self.CONFIG)
+
+        assert control_name(tmp_path, "historical") == "historical"
+        assert control_name(tmp_path) == "piControl"
+
+    def test_a_control_without_a_jobname_needs_a_name(self, tmp_path):
+        (tmp_path / "config.yaml").write_text("model: access-om3\n")
+
+        with pytest.raises(ValueError, match="states no jobname"):
+            control_name(tmp_path)

@@ -199,3 +199,50 @@ def test_esm15_generate_scaling_experiments(mock_experiment_generator, esm15):
     config = mock_experiment_generator.call_args[0][0]
     assert config["model_type"] == "access"
     assert PREINDUSTRIAL_BRANCH in manager.experiments
+
+
+def _esm15_control(path: Path, submodels: list[tuple[str, str, int | None]], jobname: str = "pre-industrial") -> Path:
+    """Writes a control the way the ACCESS-ESM1.5 releases are laid out, as far as the reader looks."""
+
+    lines = [f"jobname: {jobname}", "model: access", "submodels:"]
+    for name, model, ncpus in submodels:
+        lines += [f"  - name: {name}", f"    model: {model}"] + ([f"    ncpus: {ncpus}"] if ncpus is not None else [])
+    (path / "config.yaml").write_text("\n".join(lines) + "\n")
+    return path
+
+
+RELEASE_SUBMODELS = [("atmosphere", "um", 240), ("ocean", "mom", 180), ("ice", "cice", 12), ("coupler", "oasis", 0)]
+
+
+class TestESM15FromControl:
+    """Reading a configuration off a control's own files, by the Payu model types its submodels name."""
+
+    def test_the_releases_read_as_the_presets(self, tmp_path):
+        control = _esm15_control(tmp_path, RELEASE_SUBMODELS)
+
+        assert ESM15Configuration.from_control(control, name="preindustrial+concentrations") == ESM15_PREINDUSTRIAL
+        assert ESM15Configuration.from_control(control, name="historical+concentrations") == ESM15_HISTORICAL
+        assert ESM15Configuration.from_control(control).name == "pre-industrial", "the jobname, with no name given"
+
+    def test_the_sea_ice_takes_the_ranks_the_control_gives_it(self, tmp_path):
+        control = _esm15_control(tmp_path, [("atmosphere", "um", 240), ("ice", "cice", 24), ("coupler", "oasis", 0)])
+
+        assert ESM15Configuration.from_control(control).sea_ice == 24
+
+    def test_a_sea_ice_given_no_cores_is_refused(self, tmp_path):
+        control = _esm15_control(tmp_path, [("atmosphere", "um", 240), ("ice", "cice", None)])
+
+        with pytest.raises(ValueError, match="states no core count for its sea ice"):
+            ESM15Configuration.from_control(control)
+
+    def test_an_access_esm1_6_control_is_told_apart_by_its_sea_ice(self, tmp_path):
+        control = _esm15_control(tmp_path, [("atmosphere", "um", 256), ("ice", "cice5", 12)])
+
+        with pytest.raises(ValueError, match="ACCESS-ESM1.6"):
+            ESM15Configuration.from_control(control)
+
+    def test_a_submodel_of_another_model_is_refused(self, tmp_path):
+        control = _esm15_control(tmp_path, [("atmosphere", "um", 240), ("ocean", "mom6", 180)])
+
+        with pytest.raises(ValueError, match=r"types \['mom6'\], which ACCESS-ESM1.5 does not run"):
+            ESM15Configuration.from_control(control)

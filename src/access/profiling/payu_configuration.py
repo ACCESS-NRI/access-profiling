@@ -232,6 +232,93 @@ def require_process_grid(name: str, layout: ComponentLayout) -> tuple[int, int]:
 
 
 @dataclass(frozen=True)
+class ControlSubmodel:
+    """One submodel as a control's `config.yaml` declares it: what a reader of the control needs of it.
+
+    Args:
+        name (str): The submodel's name.
+        model (str): Its `model`, the Payu model type that runs it.
+        ncpus (int | None): The cores the control gives it, where it states them.
+        exe (str | None): The executable the control names for it, where it names one.
+    """
+
+    name: str
+    model: str
+    ncpus: int | None = None
+    exe: str | None = None
+
+
+def _payu_config(directory: Path) -> dict:
+    """Returns the `config.yaml` of a control directory, parsed.
+
+    Args:
+        directory (Path): The control directory.
+
+    Returns:
+        dict: The configuration.
+
+    Raises:
+        ValueError: If the directory holds no `config.yaml`.
+    """
+    config_path = directory / "config.yaml"
+    if not config_path.is_file():
+        raise ValueError(f"The control at {directory} has no config.yaml, so it is not a Payu control.")
+    return YAMLParser().parse(config_path.read_text())
+
+
+def read_submodels(directory: Path) -> tuple[ControlSubmodel, ...]:
+    """Returns the submodels a control's `config.yaml` declares, in its order.
+
+    The readers of the models build a configuration from these, by the Payu model type each submodel names,
+    which is the vocabulary `config.yaml` and Payu share.
+
+    Args:
+        directory (Path): The control directory.
+
+    Returns:
+        tuple[ControlSubmodel, ...]: The submodels.
+
+    Raises:
+        ValueError: If the directory holds no `config.yaml`, if it declares no submodels, or if a submodel
+            states no name or no model.
+    """
+    submodels = _payu_config(directory).get("submodels")
+    if not submodels:
+        raise ValueError(f"The config.yaml of the control at {directory} declares no submodels.")
+    declared = []
+    for submodel in submodels:
+        name, model = submodel.get("name"), submodel.get("model")
+        if name is None or model is None:
+            raise ValueError(f"A submodel of the control at {directory} states no name or no model: {submodel}.")
+        declared.append(ControlSubmodel(name, model, submodel.get("ncpus"), submodel.get("exe")))
+    return tuple(declared)
+
+
+def control_name(directory: Path, name: str | None = None) -> str:
+    """Returns the name a configuration read from a control takes: the one given, else `config.yaml`'s jobname.
+
+    Args:
+        directory (Path): The control directory.
+        name (str | None): The name the caller chose, if any.
+
+    Returns:
+        str: The name.
+
+    Raises:
+        ValueError: If no name is given and the control states no jobname either.
+    """
+    if name is not None:
+        return name
+    jobname = _payu_config(directory).get("jobname")
+    if not jobname:
+        raise ValueError(
+            f"The config.yaml of the control at {directory} states no jobname, so the configuration has to be "
+            "given a name."
+        )
+    return str(jobname)
+
+
+@dataclass(frozen=True)
 class PayuSubmodel:
     """One of the submodels a Payu control declares, paired with the component that runs in it.
 

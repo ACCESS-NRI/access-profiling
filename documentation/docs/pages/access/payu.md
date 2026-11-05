@@ -55,6 +55,55 @@ The control is cloned into the working directory, under `config`, and the contro
 a branch named `ctrl`. Every experiment is then a branch of `ctrl`, named after its layout, carrying the changes the
 configuration writes for that layout, its walltime and its name.
 
+## Reading a configuration from its control
+
+The presets describe the configurations as their controls stood when the package was released. A configuration
+on another branch, a fork or a commit is read from the control's own files instead, with the `from_control` of
+its model: [`ESM16Configuration.from_control`][access.profiling.models.esm16.ESM16Configuration.from_control],
+[`ESM15Configuration.from_control`][access.profiling.models.esm15.ESM15Configuration.from_control],
+[`OM2Configuration.from_control`][access.profiling.models.om2.OM2Configuration.from_control] and
+[`OM3Configuration.from_control`][access.profiling.models.om3.OM3Configuration.from_control]. Each reads the
+files its model states its layout in, `config.yaml` and the CICE namelist for the submodel models, and
+`nuopc.runconfig`, `ice_in` and `MOM_input` for ACCESS-OM3, and names the configuration after the `jobname` of
+`config.yaml` unless given a name. A control of another model is refused.
+
+The files have to be on disk, and the manager that would clone them cannot be built before the configuration
+is, so [`clone_control`][access.profiling.payu_manager.clone_control] clones the control first, the way
+generating the study does: into the working directory, under the control's directory, at its start point,
+through experiment-generator. Generating the study later finds the clone there and reuses it, so nothing is
+fetched twice, and a control already cloned is left alone. This is the one place the package fetches anything,
+and it is an explicit call: a control whose repository asks for credentials prompts here, from a terminal, and
+never while a configuration is being built.
+
+```python
+from access.profiling import GitControlSource, OM3Configuration, PayuManager
+from access.profiling.models.om3 import OM3_CONFIGS_REPOSITORY
+from access.profiling.payu_manager import clone_control
+
+control = GitControlSource(OM3_CONFIGS_REPOSITORY, "dev-MC_100km_jra_ryf")
+om3 = OM3Configuration.from_control(clone_control(work_dir, control, OM3Configuration.model_type), name="MC-100km")
+manager = PayuManager(work_dir, archive_dir, om3, control)
+```
+
+An [`ExistingDirectoryControlSource`][access.profiling.control.ExistingDirectoryControlSource] needs no clone:
+read from its `path`. What is read is what the control states. For ACCESS-OM3 that means the block size the
+control pins for CICE6, where the presets choose it from the rank count so that every rank holds
+[`OM3_CICE6_BLOCKS_PER_RANK_RANGE`][access.profiling.models.om3.OM3_CICE6_BLOCKS_PER_RANK_RANGE] blocks at any
+core count; a study wanting that replaces the partitioning:
+
+```python
+from dataclasses import replace
+
+from access.profiling.models.om3 import OM3_CICE6_BLOCKS_PER_RANK_RANGE
+
+om3 = replace(om3, sea_ice=replace(om3.sea_ice, block_shape=None, blocks_per_rank_range=OM3_CICE6_BLOCKS_PER_RANK_RANGE))
+```
+
+The ACCESS-OM3 reader warns when the control pins a `LAYOUT` or a `MASKTABLE` in `MOM_input` without
+`AUTO_MASKTABLE`, which the control options have to remove; the ACCESS-OM2 reader refuses a control whose CICE5 is
+compiled for its grid, as the `-4.1` and `_bgc` releases are, which are profiled with the preset of their
+resolution instead.
+
 ## Running the experiments
 
 [`run_experiments`][access.profiling.payu_manager.PayuManager.run_experiments] submits every NEW experiment through

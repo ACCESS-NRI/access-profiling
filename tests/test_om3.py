@@ -387,7 +387,13 @@ def test_om3_writes_the_blocks_its_rank_count_calls_for(om3):
 
     # 45 x 36 blocks of 32 x 32 tile the 1440 x 1152 grid exactly, 1620 of them over 275 ranks.
     assert om3.config_changes(layout)["ice_in"] == {
-        "domain_nml": {"block_size_x": "32", "block_size_y": "32", "max_blocks": "-1"}
+        "domain_nml": {
+            "nx_global": "1440",
+            "ny_global": "1152",
+            "block_size_x": "32",
+            "block_size_y": "32",
+            "max_blocks": "-1",
+        }
     }
     assert _pelayout(om3, layout)["ice_ntasks"] == 275
     assert OM3_SEA_ICE_NAME not in _om3_grids(layout), "and the search chose no process grid for it"
@@ -680,3 +686,102 @@ class TestOM3ParseLayout:
         assert [sub.name for sub in parsed.sub_layouts] == [OM3_SHARED_NAME, OM3_OCEAN_NAME, OM3_WAVE_NAME]
         assert component_of(parsed, OM3_WAVE_NAME).n_cores == 24
         assert parsed.n_cores == 240
+
+
+def _om3_control(
+    path: Path,
+    *,
+    ice_model: str = "cice",
+    wav_model: str = "swav",
+    ocn_model: str = "mom",
+    ice_in: str = "",
+    mom_input: str = "AUTO_MASKTABLE = True           !   [Boolean] default = False\n",
+    jobname: str | None = "MC_100km_jra_ryf",
+) -> Path:
+    """Writes a control the way the ACCESS-OM3 configurations are laid out, as far as the reader looks."""
+
+    path.mkdir(parents=True, exist_ok=True)
+    (path / "nuopc.runconfig").write_text(
+        "ALLCOMP_attributes::\n"
+        f"     ATM_model = datm\n     ICE_model = {ice_model}\n     OCN_model = {ocn_model}\n"
+        f"     ROF_model = drof\n     WAV_model = {wav_model}\n::\n"
+    )
+    (path / "ice_in").write_text(
+        ice_in
+        or '&domain_nml\n  block_size_x = 15\n  block_size_y = 20\n  distribution_type = "cartesian"\n'
+        '  max_blocks = -1\n  nx_global = 360\n  ny_global = 324\n  processor_shape = "slenderX1"\n/\n'
+    )
+    (path / "MOM_input").write_text(mom_input)
+    (path / "config.yaml").write_text("model: access-om3\n" + (f"jobname: {jobname}\n" if jobname else ""))
+    return path
+
+
+class TestOM3FromControl:
+    """Reading a configuration off a control's own files, by the rules Payu's ACCESS-OM3 driver reads them with."""
+
+    def test_a_development_configuration_reads_as_its_preset_once_the_blocks_are_chosen(self, tmp_path):
+        """The reader pins the block size the control states; choosing it from the rank count is the preset's."""
+
+        read = OM3Configuration.from_control(_om3_control(tmp_path), name="MC-100km")
+
+        assert read.sea_ice == CICEPartitioning(grid=(360, 324), block_shape=(15, 20), grid_is_runtime=True)
+        assert not read.waves
+        chosen = dataclasses.replace(
+            read.sea_ice, block_shape=None, blocks_per_rank_range=OM3_CICE6_BLOCKS_PER_RANK_RANGE
+        )
+        assert dataclasses.replace(read, sea_ice=chosen) == OM3_MC_100KM
+
+    def test_the_name_is_the_jobname_unless_one_is_given(self, tmp_path):
+        assert OM3Configuration.from_control(_om3_control(tmp_path)).name == "MC_100km_jra_ryf"
+
+        with pytest.raises(ValueError, match="states no jobname"):
+            OM3Configuration.from_control(_om3_control(tmp_path / "unnamed", jobname=None))
+
+    def test_the_waves_follow_the_wave_model(self, tmp_path):
+        assert OM3Configuration.from_control(_om3_control(tmp_path / "ww3", wav_model="ww3")).waves
+        assert OM3Configuration.from_control(_om3_control(tmp_path / "dev", wav_model="ww3dev")).waves
+        assert not OM3Configuration.from_control(_om3_control(tmp_path / "stub", wav_model="swav")).waves
+
+    def test_a_pinned_ocean_layout_is_warned_about(self, tmp_path, caplog):
+        """The 25 km release pins LAYOUT and MASKTABLE, which a generated ocean core count cannot run with."""
+
+        release = _om3_control(
+            tmp_path,
+            mom_input='LAYOUT = 72, 48                 !\nMASKTABLE = "./auxiliary_input/mask_table.1027.72x48" !\n',
+        )
+
+        with caplog.at_level("WARNING"):
+            read = OM3Configuration.from_control(release, name="MC-25km")
+
+        assert "pins LAYOUT and MASKTABLE without AUTO_MASKTABLE" in caplog.text
+        assert read.sea_ice.block_shape == (15, 20)
+
+    def test_a_control_setting_auto_masktable_is_not_warned_about(self, tmp_path, caplog):
+        with caplog.at_level("WARNING"):
+            OM3Configuration.from_control(
+                _om3_control(tmp_path, mom_input="LAYOUT = 72, 48 !\nAUTO_MASKTABLE = True !\n")
+            )
+
+        assert "AUTO_MASKTABLE" not in caplog.text
+
+    def test_a_control_without_a_mom_input_is_read_without_a_word(self, tmp_path, caplog):
+        control = _om3_control(tmp_path)
+        (control / "MOM_input").unlink()
+
+        with caplog.at_level("WARNING"):
+            OM3Configuration.from_control(control)
+
+        assert caplog.text == ""
+
+    @pytest.mark.parametrize("ice_model", ["sice", "dice"])
+    def test_a_sea_ice_that_is_not_cice_is_refused(self, tmp_path, ice_model):
+        with pytest.raises(ValueError, match=f"is '{ice_model}', not CICE"):
+            OM3Configuration.from_control(_om3_control(tmp_path, ice_model=ice_model))
+
+    def test_an_ocean_that_is_not_mom6_is_refused(self, tmp_path):
+        with pytest.raises(ValueError, match="is 'docn', not MOM6"):
+            OM3Configuration.from_control(_om3_control(tmp_path, ocn_model="docn"))
+
+    def test_a_control_without_a_nuopc_configuration_is_refused(self, tmp_path):
+        with pytest.raises(ValueError, match="not an ACCESS-OM3 control"):
+            OM3Configuration.from_control(tmp_path)

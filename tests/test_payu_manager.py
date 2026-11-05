@@ -24,6 +24,7 @@ from access.profiling.payu_manager import (
     ProfilingExperiment,
     ProfilingExperimentStatus,
     _walltime_string,
+    clone_control,
 )
 
 # A model that has nothing to do with any real one, so that the layout machinery of PayuManager is tested without
@@ -1624,3 +1625,36 @@ class TestOnlyPayusEntriesAreRuns:
 
         (tmp_path / "archive" / "output000").mkdir()
         assert PayuManager._archived_output(tmp_path)
+
+
+class TestCloneControl:
+    """Cloning the control before the manager exists, so that a configuration can be read out of it."""
+
+    @mock.patch("access.profiling.payu_manager.ExperimentGenerator")
+    def test_it_clones_the_way_generation_does(self, mock_experiment_generator):
+        """The same generator configuration, with nothing to perturb, so that generation finds the clone."""
+
+        control = GitControlSource("https://example.com/repo", "release-1.0", directory="ctrl-clone")
+
+        path = clone_control(Path("/fake/work"), control, "mock-payu-model")
+
+        assert path == Path("/fake/work/ctrl-clone")
+        assert mock_experiment_generator.call_args[0][0] == {
+            "model_type": "mock-payu-model",
+            "repository_url": "https://example.com/repo",
+            "start_point": "release-1.0",
+            "test_path": "/fake/work",
+            "repository_directory": "ctrl-clone",
+            "control_branch_name": "ctrl",
+            "Control_Experiment": {},
+            "Perturbation_Experiment": {},
+        }
+        mock_experiment_generator.return_value.run.assert_called_once_with()
+
+    @mock.patch("access.profiling.payu_manager.ExperimentGenerator")
+    def test_it_needs_the_control_to_state_a_start_point(self, mock_experiment_generator):
+        from access.profiling.control import ExistingDirectoryControlSource
+
+        with pytest.raises(ValueError, match="states no start point"):
+            clone_control(Path("/fake/work"), ExistingDirectoryControlSource(Path("/fake/control")), "mock")
+        mock_experiment_generator.assert_not_called()
