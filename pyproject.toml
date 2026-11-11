@@ -1,14 +1,14 @@
 [project]
 name = "access-profiling"
 dynamic = ["version"]
-description = "Tools and utilities to profile the ACCESS climate models."
+description = "Tools to profile and optimise parallel applications, with implementations for the ACCESS climate models."
 authors = [
   {name = "Micael Oliveira", email="micael.oliveira@anu.edu.au"},
   {name = "Manodeep Sinha", email="manodeep.sinha@anu.edu.au"},
   {name = "Edward Yang", email="edward.yang@anu.edu.au"},  
 ]
 readme = "README.md"
-keywords = ["profiling", "access"]
+keywords = ["profiling", "performance", "parallel", "hpc", "scaling", "access", "climate"]
 classifiers = [
     "License :: OSI Approved :: Apache Software License",
     "Operating System :: POSIX :: Linux",
@@ -26,6 +26,12 @@ dependencies = [
     "experiment-runner>=0.3.2",
     "payu", # Extra dependency of experiment-runner, not handled correctly in conda
 ]
+
+[project.urls]
+Homepage = "https://github.com/ACCESS-NRI/access-profiling"
+Documentation = "https://access-profiling.access-hive.org.au/"
+Repository = "https://github.com/ACCESS-NRI/access-profiling"
+Issues = "https://github.com/ACCESS-NRI/access-profiling/issues"
 
 [build-system]
 requires = ["setuptools>=80", "setuptools_scm[toml]>=8"]
@@ -49,6 +55,8 @@ omit = ["setup.py"]
 
 [tool.ruff]
 line-length = 120
+# Copied verbatim from the ACCESS-NRI documentation template, and kept that way so it can be updated from there
+extend-exclude = ["documentation/hooks"]
 
 [tool.ruff.lint]
 select = ["E", "F", "B", "C4", "SIM", "PTH", "UP", "I", "N", "C901"]

@@ -37,6 +37,8 @@ test:
 
 about:
     home: https://github.com/ACCESS-NRI/access-profiling/
+    doc_url: https://access-profiling.access-hive.org.au/
+    dev_url: https://github.com/ACCESS-NRI/access-profiling/
     license: Apache Software
     license_family: APACHE
     summary: "Tools and utilities to profile the ACCESS climate models."
