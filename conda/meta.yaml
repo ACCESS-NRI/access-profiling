@@ -37,7 +37,7 @@ test:
 
 about:
     home: https://github.com/ACCESS-NRI/access-profiling/
-    doc_url: https://access-profiling.access-hive.org.au/
+    doc_url: https://access-profiling.readthedocs.io/
     dev_url: https://github.com/ACCESS-NRI/access-profiling/
     license: Apache Software
     license_family: APACHE

@@ -29,7 +29,7 @@ dependencies = [
 
 [project.urls]
 Homepage = "https://github.com/ACCESS-NRI/access-profiling"
-Documentation = "https://access-profiling.access-hive.org.au/"
+Documentation = "https://access-profiling.readthedocs.io/"
 Repository = "https://github.com/ACCESS-NRI/access-profiling"
 Issues = "https://github.com/ACCESS-NRI/access-profiling/issues"
 
