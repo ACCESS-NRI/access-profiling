@@ -107,6 +107,6 @@ jobs:
     - name: Build the documentation, with warnings as errors
       env:
         # Set by Read the Docs, and required by the resolve-absolute-urls plugin
-        READTHEDOCS_CANONICAL_URL: https://access-profiling.access-hive.org.au/latest/
+        READTHEDOCS_CANONICAL_URL: https://access-profiling.readthedocs.io/latest/
         NO_MKDOCS_2_WARNING: 'true'
       run: python -m mkdocs build --strict --config-file documentation/mkdocs.yml --site-dir "$RUNNER_TEMP/site"

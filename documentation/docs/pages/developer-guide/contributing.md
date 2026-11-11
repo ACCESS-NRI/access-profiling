@@ -75,7 +75,7 @@ The continuous integration builds the site with warnings treated as errors. To c
 same build:
 
 ```bash
-READTHEDOCS_CANONICAL_URL=https://access-profiling.access-hive.org.au/latest/ mkdocs build --strict -f documentation/mkdocs.yml
+READTHEDOCS_CANONICAL_URL=https://access-profiling.readthedocs.io/latest/ mkdocs build --strict -f documentation/mkdocs.yml
 ```
 
 The variable is normally set by Read the Docs, and the build does not run without it. Note that the dates at the

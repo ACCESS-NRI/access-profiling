@@ -267,7 +267,7 @@ ignored. The documentation is built in an environment of its own, the way CI bui
 
 ```shell
 pip install -r documentation/requirements.txt
-READTHEDOCS_CANONICAL_URL=https://access-profiling.access-hive.org.au/latest/ \
+READTHEDOCS_CANONICAL_URL=https://access-profiling.readthedocs.io/latest/ \
     mkdocs build --strict -f documentation/mkdocs.yml
 ```
 

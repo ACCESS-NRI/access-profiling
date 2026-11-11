@@ -1,6 +1,6 @@
 # access-profiling
 
-![CI](https://github.com/ACCESS-NRI/access-profiling/actions/workflows/ci.yml/badge.svg) [![codecov](https://codecov.io/github/ACCESS-NRI/access-profiling/graph/badge.svg?token=KtmrCtSyMv)](https://codecov.io/github/ACCESS-NRI/access-profiling) [![Documentation](https://readthedocs.org/projects/access-profiling/badge/?version=latest)](https://access-profiling.access-hive.org.au/) [![License](https://img.shields.io/badge/license-Apache%202.0-blue?style=flat-square)](https://opensource.org/license/apache-2-0) [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
+![CI](https://github.com/ACCESS-NRI/access-profiling/actions/workflows/ci.yml/badge.svg) [![codecov](https://codecov.io/github/ACCESS-NRI/access-profiling/graph/badge.svg?token=KtmrCtSyMv)](https://codecov.io/github/ACCESS-NRI/access-profiling) [![Documentation](https://readthedocs.org/projects/access-profiling/badge/?version=latest)](https://access-profiling.readthedocs.io/) [![License](https://img.shields.io/badge/license-Apache%202.0-blue?style=flat-square)](https://opensource.org/license/apache-2-0) [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
 
 ## About
 
@@ -40,7 +40,7 @@ ACCESS-rAM3.
 
 ## Documentation
 
-The documentation is at [access-profiling.access-hive.org.au](https://access-profiling.access-hive.org.au/). It
+The documentation is at [access-profiling.readthedocs.io](https://access-profiling.readthedocs.io/). It
 has a user guide, which shows how to run experiments and analyse their data, with a guide for each kind of
 profiling study. It also describes what the package provides for the ACCESS models, and has a developer guide and
 an API reference.
@@ -101,11 +101,11 @@ code prints the 14 ways of arranging those cores into process grids, the release
 `esm1p6-layout_piControl_atm_16x16_mom_16x15_ice_12` among them.
 
 To learn more, start with the
-[getting started](https://access-profiling.access-hive.org.au/latest/getting-started/) page, which goes through
+[getting started](https://access-profiling.readthedocs.io/latest/getting-started/) page, which goes through
 this example step by step. The
-[best layout for a budget](https://access-profiling.access-hive.org.au/latest/user-guide/best-layout/) guide then
+[best layout for a budget](https://access-profiling.readthedocs.io/latest/user-guide/best-layout/) guide then
 runs these 14 layouts and picks the fastest, and the
-[user guide](https://access-profiling.access-hive.org.au/latest/user-guide/) covers every kind of study.
+[user guide](https://access-profiling.readthedocs.io/latest/user-guide/) covers every kind of study.
 
 ## Development installation
 
@@ -132,7 +132,7 @@ dependencies, such as the testing tools, are installed as well.
 pytest
 ```
 
-The [contributing guide](https://access-profiling.access-hive.org.au/latest/developer-guide/contributing/) describes
+The [contributing guide](https://access-profiling.readthedocs.io/latest/developer-guide/contributing/) describes
 the code style, the docstring conventions and how to build the documentation.
 
 ## Contributing
