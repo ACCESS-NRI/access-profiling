@@ -1,6 +1,6 @@
 # Cylc Rose suites
 
-ACCESS-AM3 and ACCESS-rAM3 are run as Cylc suites configured with Rose. The manager for such suites is
+ACCESS-AM3, ACCESS-rAM3 and ACCESS-CM3 are run as Cylc suites configured with Rose. The manager for such suites is
 [`CylcRoseManager`][access.profiling.cylc_manager.CylcRoseManager]. There is one important difference from Payu: the
 package does not create the experiments for you. Each experiment is a copy of the suite with its own parallelisation
 layout, which you prepare by hand. The package then runs the suites, reads their logs and plots the results. In this
@@ -143,7 +143,8 @@ run directory:
 How many CPUs did each experiment use? As for Payu, the answer is the number of CPUs that the job requested from
 PBS. This includes the cores that are left idle to fill whole nodes. To find it, the manager first works out how
 many CPUs the layout needs, from the `rose-suite.conf` that the run used. This is the product of the layout
-variables, plus the ranks of the I/O server, times the OpenMP threads of each rank. It then looks at the job
+variables, plus the ranks of the I/O server, times the OpenMP threads of each rank, plus the cores of any other
+component that the suite names, as ACCESS-CM3 names those of its ocean and its sea ice. It then looks at the job
 scripts that Cylc submitted, `log/job/<cycle>/<task>/NN/job`, and takes the smallest `#PBS -l ncpus` request that
 is large enough for the layout. If no job requested that many CPUs, the number of CPUs of the layout is used.
 
@@ -200,4 +201,7 @@ MY_SUITE = RoseSuiteConfiguration(
 
 `layout_variable` is either the names of the two variables that set the process grid, or the name of the single
 variable that sets both numbers, separated by a comma. If the suite has variables for the OpenMP threads and for
-the ranks of the I/O server, give their names as `cpus_per_proc_variable` and `io_server_variable`.
+the ranks of the I/O server, give their names as `cpus_per_proc_variable` and `io_server_variable`. If the suite
+runs other components beside the atmosphere, give the names of the variables with their cores as
+`extra_cpus_variables`, as [`CM3_O25KM`][access.profiling.models.um_suites.CM3_O25KM] does for the ocean and the
+sea ice of ACCESS-CM3.

@@ -42,3 +42,27 @@ class TestRoseSuiteConfiguration:
 
         assert configuration.logs == ()
         assert configuration.component_logs(tmp_path) == {}, "even with a log file sitting right there"
+
+
+class TestExtraCpusVariables:
+    """The cores of the components a suite runs beside the atmosphere, as ACCESS-CM3 adds them to its request."""
+
+    CONFIGURATION = RoseSuiteConfiguration(
+        name="cm3",
+        layout_variable=("ATM_NPROCX", "ATM_NPROCY"),
+        cpus_per_proc_variable="OMPTHR",
+        extra_cpus_variables=("OCN_NPROC", "ICE_NPROC"),
+    )
+
+    def test_they_are_added_after_the_threads_are_counted(self):
+        rose_conf = {"ATM_NPROCX": "24", "ATM_NPROCY": "24", "OMPTHR": "2", "OCN_NPROC": "1152", "ICE_NPROC": "192"}
+
+        assert self.CONFIGURATION.occupied_cpus(rose_conf) == 24 * 24 * 2 + 1152 + 192
+
+    def test_a_missing_one_is_an_error(self):
+        """As for the other variables: the configuration then describes a different suite from the one read."""
+
+        rose_conf = {"ATM_NPROCX": "24", "ATM_NPROCY": "24", "OMPTHR": "2", "OCN_NPROC": "1152"}
+
+        with pytest.raises(ValueError, match="Cannot find component cores key, ICE_NPROC"):
+            self.CONFIGURATION.occupied_cpus(rose_conf)

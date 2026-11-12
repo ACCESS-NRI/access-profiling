@@ -4,7 +4,7 @@ access-profiling comes with everything needed to profile the ACCESS climate mode
 [ACCESS-NRI](https://github.com/ACCESS-NRI), which run on NCI's Gadi supercomputer:
 
 - a manager for each of their workflow engines: [Payu](payu.md), for ACCESS-ESM1.5, ACCESS-ESM1.6, ACCESS-OM2 and
-  ACCESS-OM3, and [Cylc and Rose](cylc-rose-suites.md), for ACCESS-AM3 and ACCESS-rAM3;
+  ACCESS-OM3, and [Cylc and Rose](cylc-rose-suites.md), for ACCESS-AM3, ACCESS-rAM3 and ACCESS-CM3;
 - parsers for the [log formats](log-formats.md) of their components and of these workflow engines;
 - presets for each model, together with the official release that each describes, to use as the control.
 
@@ -236,16 +236,18 @@ from the package's own [`CICEComponent`][access.profiling.models.components.CICE
 [`PlainComponent`][access.profiling.payu_configuration.PlainComponent]. Writing the PE layout and reading it back
 are still done by the base class.
 
-## ACCESS-AM3 and ACCESS-rAM3
+## ACCESS-AM3, ACCESS-rAM3 and ACCESS-CM3
 
-| | ACCESS-AM3 | ACCESS-rAM3 |
-|---|---|---|
-| Preset | [`AM3_N96E`][access.profiling.models.um_suites.AM3_N96E] | [`RAM3`][access.profiling.models.um_suites.RAM3] |
-| Control | [`AM3_N96E_SOURCE`][access.profiling.models.um_suites.AM3_N96E_SOURCE], `release-n96e-3.0` of the ACCESS-AM3 configurations | None: the suite is checked out by hand |
-| Manager | `CylcRoseManager` | `CylcRoseManager` |
-| Layout variables | `MAIN_ATM_PROCX` and `MAIN_ATM_PROCY` | `rg01_rs01_m01_nproc`, as `x,y` |
-| Threads and I/O server | `MAIN_OMPTHR_ATM` and `MAIN_IOS_NPROC` | None |
+| | ACCESS-AM3 | ACCESS-rAM3 | ACCESS-CM3 |
+|---|---|---|---|
+| Presets | [`AM3_N96E`][access.profiling.models.um_suites.AM3_N96E] and [`AM3_N512E`][access.profiling.models.um_suites.AM3_N512E] | [`RAM3`][access.profiling.models.um_suites.RAM3] | [`CM3_O25KM`][access.profiling.models.um_suites.CM3_O25KM] |
+| Controls | [`AM3_N96E_SOURCE`][access.profiling.models.um_suites.AM3_N96E_SOURCE] and [`AM3_N512E_SOURCE`][access.profiling.models.um_suites.AM3_N512E_SOURCE], `release-n96e-3.0` and `release-n512e-1.0` of the ACCESS-AM3 configurations | None: the suite is checked out by hand | [`CM3_O25KM_SOURCE`][access.profiling.models.um_suites.CM3_O25KM_SOURCE], the `cm3_O25km` branch of the ACCESS-CM3 configurations, as there is no release yet |
+| Manager | `CylcRoseManager` | `CylcRoseManager` | `CylcRoseManager` |
+| Layout variables | `MAIN_ATM_PROCX` and `MAIN_ATM_PROCY` | `rg01_rs01_m01_nproc`, as `x,y` | `ATM_NPROCX` and `ATM_NPROCY` |
+| Threads and I/O server | `MAIN_OMPTHR_ATM` and `MAIN_IOS_NPROC` | None | `FLUME_IOS_NPROC`; one thread per rank |
+| Other components | None | None | `OCN_NPROC` and `ICE_NPROC`, the cores of MOM6 and CICE6, added to the UM's |
 
-For both models, the UM timers of each task are read with the same two parsers, and give the logs
-`<task>_cycle<cycle>_UM_regions` and `<task>_cycle<cycle>_UM_total`. See [Cylc Rose suites](cylc-rose-suites.md)
-to learn how to prepare and analyse their experiments.
+For the three models, the UM timers of each task are read with the same two parsers, and give the logs
+`<task>_cycle<cycle>_UM_regions` and `<task>_cycle<cycle>_UM_total`. The logs that the ocean and the sea ice of
+ACCESS-CM3 write are not read. See [Cylc Rose suites](cylc-rose-suites.md) to learn how to prepare and analyse
+their experiments.
