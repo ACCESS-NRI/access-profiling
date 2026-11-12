@@ -12,8 +12,8 @@ these logs in the output of every run. Each log is then read into a dataset with
 the regions have the same names as in the log. You can see an example of such a dataset in
 [Concepts](index.md#profiling-data). Some logs are optional, which means that it is fine if a run does not write
 them. If you want to know how an application lists its logs, see
-[Adding an application](../developer-guide/adding-an-application.md#the-logs), and to read a new log format, see
-[Adding a parser](../developer-guide/adding-a-parser.md).
+[Adding an application](../developer-guide/adding-an-application.md#the-component), and to read a new log format,
+see [Adding a parser](../developer-guide/adding-a-parser.md).
 
 ## Metrics
 

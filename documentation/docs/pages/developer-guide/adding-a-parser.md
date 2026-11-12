@@ -132,8 +132,8 @@ LogSpec("timings", log_at("atmosphere/timings.txt"), TimingTableParser(), compon
 ```
 
 The path is relative to the output directory of a run, so adapt it to where your application writes the log. The
-fields are explained in [Adding an application](adding-an-application.md#the-logs). For a Rose suite, the parsers
-of the task logs go in the `parsers` of its `RoseSuiteConfiguration` instead.
+fields are explained in [Adding an application](adding-an-application.md#the-component). For a Rose suite, the
+parsers of the task logs go in the `parsers` of its `RoseSuiteConfiguration` instead.
 
 ## Testing it
 

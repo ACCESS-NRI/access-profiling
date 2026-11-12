@@ -6,14 +6,18 @@ has to answer a few questions. What are the components of the application? Which
 the name of the experiment that runs a given parallelisation layout? And how is a layout written into the files of the
 application, and read back from them? Some workflow engines need a little more. An application that is run with
 Payu, for example, is a subclass of
-[`PayuConfiguration`][access.profiling.payu_configuration.PayuConfiguration].
+[`PayuConfiguration`][access.profiling.payu_configuration.PayuConfiguration]. And if Payu couples its components
+as submodels, each with its own cores in `config.yaml`, the class is a subclass of
+[`SubmodelsConfiguration`][access.profiling.payu_configuration.SubmodelsConfiguration], which writes and reads the
+layout for you. What is left to write is a component for each code that the package does not know yet: what the
+code decomposes, what it writes, and which logs it produces.
 
-In this tutorial we write a configuration class for a small coupled application that is run with Payu. It has an
-atmosphere and an ocean, which run at the same time, each with its own domain. Most of what we write is needed for
-every application, and we point out what is specific to Payu.
-[`ESM16Configuration`][access.profiling.models.esm16.ESM16Configuration] and
-[`OM3Configuration`][access.profiling.models.om3.OM3Configuration], the configurations of two of the ACCESS models,
-are complete examples of the same thing.
+In this tutorial we write a component and a configuration class for a small coupled application that is run with
+Payu. Its atmosphere is a toy code, and its ocean is MOM5. The two run at the same time, each on its own cores. The
+atmosphere is a new component, and for the ocean we reuse the component that comes with the package.
+[`ESM16Configuration`][access.profiling.models.esm16.ESM16Configuration] is a complete example of the same thing,
+and the components of the ACCESS codes are in
+[`access.profiling.models.components`][access.profiling.models.components].
 
 Note that you do not need to write any code for a new configuration of an application that the package already
 supports: see [ACCESS models](../access/index.md) for the ACCESS models. The same is true for a new Rose suite,
@@ -21,161 +25,123 @@ which is a
 [`RoseSuiteConfiguration`][access.profiling.rose_configuration.RoseSuiteConfiguration] value, as shown in
 [Cylc Rose suites](../access/cylc-rose-suites.md#other-suites).
 
-## The configuration class
+## The component
 
-Our application is run with Payu, so its class is a subclass of `PayuConfiguration`. In the package, these
-classes are frozen dataclasses. Whatever changes from one configuration of the application to another is a field
-of the class, and each configuration is an instance. We start with the fields of ours:
+A component is a frozen dataclass, and a subclass of
+[`PayuComponent`][access.profiling.payu_configuration.PayuComponent]. It has two names. The `name` is the name of
+the component in the component tree, and so the name you use for it in an allocation strategy or in a
+`RegionGroup`. The `token` is the short form that appears in the names of the experiments. The component then says
+which grid the search decomposes for it, which rules every layout of it has to follow, which logs it writes, and
+what its own files have to say for a given layout. Our atmosphere decomposes its grid over a process grid, which it
+reads from its namelist, and writes FMS timers into a log of its own:
 
 ```python
 from dataclasses import dataclass
-from pathlib import Path
 
-from access.config import YAMLParser
-from access.config.parallel_component import ComponentLayout, ParallelComponent
-from access.config.parallel_constraints import FixedThreadsPerRankConstraint, MaxWastedCoreFractionConstraint
+from access.config.parallel_component import ComponentLayout
+from access.config.parallel_constraints import LocalConstraint
 from access.config.parallel_domain import Domain
 
-from access.profiling import FMSProfilingParser, PayuConfiguration
-from access.profiling.application import LogSpec
-from access.profiling.payu_configuration import payu_model_stdout
+from access.profiling import FMSProfilingParser, LogSpec, PayuComponent, log_at
+from access.profiling.payu_configuration import require_process_grid
 
 
 @dataclass(frozen=True)
-class ToyConfiguration(PayuConfiguration):
-    """A coupled application whose atmosphere and ocean run side by side, each decomposing a domain of its own."""
+class ToyAtmosphere(PayuComponent):
+    """A toy atmosphere, decomposing its grid over the process grid its namelist states."""
 
-    name: str
-    atmosphere: Domain
-    ocean: Domain
-    model_type: str = "access"
-    experiment_prefix: str = "toy-layout"
-```
+    grid: Domain
+    name = "atm"
+    token = "atm"
 
-Every application has a `name` and an `experiment_prefix`, and both are used in the names of the experiments. The
-`name` is different for each configuration of the application. The `experiment_prefix` is the same for the whole
-application, so that you can tell its experiments from those of other applications in the same working directory.
-`model_type` is specific to Payu. It is the name that Payu gives to the model, and the experiment generator checks
-that Payu knows it.
-
-We write the rest of the class in the following sections. There are five things to implement, and they are the
-same for every application.
-
-### The component tree
-
-[`parallel_component`][access.profiling.application.Application.parallel_component] describes how the
-application is parallelised. It returns a tree with the components of the application, their domains, and the
-rules that every layout has to follow for the application to run. Ours has two components that run at the same
-time, each with one thread per rank:
-
-```python
     @property
-    def parallel_component(self) -> ParallelComponent:
-        one_thread = (FixedThreadsPerRankConstraint(n_threads=1),)
-        return ParallelComponent(
-            name=f"Toy {self.name}",
-            subcomponents=(
-                ParallelComponent(name="atm", domain=self.atmosphere, local_constraints=one_thread),
-                ParallelComponent(name="ocn", domain=self.ocean, local_constraints=one_thread),
-            ),
-            local_constraints=(MaxWastedCoreFractionConstraint(max_fraction=0.1),),
-        )
-```
+    def domain(self) -> Domain:
+        return self.grid
 
-The names of the components are the ones you use in an allocation strategy. The name of the root stands for the
-whole application, and is used for the regions that are plotted against the cores of the whole job. Two cases
-deserve a mention. Components that take turns on the same cores, as the mediator and the sea ice of ACCESS-OM3 do,
-go under a parent with `CoreSharing.SHARED`. A component that chooses its own decomposition when it runs, as MOM6
-does with `AUTO_MASKTABLE`, has no domain. Only put here the rules that are always needed. Preferences, such as
-subdomains that are close to square, belong in the allocation strategy of a study.
+    @property
+    def local_constraints(self) -> tuple[LocalConstraint, ...]:
+        return ()
 
-### The logs
-
-[`logs`][access.profiling.application.Application.logs] lists the profiling logs that the components write. Each
-log is a [`LogSpec`][access.profiling.application.LogSpec]. Our ocean writes FMS timers into its standard output:
-
-```python
     @property
     def logs(self) -> tuple[LogSpec, ...]:
-        return (LogSpec("ocean", payu_model_stdout(), FMSProfilingParser(has_hits=True), component="ocn"),)
+        return (
+            LogSpec("atmosphere", log_at("atmosphere/timers.log"), FMSProfilingParser(has_hits=True), component=self.name),
+        )
+
+    def config_changes(self, layout: ComponentLayout) -> dict:
+        nx, ny = require_process_grid(self.name, layout)
+        return {"atmosphere/input.nml": {"decomposition_nml": {"nprocx": nx, "nprocy": ny}}}
 ```
 
 A log spec has four parts. The first is the name of the log, which is the name you use in `manager.data` and in a
 `RegionGroup`. The second says where to find the file in an output directory. The third is the parser that reads the
 log, and the fourth is the component that the log belongs to. [`log_at`][access.profiling.application.log_at] locates a
-file at a fixed path in the output directory, and `payu_model_stdout`, particular to Payu, locates the standard output
-Payu captured from the run. Mark a log `optional=True` if a run may legitimately not write it. Note that the Payu
-manager adds Payu's own job timings, as the `payu` log, to every Payu configuration.
+file at a fixed path in the output directory, and
+[`payu_model_stdout`][access.profiling.payu_configuration.payu_model_stdout], particular to Payu, locates the
+standard output Payu captured from the run. Mark a log `optional=True` if a run may legitimately not write it.
 
-### The experiment name
+`config_changes` returns the changes to make to the files of the component in order to run a layout. The changes
+are given for each file, with its path relative to the control directory, in the format of
+[experiment-generator](https://access-experiment-generator.access-hive.org.au/).
+[`require_process_grid`][access.profiling.payu_configuration.require_process_grid] reads the process grid that the
+search chose. If the layout has no process grid, which is the case for a layout read back from an experiment, it
+raises the `ValueError` that the contract asks for. Some components have nothing that the search can decompose,
+such as a data component or a serial one. These are
+[`PlainComponent`][access.profiling.payu_configuration.PlainComponent]s, with `n_ranks` set when the model fixes
+their number of ranks. Only put in the constraints of a component the rules that are always needed, as nobody can
+relax them later. Preferences, such as subdomains that are close to square, belong in the allocation strategy of a
+study.
 
-[`experiment_name`][access.profiling.application.Application.experiment_name] gives the name of the experiment
-that runs a layout. There are two rules: different layouts must have different names, and the same layout must
-always have the same name. The reason is that the name is used in many places. The Payu manager, for example, uses
-it for the git branch, the directory and the archive of the experiment. We build ours from the two process grids:
+## The configuration
 
-```python
-    def experiment_name(self, layout: ComponentLayout) -> str:
-        atm, ocn = layout.sub_layouts
-        atm_grid, ocn_grid = ("x".join(map(str, c.decomposition.grid.shape)) for c in (atm, ocn))
-        return f"{self.experiment_prefix}_{self.name}_atm_{atm_grid}_ocn_{ocn_grid}"
-```
-
-Note that the layout's `sub_layouts` come in the order of the tree's `subcomponents`.
-
-### Writing a layout and reading it back
-
-[`config_changes`][access.profiling.application.Application.config_changes] returns the changes to make to the
-files of the control in order to run a layout. The changes are given for each file, with its path relative to the
-control directory. The Payu manager applies them with the experiment generator, so for Payu they have to be in its
-format:
+Our application is coupled by Payu as submodels, so its configuration class is a subclass of
+`SubmodelsConfiguration`. In the package, these classes are frozen, keyword-only dataclasses. Whatever changes from
+one configuration of the application to another is a field of the class, and each configuration is an instance.
+The class has one thing to implement, `submodels`. It pairs each submodel that the control declares, in the same
+order as the control, with the component that runs in it:
 
 ```python
-    def config_changes(self, layout: ComponentLayout) -> dict:
-        atm, ocn = layout.sub_layouts
-        atm_x, atm_y = atm.decomposition.grid.shape
-        ocn_x, ocn_y = ocn.decomposition.grid.shape
-        return {
-            "config.yaml": {"submodels": [[{"ncpus": atm.n_cores}, {"ncpus": ocn.n_cores}]]},
-            "atmosphere/input.nml": {"decomposition_nml": {"nprocx": atm_x, "nprocy": atm_y}},
-            "ocean/input.nml": {"ocean_model_nml": {"layout": f"{ocn_x}, {ocn_y}"}},
-        }
-```
+from access.profiling import MOM5Component, PayuSubmodel, SubmodelsConfiguration
 
-Be aware of how the experiment generator deals with lists. A list has to be wrapped in another list, because the
-generator reads a simple list as one value for each experiment. The inner list is then merged with the list of the
-control item by item, and cut to the length of the new one. This means that you have to give every item of the
-list: [`ESM16Configuration`][access.profiling.models.esm16.ESM16Configuration] marks the
-coupler it changes nothing in with `"PRESERVE"`.
 
-[`parse_layout`][access.profiling.application.Application.parse_layout] does the opposite: it reads the layout of
-an experiment from its files. The manager needs this for the experiments that it did not create in the current
-session, in order to plot them against the cores of their components. If some information is not in the files,
-such as the process grids here, it is left out:
+@dataclass(frozen=True, kw_only=True)
+class ToyConfiguration(SubmodelsConfiguration):
+    """A coupled application whose toy atmosphere and MOM5 ocean run side by side."""
 
-```python
-    def parse_layout(self, output_dir: Path) -> ComponentLayout | None:
-        config_path = output_dir / "config.yaml"
-        if not config_path.is_file():
-            return None
-        submodels = YAMLParser().parse(config_path.read_text()).get("submodels", [])
-        components = tuple(
-            ComponentLayout(name=name, n_cores=n, n_ranks=n, threads_per_rank=1, decomposition=None)
-            for name, n in zip(("atm", "ocn"), (submodel["ncpus"] for submodel in submodels), strict=True)
-        )
-        cores = sum(component.n_cores for component in components)
-        return ComponentLayout(
-            name=f"Toy {self.name}",
-            n_cores=cores,
-            n_ranks=cores,
-            threads_per_rank=None,
-            decomposition=None,
-            sub_layouts=components,
+    name: str
+    atmosphere: Domain
+    ocean: Domain
+    model_type: str = "access"
+    model_name: str = "Toy"
+    experiment_prefix: str = "toy-layout"
+
+    @property
+    def submodels(self) -> tuple[PayuSubmodel, ...]:
+        return (
+            PayuSubmodel("atmosphere", "model", ToyAtmosphere(self.atmosphere)),
+            PayuSubmodel("ocean", "mom", MOM5Component(self.ocean)),
         )
 ```
 
-We recommend keeping the two methods next to each other. If you change what one of them writes, you also have to
-change what the other one reads.
+Every application has a `name` and an `experiment_prefix`, and both are used in the names of the experiments. The
+`name` is different for each configuration of the application. The `experiment_prefix` is the same for the whole
+application, so that you can tell its experiments from those of other applications in the same working directory.
+`model_name` and `name` together give the name of the root of the component tree, here `Toy demo`. This is the
+component you name in a `RegionGroup` for the regions that are timed over the whole job. `model_type` is specific
+to Payu. It is the name that Payu gives to the model, and the experiment generator checks that Payu knows it.
+
+A [`PayuSubmodel`][access.profiling.payu_configuration.PayuSubmodel] has the name and the Payu model type of the
+submodel, as they are in `config.yaml`, and the component. It can also name the executable to run the submodel
+with, if the configuration uses one other than the control's. A submodel in which the package changes nothing,
+such as a coupler, has no component. Its slot is then written as `"PRESERVE"`. This is needed because the
+experiment generator merges the list of submodels item by item, and cuts it to the length of the new list, so
+every slot has to be there. [`ESM16Configuration`][access.profiling.models.esm16.ESM16Configuration] does this
+for OASIS.
+
+Everything else follows from the submodels. The component tree puts the components side by side. The logs are
+those of the components. The name of an experiment is made of the tokens of the components and of what each one
+received. The changes request the whole budget of the layout as `ncpureq`, give every submodel its cores, and add
+the changes to the files of each component. And the layout is read back from `config.yaml`.
 
 ## Trying it out
 
@@ -185,6 +151,8 @@ component about half of them. The two directories of the manager are only exampl
 setup:
 
 ```python
+from pathlib import Path
+
 from access.config.parallel_allocation_strategies import FreeAllocation, RootAllocation
 from access.config.parallel_constraints import SubdomainAspectRatioConstraint
 
@@ -203,33 +171,46 @@ half = FreeAllocation(
     max_core_fraction=0.55,
     local_constraints=(SubdomainAspectRatioConstraint(max_ratio=1.5),),
 )
-layouts = manager.select_layouts(96, allocations=RootAllocation(subcomponents={"atm": half, "ocn": half}))
+layouts = manager.select_layouts(96, allocations=RootAllocation(subcomponents={"atm": half, "MOM5": half}))
 print(len(layouts))
 print(TOY_DEMO.experiment_name(layouts[0]))
 print(TOY_DEMO.config_changes(layouts[0]))
 ```
 
-This prints the number of layouts found, the name of the first one, and the changes that run it:
+Note that the strategy uses the names that the components give themselves, `atm` and `MOM5`. This prints the
+number of layouts found, the name of the first one, and the changes that run it:
 
 ```text
 7
-toy-layout_demo_atm_8x6_ocn_8x6
-{'config.yaml': {'submodels': [[{'ncpus': 48}, {'ncpus': 48}]]}, 'atmosphere/input.nml': {'decomposition_nml': {'nprocx': 8, 'nprocy': 6}}, 'ocean/input.nml': {'ocean_model_nml': {'layout': '8, 6'}}}
+toy-layout_demo_atm_8x6_mom_8x6
+{'config.yaml': {'ncpureq': 96, 'submodels': [[{'ncpus': 48}, {'ncpus': 48}]]}, 'atmosphere/input.nml': {'decomposition_nml': {'nprocx': 8, 'nprocy': 6}}, 'ocean/input.nml': {'ocean_model_nml': {'layout': '8, 6'}}}
 ```
+
+Be aware of how the experiment generator deals with lists. A list has to be wrapped in another list, because the
+generator reads a simple list as one value for each experiment.
+
+## Other arrangements
+
+Not every model has components that are submodels side by side. A model that is arranged differently is a direct
+subclass of `PayuConfiguration`, and implements the five members of `Application` itself, from whatever components
+it has. ACCESS-OM3 is such a model. Its mediator, its data components and its sea ice take turns on one range of
+cores, and NUOPC lays them out. [`OM3Configuration`][access.profiling.models.om3.OM3Configuration] shows how this
+is described.
 
 ## Adding it to the package
 
 The package ships the configuration classes of the ACCESS models. Each model has its own module in
-`src/access/profiling/models/`, with its class and its presets. If you want to add yours to the package:
+`src/access/profiling/models/`, with its class and its presets, and the components of their codes are in
+`src/access/profiling/models/components.py`. If you want to add yours to the package:
 
-1. Write the configuration class, a preset for each released configuration worth shipping, and a
-   `GitControlSource` for the release each preset describes. Give every public constant a docstring, so that it
-   appears in the API reference.
+1. Write the components for the codes that the package does not know yet, the configuration class, a preset for
+   each released configuration worth shipping, and a `GitControlSource` for the release each preset describes.
+   Give every public constant a docstring, so that it appears in the API reference.
 2. Export the class and the presets from `src/access/profiling/__init__.py`, and add them to `__all__`.
-3. Write the tests, in `tests/test_<model>.py`. The package's tests cover every line. The tests of ACCESS-ESM1.6
-   and ACCESS-OM3 show what to check: that every layout of the release can be found, that the names of the
-   layouts are distinct, that `config_changes` writes what the model reads, and that `parse_layout` reads it
-   back.
+3. Write the tests, in `tests/test_<model>.py`, and those of a new component in `tests/test_components.py`. The
+   package's tests cover every line. The tests of ACCESS-ESM1.6 and ACCESS-OM3 show what to check: that every
+   layout of the release can be found, that the names of the layouts are distinct, that `config_changes` writes
+   what the model reads, and that `parse_layout` reads it back.
 4. Add the module to the [Models](../api/models.md) page of the API reference, in
    `documentation/docs/pages/api/models.md`, and describe the model in
    `documentation/docs/pages/access/index.md`.

@@ -18,13 +18,12 @@ from conftest import decomposition_of, grid_of, select_layouts
 from access.profiling.cice5_parser import CICE5ProfilingParser
 from access.profiling.control import GitControlSource
 from access.profiling.fms_parser import FMSProfilingParser
+from access.profiling.models.components import MAX_SUBDOMAIN_ASPECT_RATIO
 from access.profiling.models.esm16 import (
     ESM16_1DEG_OCEAN,
-    ESM16_AMIP_SUBMODELS,
+    ESM16_AMIP,
     ESM16_CICE5,
     ESM16_CICE5_NAME,
-    ESM16_MAX_SUBDOMAIN_ASPECT_RATIO,
-    ESM16_MAX_WASTED_CORE_FRACTION,
     ESM16_MOM5_NAME,
     ESM16_N96_ATMOSPHERE,
     ESM16_PI_CONTROL,
@@ -32,6 +31,7 @@ from access.profiling.models.esm16 import (
     ESM16_UM7_NAME,
     ESM16Configuration,
 )
+from access.profiling.payu_configuration import MAX_WASTED_CORE_FRACTION
 from access.profiling.payu_manager import PayuManager
 from access.profiling.um_parser import UMProfilingParser, UMTotalRuntimeParser
 
@@ -228,10 +228,10 @@ def test_esm16_component_tree_bounds_layouts_on_its_own(esm16):
     assert layouts, "The component tree alone should still admit layouts."
 
     for layout in layouts:
-        assert layout.idle_cores / layout.n_cores <= ESM16_MAX_WASTED_CORE_FRACTION
+        assert layout.idle_cores / layout.n_cores <= MAX_WASTED_CORE_FRACTION
         for component in (layout.sub_layouts[0], layout.sub_layouts[1]):
             local_shape = decomposition_of(component).mean_local_shape
-            assert max(local_shape) / min(local_shape) <= ESM16_MAX_SUBDOMAIN_ASPECT_RATIO
+            assert max(local_shape) / min(local_shape) <= MAX_SUBDOMAIN_ASPECT_RATIO
         assert ESM16_CICE5.grid[0] % layout.sub_layouts[2].n_ranks == 0
 
 
@@ -316,8 +316,8 @@ class TestESM16ParseLayout:
         changes = esm16.config_changes(pi_control_layout)
         (submodels,) = changes["config.yaml"]["submodels"]
         written = [
-            {"name": name, **submodel}
-            for (name, _), submodel in zip(esm16.submodels, submodels, strict=True)
+            {"name": declared.name, **submodel}
+            for declared, submodel in zip(esm16.submodels, submodels, strict=True)
             if submodel != "PRESERVE"
         ]
         assert len(written) == 3, "the three components, with OASIS's slot preserved rather than written"
@@ -406,9 +406,7 @@ class TestESM16Logs:
         assert esm16.component_for_log("payu") is None, "not one of this configuration's"
 
     def test_a_configuration_declares_only_the_logs_its_components_write(self):
-        amip = ESM16Configuration(name="amip", atmosphere=ESM16_N96_ATMOSPHERE, submodels=ESM16_AMIP_SUBMODELS)
-
-        assert {spec.name for spec in amip.logs} == {"UM", "UM_Total_Walltime"}
+        assert {spec.name for spec in ESM16_AMIP.logs} == {"UM", "UM_Total_Walltime"}
 
 
 class TestESM16AMIP:
@@ -416,7 +414,7 @@ class TestESM16AMIP:
 
     @pytest.fixture()
     def amip(self):
-        return ESM16Configuration(name="amip", atmosphere=ESM16_N96_ATMOSPHERE, submodels=ESM16_AMIP_SUBMODELS)
+        return ESM16_AMIP
 
     def test_its_tree_is_the_atmosphere_alone(self, amip):
         tree = amip.parallel_component
@@ -478,7 +476,7 @@ def test_two_configurations_with_the_same_layout_name_different_experiments(esm1
 
 def test_a_configuration_needs_a_name_and_a_component():
     with pytest.raises(ValueError, match="name must be non-empty"):
-        ESM16Configuration(atmosphere=ESM16_N96_ATMOSPHERE)
+        ESM16Configuration(name="", atmosphere=ESM16_N96_ATMOSPHERE)
     with pytest.raises(ValueError, match="runs no component"):
         ESM16Configuration(name="empty")
 
@@ -486,11 +484,6 @@ def test_a_configuration_needs_a_name_and_a_component():
 def test_a_configuration_refuses_a_grid_it_could_not_write_out():
     with pytest.raises(ValueError, match="1-dimensional grid"):
         ESM16Configuration(name="odd", atmosphere=Domain((192,)))
-
-
-def test_a_configuration_refuses_submodels_for_components_it_does_not_run():
-    with pytest.raises(ValueError, match=f"\\['{ESM16_MOM5_NAME}'"):
-        ESM16Configuration(name="amip", atmosphere=ESM16_N96_ATMOSPHERE, submodels=(("ocean", ESM16_MOM5_NAME),))
 
 
 def test_the_released_ocean_grid_is_the_sea_ice_grid(esm16):
@@ -511,7 +504,6 @@ class TestESM16WithoutAnAtmosphere:
     atmosphere to read it.
     """
 
-    OCEAN_ICE_SUBMODELS = (("ocean", ESM16_MOM5_NAME), ("ice", ESM16_CICE5_NAME), ("coupler", None))
     OCEAN_ICE_TOTAL_CORES = 260
     OCEAN_ICE_ALLOCATIONS = RootAllocation(
         subcomponents={
@@ -522,9 +514,9 @@ class TestESM16WithoutAnAtmosphere:
 
     @pytest.fixture()
     def ocean_ice(self, esm16):
-        """The released coupled configuration with its atmosphere taken out, submodels and all."""
+        """The released coupled configuration with its atmosphere taken out, and so its submodel too."""
 
-        return dataclasses.replace(esm16, name="ocean-ice", atmosphere=None, submodels=self.OCEAN_ICE_SUBMODELS)
+        return dataclasses.replace(esm16, name="ocean-ice", atmosphere=None)
 
     @pytest.fixture()
     def ocean_ice_layout(self, ocean_ice):

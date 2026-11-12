@@ -9,37 +9,25 @@ and the one-degree ocean, but `amip` runs the atmosphere alone, and the coupled 
 their layout: piControl-2.1 and esm-historical-1.3 have the same grids, the same components *and* the same
 core counts, so a name derived from a layout is one string for two different experiments. Which configuration
 is being profiled therefore has to be part of what identifies an experiment, and it is.
+
+A configuration is put together from the components of `access.profiling.models.components`, the UM, MOM5 and
+CICE5, each the Payu submodel the control declares it as, with OASIS as a slot this package sets nothing in.
 """
 
-import logging
 from dataclasses import dataclass
-from pathlib import Path
 
-from access.config import YAMLParser
-from access.config.parallel_component import ComponentLayout, ParallelComponent
-from access.config.parallel_constraints import (
-    FixedThreadsPerRankConstraint,
-    MaxWastedCoreFractionConstraint,
-    ProcessGridDimEvenConstraint,
-    SubdomainAspectRatioConstraint,
-)
 from access.config.parallel_domain import Domain
 
-from access.profiling.application import LogSpec, log_at
-from access.profiling.cice5_parser import CICE5ProfilingParser
 from access.profiling.control import GitControlSource
-from access.profiling.fms_parser import FMSProfilingParser
 from access.profiling.models.cice import CICEPartitioning
-from access.profiling.payu_configuration import PayuConfiguration, payu_model_stdout
-from access.profiling.um_parser import UMProfilingParser, UMTotalRuntimeParser, um_stdout
+from access.profiling.models.components import CICEComponent, MOM5Component, UMComponent
+from access.profiling.payu_configuration import PayuSubmodel, SubmodelsConfiguration
 
-logger = logging.getLogger(__name__)
-
-ESM16_UM7_NAME: str = "UM7"
+ESM16_UM7_NAME: str = UMComponent.name
 """Component name of the atmosphere, UM7."""
-ESM16_MOM5_NAME: str = "MOM5"
+ESM16_MOM5_NAME: str = MOM5Component.name
 """Component name of the ocean, MOM5."""
-ESM16_CICE5_NAME: str = "CICE5"
+ESM16_CICE5_NAME: str = CICEComponent.name
 """Component name of the sea ice, CICE5."""
 
 ESM16_N96_ATMOSPHERE: Domain = Domain(shape=(192, 144))
@@ -67,43 +55,9 @@ is usually working from. Note that the other coupled releases run on the same co
 difficulty.
 """
 
-ESM16_MAX_SUBDOMAIN_ASPECT_RATIO: float = 4.0
-"""Ceiling on the aspect ratio of a UM or MOM5 rank's subdomain, its longest extent over its shortest.
 
-Like `ESM16_MAX_WASTED_CORE_FRACTION`, this bounds what counts as a reasonable ACCESS-ESM1.6 layout at all, rather
-than the tolerances of any particular study. Constraints are cumulative and a caller can only tighten them, so both
-are set loosely: a study that wants near-square subdomains or no waste at all says so in its own allocation
-strategy.
-"""
-ESM16_MAX_WASTED_CORE_FRACTION: float = 0.1
-"""Ceiling on the fraction of its cores an ACCESS-ESM1.6 layout may leave idle.
-
-Set loosely, for the reason `ESM16_MAX_SUBDOMAIN_ASPECT_RATIO` gives: a study that wants no waste at all says so in
-its own allocation strategy.
-"""
-
-ESM16_COUPLED_SUBMODELS: tuple[tuple[str, str | None], ...] = (
-    ("atmosphere", ESM16_UM7_NAME),
-    ("ocean", ESM16_MOM5_NAME),
-    ("ice", ESM16_CICE5_NAME),
-    ("coupler", None),
-)
-"""The submodels the coupled releases declare in config.yaml, in the order they declare them.
-
-The experiment generator merges list edits positionally and then truncates to the length of the edit, so a
-three-element submodels change against this four-element list would silently delete the coupler: every slot has
-to be accounted for, and the one this package sets nothing in is marked PRESERVE. OASIS takes no cores and changes
-no layout, so it is a slot here rather than a component of the tree.
-"""
-ESM16_AMIP_SUBMODELS: tuple[tuple[str, str | None], ...] = (("atmosphere", ESM16_UM7_NAME),)
-"""The submodels release-amip-1.0 declares: the atmosphere alone, with no ocean, no sea ice and nothing to couple."""
-
-# The marker the experiment generator reads as "leave this slot as the control has it".
-_PRESERVE: str = "PRESERVE"
-
-
-@dataclass(frozen=True)
-class ESM16Configuration(PayuConfiguration):
+@dataclass(frozen=True, kw_only=True)
+class ESM16Configuration(SubmodelsConfiguration):
     """One configuration of ACCESS-ESM1.6: which components it runs, and the grid each one runs on.
 
     Args:
@@ -117,344 +71,44 @@ class ESM16Configuration(PayuConfiguration):
         sea_ice (CICEPartitioning | None): How CICE5 divides its grid, or None if the configuration has no
             sea ice. What the search may choose about it follows from the partitioning rather than being
             assumed here.
-        submodels (tuple[tuple[str, str | None], ...]): The Payu submodels the control declares, in order,
-            each paired with the component it is or with None where it is one this package sets nothing in.
-            Both the order and the length matter: they are what a layout's core counts are merged against.
-        model_type (str): The model type identifier, as Payu defines it.
-        experiment_prefix (str): Prefix for the names of experiments generated for this configuration.
         sea_ice_executable (str | None): The executable the sea ice submodel is to run, where the
             configuration names one. None leaves the control's own.
+        model_type (str): The model type identifier, as Payu defines it.
+        model_name (str): The model's name, which names the root of the component tree with `name`.
+        experiment_prefix (str): Prefix for the names of experiments generated for this configuration.
 
     Raises:
-        ValueError: If the configuration has no component at all, if a grid that is decomposed over a process
-            grid is not two-dimensional, or if the submodels name a component the configuration does not run.
+        ValueError: If the name is empty, if the configuration has no component at all, or if a grid that is
+            decomposed over a process grid is not two-dimensional.
     """
 
-    # name is defaulted because every field after it is, not because it is optional: __post_init__ refuses
-    # an empty one.
-    name: str = ""
+    name: str
     atmosphere: Domain | None = None
     ocean: Domain | None = None
     sea_ice: CICEPartitioning | None = None
-    submodels: tuple[tuple[str, str | None], ...] = ESM16_COUPLED_SUBMODELS
-    model_type: str = "access-esm1.6"
-    experiment_prefix: str = "esm1p6-layout"
     sea_ice_executable: str | None = "cice_access.exe"
-
-    def __post_init__(self) -> None:
-        if not self.name:
-            raise ValueError(
-                "ESM16Configuration.name must be non-empty: it is what tells one released configuration's "
-                "experiments from another's, and two of them can have identical layouts."
-            )
-        if self.atmosphere is None and self.ocean is None and self.sea_ice is None:
-            raise ValueError(
-                f"ACCESS-ESM1.6 configuration {self.name!r} runs no component. There is nothing to profile."
-            )
-        for component, domain in ((ESM16_UM7_NAME, self.atmosphere), (ESM16_MOM5_NAME, self.ocean)):
-            # Checked here rather than where the grid is decomposed, so a configuration that cannot be
-            # written out is refused when it is built instead of once a layout has been found for it.
-            if domain is not None and domain.ndim != 2:
-                raise ValueError(
-                    f"ACCESS-ESM1.6 configuration {self.name!r} gives {component!r} a {domain.ndim}-"
-                    f"dimensional grid {domain.shape}. Its decomposition is written as a two-dimensional "
-                    "process grid, so the grid it decomposes has to be one too."
-                )
-        running = set(self._components)
-        declared = {component for _, component in self.submodels if component is not None}
-        if not declared <= running:
-            raise ValueError(
-                f"ACCESS-ESM1.6 configuration {self.name!r} declares submodels for {sorted(declared - running)}, "
-                f"which it does not run. It runs {sorted(running)}."
-            )
+    model_type: str = "access-esm1.6"
+    model_name: str = "ACCESS-ESM1.6"
+    experiment_prefix: str = "esm1p6-layout"
 
     @property
-    def _components(self) -> tuple[str, ...]:
-        """Returns the components this configuration runs, in the order the component tree declares them."""
-        present = ((ESM16_UM7_NAME, self.atmosphere), (ESM16_MOM5_NAME, self.ocean), (ESM16_CICE5_NAME, self.sea_ice))
-        return tuple(name for name, component in present if component is not None)
+    def submodels(self) -> tuple[PayuSubmodel, ...]:
+        """Returns the submodels the control declares, in its order, each with the component that runs in it.
 
-    @property
-    def parallel_component(self) -> ParallelComponent:
-        """Returns the component tree describing how this configuration is parallelised.
-
-        The components run side by side, each on a range of cores of its own, so they are siblings and their
-        cores add up. Only the ones the configuration runs are there: AMIP's tree is the atmosphere alone.
-
-        The tree carries only the requirements that hold for every layout of this configuration, whatever is
-        being studied. Constraints are cumulative and cannot be relaxed by a caller, so anything that is a
-        choice rather than a requirement belongs in the allocation strategy instead.
-
-        Returns:
-            ParallelComponent: Root of the component tree.
+        The order is the one every ACCESS-ESM1.6 control declares: atmosphere, ocean, ice, coupler. OASIS takes
+        no cores and changes no layout, so it is a slot marked PRESERVE rather than a component, and it is there
+        whenever there is something to couple, that is, more than one component.
         """
-        # ACCESS-ESM1.6 is built without OpenMP support, so every component runs one thread per rank.
-        no_threads = (FixedThreadsPerRankConstraint(n_threads=1),)
-        subcomponents = []
+        submodels = []
         if self.atmosphere is not None:
-            subcomponents.append(
-                ParallelComponent(
-                    name=ESM16_UM7_NAME,
-                    domain=self.atmosphere,
-                    local_constraints=no_threads
-                    + (
-                        ProcessGridDimEvenConstraint(dim=0),  # The UM requires an even number of processes along x.
-                        SubdomainAspectRatioConstraint(max_ratio=ESM16_MAX_SUBDOMAIN_ASPECT_RATIO),
-                    ),
-                )
-            )
+            submodels.append(PayuSubmodel("atmosphere", "um", UMComponent(self.atmosphere)))
         if self.ocean is not None:
-            subcomponents.append(
-                ParallelComponent(
-                    name=ESM16_MOM5_NAME,
-                    domain=self.ocean,
-                    local_constraints=no_threads
-                    + (SubdomainAspectRatioConstraint(max_ratio=ESM16_MAX_SUBDOMAIN_ASPECT_RATIO),),
-                )
-            )
+            submodels.append(PayuSubmodel("ocean", "mom", MOM5Component(self.ocean)))
         if self.sea_ice is not None:
-            subcomponents.append(
-                ParallelComponent(
-                    name=ESM16_CICE5_NAME,
-                    domain=self.sea_ice.domain,
-                    local_constraints=no_threads + self.sea_ice.local_constraints,
-                )
-            )
-        return ParallelComponent(
-            name=f"ACCESS-ESM1.6 {self.name}",
-            subcomponents=tuple(subcomponents),
-            local_constraints=(MaxWastedCoreFractionConstraint(max_fraction=ESM16_MAX_WASTED_CORE_FRACTION),),
-        )
-
-    @property
-    def logs(self) -> tuple[LogSpec, ...]:
-        """Returns the profiling logs this configuration writes, one per component that writes one.
-
-        The UM's is read twice, once for its regions and once for its total run time, so two logs name the
-        same component.
-        """
-        specs: list[LogSpec] = []
-        if self.atmosphere is not None:
-            specs.append(LogSpec("UM", um_stdout(), UMProfilingParser(), component=ESM16_UM7_NAME))
-            specs.append(LogSpec("UM_Total_Walltime", um_stdout(), UMTotalRuntimeParser(), component=ESM16_UM7_NAME))
-        if self.ocean is not None:
-            specs.append(
-                LogSpec("MOM5", payu_model_stdout(), FMSProfilingParser(has_hits=False), component=ESM16_MOM5_NAME)
-            )
-        if self.sea_ice is not None:
-            specs.append(LogSpec("CICE5", log_at("ice/ice_diag.d"), CICE5ProfilingParser(), component=ESM16_CICE5_NAME))
-        return tuple(specs)
-
-    def _component_layouts(self, layout: ComponentLayout) -> dict[str, ComponentLayout]:
-        """Returns what each component was given, keyed by component.
-
-        Args:
-            layout (ComponentLayout): Layout of the components, as returned by the layout search.
-
-        Returns:
-            dict[str, ComponentLayout]: The layout of each component this configuration runs.
-
-        Raises:
-            ValueError: If the layout is not a layout of this configuration.
-        """
-        components = self._components
-        if len(layout.sub_layouts) != len(components):
-            raise ValueError(
-                f"The layout {layout.name!r} has {len(layout.sub_layouts)} component(s), but ACCESS-ESM1.6 "
-                f"configuration {self.name!r} runs {len(components)}: {list(components)}."
-            )
-        # ComponentLayout.sub_layouts is documented to come in the order of ParallelComponent.subcomponents,
-        # which is the order _components states, so zipping is the inverse of how the tree was built.
-        return dict(zip(components, layout.sub_layouts, strict=True))
-
-    def experiment_name(self, layout: ComponentLayout) -> str:
-        """Returns the name of the experiment holding a given layout.
-
-        The name records the configuration and then what each component received: its process grid where it
-        decomposes one, and its cores otherwise. It is therefore distinct for every distinct layout, and the
-        same layout always produces the same name, which is what lets a manager tell whether it already has
-        an experiment for a layout before building one. The configuration is part of it because the layout is
-        not enough: two released configurations run the same components, on the same grids, on the same
-        number of cores.
-
-        Args:
-            layout (ComponentLayout): Layout of the components, as returned by the layout search.
-
-        Returns:
-            str: The experiment name.
-
-        Raises:
-            ValueError: If the layout is not a layout of this configuration.
-        """
-        tokens = {ESM16_UM7_NAME: "atm", ESM16_MOM5_NAME: "mom", ESM16_CICE5_NAME: "ice"}
-        parts = []
-        for component, sub_layout in self._component_layouts(layout).items():
-            if sub_layout.decomposition is None:
-                parts.append(f"{tokens[component]}_{sub_layout.n_ranks}")
-            else:
-                parts.append(f"{tokens[component]}_" + "x".join(str(ranks) for ranks in sub_layout.decomposition.grid))
-        return f"{self.experiment_prefix}_{self.name}_{'_'.join(parts)}"
-
-    def config_changes(self, layout: ComponentLayout) -> dict:
-        """Returns the configuration file changes needed to run this configuration with a given layout.
-
-        Every component's cores go into config.yaml's submodels, in the order the control declares them and
-        with a slot for every one of them, and each component that decomposes a grid additionally has the
-        decomposition the search chose written into its own configuration file.
-
-        The job is asked for the whole budget of the layout, idle cores included, through ncpureq. Payu would
-        otherwise request what the submodels sum to, and only rounds that up to whole nodes past the first
-        one: two layouts of the same single node budget would then run as jobs of different sizes, and
-        parse_ncpus, which reads back what the job was given, would set them apart. Asking for the budget is
-        what makes the job occupy what the study meant it to, as the OM3 configuration does with ncpus.
-
-        Args:
-            layout (ComponentLayout): Layout of the components, as returned by the layout search.
-
-        Returns:
-            dict: Changes to apply, keyed by the path of each configuration file relative to the control
-                directory.
-
-        Raises:
-            ValueError: If the layout is not a layout of this configuration, or if a component that writes
-                a process grid carries no decomposition - which is what a layout read back from a
-                configuration looks like, since those state cores and not grids.
-        """
-        layouts = self._component_layouts(layout)
-        changes: dict = {"config.yaml": {"ncpureq": layout.n_cores, "submodels": [self._submodel_changes(layouts)]}}
-
-        atmosphere = layouts.get(ESM16_UM7_NAME)
-        if atmosphere is not None:
-            nx, ny = _process_grid(ESM16_UM7_NAME, atmosphere)
-            changes["atmosphere/um_env.yaml"] = {
-                "UM_ATM_NPROCX": str(nx),
-                "UM_ATM_NPROCY": str(ny),
-                "UM_NPES": str(atmosphere.n_ranks),
-            }
-
-        ocean = layouts.get(ESM16_MOM5_NAME)
-        if ocean is not None:
-            nx, ny = _process_grid(ESM16_MOM5_NAME, ocean)
-            # A string holding the whole right-hand side, not a list of the two extents: the experiment
-            # generator renders a namelist value by str(), so a Python list writes its own brackets into the
-            # file and MOM5 is handed `layout = [16, 15]`, which is not Fortran.
-            changes["ocean/input.nml"] = {"ocean_model_nml": {"layout": f"{nx}, {ny}"}}
-
-        # The configuration decides whether there is a sea ice at all, and _component_layouts takes the keys
-        # of `layouts` from the same field, so narrowing the partitioning narrows the layout with it.
-        if self.sea_ice is not None:
-            sea_ice = layouts[ESM16_CICE5_NAME]
-            changes[self.sea_ice.namelist_path] = {
-                self.sea_ice.namelist_group: self.sea_ice.namelist_changes(sea_ice.n_ranks, sea_ice.decomposition)
-            }
-        return changes
-
-    def _submodel_changes(self, layouts: dict[str, ComponentLayout]) -> list:
-        """Returns the submodels list a layout comes to, one slot per submodel the control declares.
-
-        A slot this configuration sets nothing in is marked PRESERVE rather than left out: the experiment
-        generator merges list edits positionally and truncates to the length of the edit, so a shorter list
-        would silently delete whatever the control declared after it - the OASIS coupler, for one.
-
-        Args:
-            layouts (dict[str, ComponentLayout]): What each component was given.
-
-        Returns:
-            list: The submodels list, ready to merge against the control's own.
-        """
-        slots: list = []
-        for _, component in self.submodels:
-            sub_layout = layouts.get(component) if component is not None else None
-            if sub_layout is None:
-                slots.append(_PRESERVE)
-                continue
-            slot: dict = {"ncpus": sub_layout.n_cores}
-            if component == ESM16_CICE5_NAME and self.sea_ice_executable is not None:
-                slot["exe"] = [self.sea_ice_executable]
-            slots.append(slot)
-        return slots
-
-    def parse_layout(self, output_dir: Path) -> ComponentLayout | None:
-        """Returns the layout an experiment ran, from the Payu submodels its config.yaml declares.
-
-        Payu gives each submodel its cores outright, so the configuration states this directly. What it does
-        not state is how a component divides its domain, so the layout that comes back carries no
-        decompositions.
-
-        A submodel this configuration does not declare is left out rather than guessed at, and a file naming
-        none of them produces nothing at all.
-
-        Args:
-            output_dir (Path): Directory holding the configuration files. Must contain a config.yaml.
-
-        Returns:
-            ComponentLayout | None: The layout, or None if config.yaml names no component of this
-                configuration.
-        """
-        config_path = output_dir / "config.yaml"
-        payu_config = YAMLParser().parse(config_path.read_text())
-        components = {name: component for name, component in self.submodels if component is not None}
-
-        sub_layouts = []
-        for submodel in payu_config.get("submodels", []):
-            component = components.get(submodel.get("name"))
-            if component is None:
-                logger.debug(f"Submodel {submodel.get('name')!r} of {config_path} is not a component of this model.")
-                continue
-            n_cores = submodel.get("ncpus")
-            if not n_cores:
-                logger.debug(f"Submodel {submodel.get('name')!r} of {config_path} states no core count.")
-                continue
-            # One thread per rank throughout this model, as the tree requires, so ranks are cores.
-            sub_layouts.append(
-                ComponentLayout(
-                    name=component, n_cores=n_cores, n_ranks=n_cores, threads_per_rank=1, decomposition=None
-                )
-            )
-
-        if not sub_layouts:
-            logger.debug(f"No component of this model is named among the submodels of {config_path}.")
-            return None
-
-        # The components run side by side, so the root spends what they spend between them. Any cores left
-        # idle to fill a node are not the layout's; the manager's parse_ncpus is what reports those.
-        used = sum(sub_layout.n_cores for sub_layout in sub_layouts)
-        return ComponentLayout(
-            name=f"ACCESS-ESM1.6 {self.name}",
-            n_cores=used,
-            n_ranks=used,
-            threads_per_rank=None,
-            decomposition=None,
-            sub_layouts=tuple(sub_layouts),
-        )
-
-
-def _process_grid(component: str, sub_layout: ComponentLayout) -> tuple[int, int]:
-    """Returns the process grid a component was given, refusing a layout that states none.
-
-    Only a layout the search produced carries a decomposition. One read back from a configuration states
-    what each component was given and not how it divided its domain, so it cannot be written out again -
-    see Application.parse_layout. Saying so here keeps config_changes raising the ValueError its docstring
-    promises rather than an AttributeError from deep inside it.
-
-    Args:
-        component (str): The component, for the error message.
-        sub_layout (ComponentLayout): What that component was given.
-
-    Returns:
-        tuple[int, int]: The two extents of its process grid.
-
-    Raises:
-        ValueError: If the layout states no decomposition for this component.
-    """
-    if sub_layout.decomposition is None:
-        raise ValueError(
-            f"The layout of {component!r} states no decomposition, so there is no process grid to write "
-            "into its configuration files. Only a layout the search produced carries one; a layout read "
-            "back from a configuration does not."
-        )
-    nx, ny = sub_layout.decomposition.grid
-    return nx, ny
+            submodels.append(PayuSubmodel("ice", "cice5", CICEComponent(self.sea_ice), exe=self.sea_ice_executable))
+        if len(submodels) > 1:
+            submodels.append(PayuSubmodel("coupler", "oasis"))
+        return tuple(submodels)
 
 
 ESM16_PI_CONTROL: ESM16Configuration = ESM16Configuration(
@@ -463,10 +117,10 @@ ESM16_PI_CONTROL: ESM16Configuration = ESM16Configuration(
     ocean=ESM16_1DEG_OCEAN,
     sea_ice=ESM16_CICE5,
 )
-"""The one ACCESS-ESM1.6 configuration this package ships: the pre-industrial control.
+"""The pre-industrial control: the coupled configuration, which most of ACCESS-ESM1.6's releases share.
 
-The other released configurations - historical, amip, esm-piControl, the scenario runs - are reached by replacing
-what differs, which for the coupled ones is the name alone:
+The other coupled configurations - historical, esm-piControl, the scenario runs - have the same grids, the same
+components and the same core counts, and are reached by replacing the name alone:
 
 ```python
 replace(ESM16_PI_CONTROL, name="historical")
@@ -475,11 +129,16 @@ replace(ESM16_PI_CONTROL, name="historical")
 paired with a control of their own:
 
 ```python
-GitControlSource(ESM16_CONFIGS_REPOSITORY, "release-historical-1.1")
+GitControlSource(ESM16_CONFIGS_REPOSITORY, "release-historical-1.3")
 ```
 
-Shipping one rather than a dozen is deliberate: a preset per config-repo release would tie a release of this
-package to every release of that one.
+`ESM16_AMIP` is the one released configuration with other components.
+"""
+
+ESM16_AMIP: ESM16Configuration = ESM16Configuration(name="amip", atmosphere=ESM16_N96_ATMOSPHERE)
+"""The AMIP configuration: the UM on the N96 grid alone, with no ocean, no sea ice and nothing to couple.
+
+`release-amip-1.0` runs it on 208 cores, as a 16 x 13 process grid.
 """
 
 ESM16_CONFIGS_REPOSITORY: str = "git@github.com:ACCESS-NRI/access-esm1.6-configs.git"
