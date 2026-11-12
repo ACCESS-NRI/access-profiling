@@ -9,8 +9,10 @@ access-profiling comes with everything needed to profile the ACCESS climate mode
 - presets for each model, together with the official release that each describes, to use as the control.
 
 Each preset is described below. You will find the components of the model, the rules that every parallelisation layout
-follows, the logs that a run writes, and the number of cores used by the release. For the full details, see the [Models
-API](../api/models.md).
+follows, the logs that a run writes, and the number of cores used by the release. If your configuration is on a
+branch, a fork or a commit that the presets do not describe, you can read it from the files of the control with the
+`from_control` of its model, as [Experiments with Payu](payu.md#reading-a-configuration-from-its-control) shows. For
+the full details, see the [Models API](../api/models.md).
 
 ## ACCESS-ESM1.6
 
@@ -144,10 +146,10 @@ leaves at most 10% of its cores idle, and gives each CICE6 rank 5 to 8 blocks. T
 control of the configuration, and their size is chosen from the number of ranks.
 
 To run a layout, a few files are changed. `config.yaml` requests the total number of cores as `ncpus`, the
-`PELAYOUT_attributes` of `nuopc.runconfig` get the cores of each component, and `ice_in` gets the block size. MOM6
-chooses its own decomposition, so there is no process grid for the ocean and `MOM_input` is not changed. Note,
-however, that the 25 km release, the 8 km configuration and the pan-Antarctic ones fix a `LAYOUT` and a `MASKTABLE`
-in `MOM_input`. A study has to remove them with its control options, as shown in [Generating the
+`PELAYOUT_attributes` of `nuopc.runconfig` get the cores of each component, and `ice_in` gets the grid and the
+block size. MOM6 chooses its own decomposition, so there is no process grid for the ocean and `MOM_input` is not
+changed. Note, however, that the 25 km release, the 8 km configuration and the pan-Antarctic ones fix a `LAYOUT`
+and a `MASKTABLE` in `MOM_input`. A study has to remove them with its control options, as shown in [Generating the
 experiments](../user-guide/experiments.md#generating-the-experiments).
 
 | Log | Parser | Component | Read from |

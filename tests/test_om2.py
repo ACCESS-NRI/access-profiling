@@ -223,3 +223,54 @@ def test_om2_generate_scaling_experiments(mock_experiment_generator):
     config = mock_experiment_generator.call_args[0][0]
     assert config["model_type"] == "access-om2"
     assert ONE_DEGREE_BRANCH in manager.experiments
+
+
+RUNTIME_CICE_IN = """&domain_nml
+    block_size_x = 15
+    block_size_y = 300
+    distribution_type = 'cartesian'
+    nprocs = 24
+    nx_global = 360
+    ny_global = 300
+    processor_shape = 'slenderX1'
+/
+"""
+
+
+def _om2_control(path: Path, cice_in: str, types: tuple[str, str, str] = ("yatm", "mom", "cice5")) -> Path:
+    """Writes a control the way the ACCESS-OM2 releases are laid out, as far as the reader looks."""
+
+    lines = ["jobname: 1deg_jra55_ryf", "model: access-om2", "submodels:"]
+    for name, model, ncpus in zip(("atmosphere", "ocean", "ice"), types, (1, 216, 24), strict=True):
+        lines += [f"  - name: {name}", f"    model: {model}", f"    ncpus: {ncpus}"]
+    (path / "config.yaml").write_text("\n".join(lines) + "\n")
+    (path / "ice").mkdir()
+    (path / "ice" / "cice_in.nml").write_text(cice_in)
+    return path
+
+
+class TestOM2FromControl:
+    """Reading a configuration off a control's own files."""
+
+    def test_a_runtime_grid_control_reads_as_the_preset_of_its_resolution(self, tmp_path):
+        control = _om2_control(tmp_path, RUNTIME_CICE_IN)
+
+        assert OM2Configuration.from_control(control, name="1deg") == OM2_1DEG
+        assert OM2Configuration.from_control(control).name == "1deg_jra55_ryf", "the jobname, with no name given"
+
+    def test_a_control_whose_cice5_is_built_for_its_grid_is_refused(self, tmp_path):
+        """The -4.1 and _bgc releases: their namelist states no grid, so nothing here can tell it."""
+
+        control = _om2_control(
+            tmp_path,
+            "&domain_nml\n    distribution_type = 'cartesian'\n    nprocs = 24\n    processor_shape = 'slenderX1'\n/\n",
+        )
+
+        with pytest.raises(ValueError, match="access-om2/2026.08.002"):
+            OM2Configuration.from_control(control)
+
+    def test_a_control_of_another_model_is_refused(self, tmp_path):
+        control = _om2_control(tmp_path, RUNTIME_CICE_IN, types=("um", "mom", "cice5"))
+
+        with pytest.raises(ValueError, match="where ACCESS-OM2 runs yatm, mom and cice5"):
+            OM2Configuration.from_control(control)

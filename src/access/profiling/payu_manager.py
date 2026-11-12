@@ -19,6 +19,7 @@ from access.config import YAMLParser
 from experiment_generator.experiment_generator import ExperimentGenerator
 from experiment_runner.experiment_runner import ExperimentRunner
 
+from access.profiling.control import ControlSource
 from access.profiling.experiment import ExperimentPlan, ProfilingLog
 from access.profiling.manager import ProfilingExperiment, ProfilingExperimentStatus, ProfilingManager
 from access.profiling.payu_configuration import PayuConfiguration
@@ -34,6 +35,81 @@ _OUTPUT_DIR = re.compile(r"output(\d+)")
 # the body of that function, and exposes them nowhere: if Payu ever changes them, these have to follow.
 _PAYU_DEFAULT_NODE_SIZE = 48
 _PAYU_DEFAULT_NCPUS = 1
+
+
+def _generator_config(
+    model_type: str,
+    control: ControlSource,
+    work_dir: Path,
+    repository_directory: str,
+    control_options: dict,
+    perturbations: dict,
+) -> dict:
+    """Returns the configuration the experiment generator is run with.
+
+    The generator clones the control into the working directory, under the repository directory, at the
+    control's start point, and branches `ctrl` from it; the control options are applied to that branch, and
+    then each perturbation becomes a branch of its own.
+
+    Args:
+        model_type (str): The model type identifier, as Payu defines it.
+        control (ControlSource): Where the control comes from. Must state a start point.
+        work_dir (Path): The working directory of the study.
+        repository_directory (str): The name the clone takes under the working directory.
+        control_options (dict): The changes made to the control before any experiment is created from it,
+            keyed by file.
+        perturbations (dict): The perturbation blocks, keyed by experiment number.
+
+    Returns:
+        dict: The configuration.
+
+    Raises:
+        ValueError: If the control states no start point.
+    """
+    if control.start_point is None:
+        raise ValueError(
+            f"The control {control.label!r} states no start point. The Payu experiment generator "
+            "clones the control and branches every experiment from a particular state of it, so it has "
+            "to be told which: give the control a tag, a branch, a commit or a revision."
+        )
+    return {
+        "model_type": model_type,
+        "repository_url": control.origin,
+        "start_point": control.start_point,
+        "test_path": str(work_dir),
+        "repository_directory": repository_directory,
+        "control_branch_name": "ctrl",
+        "Control_Experiment": control_options,
+        "Perturbation_Experiment": perturbations,
+    }
+
+
+def clone_control(work_dir: Path, control: ControlSource, model_type: str) -> Path:
+    """Clones a control into a working directory, the way generating a study does, and returns where it is.
+
+    A configuration can be read out of a control's own files, with `from_control`, but the manager that
+    profiles it cannot be built before the configuration is, and it is the manager's generation that clones
+    the control. This makes the same clone first: under the control's directory in the working directory, at
+    the control's start point, on a branch `ctrl`, through the experiment generator, so that generating the
+    study finds the clone there and reuses it. A control already cloned is left as it is. This is the one place
+    the package fetches anything, and it is called explicitly: a control that needs credentials prompts here,
+    from a terminal, rather than from a configuration being built. An `ExistingDirectoryControlSource` needs
+    no clone: its files are read from `control.path`.
+
+    Args:
+        work_dir (Path): The working directory of the study.
+        control (ControlSource): Where the control comes from. Must state a start point.
+        model_type (str): The model type identifier, as Payu defines it: the `model_type` of the configuration
+            the control is to be read into, which the generator checks against Payu's list of models.
+
+    Returns:
+        Path: The clone, `work_dir / control.directory`.
+
+    Raises:
+        ValueError: If the control states no start point.
+    """
+    ExperimentGenerator(_generator_config(model_type, control, work_dir, control.directory, {}, {})).run()
+    return work_dir / control.directory
 
 
 def _walltime_string(hours: float) -> str:
@@ -192,26 +268,14 @@ class PayuManager(ProfilingManager[PayuConfiguration]):
                 "Cannot create experiments without a control: every experiment is a branch of one, so there "
                 "is nothing to clone. Pass a ControlSource to this manager."
             )
-        if control.start_point is None:
-            raise ValueError(
-                f"The control {control.label!r} states no start point. The Payu experiment generator "
-                "clones the control and branches every experiment from a particular state of it, so it has "
-                "to be told which: give the control a tag, a branch, a commit or a revision."
-            )
-
-        generator_config = {
-            "model_type": self.application.model_type,
-            "repository_url": control.origin,
-            "start_point": control.start_point,
-            "test_path": str(self.work_dir),
-            "repository_directory": self._repository_directory,
-            "control_branch_name": "ctrl",
-            "Control_Experiment": control_options if control_options is not None else {},
-            "Perturbation_Experiment": {
-                f"Experiment_{seqnum}": self._perturbation_block(plan) for seqnum, plan in enumerate(plans, start=1)
-            },
-        }
-
+        generator_config = _generator_config(
+            self.application.model_type,
+            control,
+            self.work_dir,
+            self._repository_directory,
+            control_options if control_options is not None else {},
+            {f"Experiment_{seqnum}": self._perturbation_block(plan) for seqnum, plan in enumerate(plans, start=1)},
+        )
         ExperimentGenerator(generator_config).run()
 
         # The layout goes with each one: this is the whole of it, grids and all, and an experiment asked

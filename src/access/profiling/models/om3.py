@@ -23,7 +23,7 @@ import logging
 from dataclasses import dataclass, replace
 from pathlib import Path
 
-from access.config import NUOPCParser
+from access.config import MOM6InputParser, NUOPCParser
 from access.config.parallel_component import ComponentLayout, CoreSharing, ParallelComponent
 
 from access.profiling.application import LogSpec, log_at
@@ -32,7 +32,13 @@ from access.profiling.esmf_parser import ESMFSummaryProfilingParser
 from access.profiling.fms_parser import FMSProfilingParser
 from access.profiling.models.cice import CICEPartitioning
 from access.profiling.models.components import CICEComponent
-from access.profiling.payu_configuration import PayuComponent, PayuConfiguration, PlainComponent, payu_model_stdout
+from access.profiling.payu_configuration import (
+    PayuComponent,
+    PayuConfiguration,
+    PlainComponent,
+    control_name,
+    payu_model_stdout,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -130,6 +136,47 @@ class OM3Configuration(PayuConfiguration):
                 "OM3Configuration.name must be non-empty: it is what tells one configuration's experiments "
                 "from another's, and ACCESS-OM3's differ in their grids and in which components they run."
             )
+
+    @classmethod
+    def from_control(cls, directory: Path, name: str | None = None) -> "OM3Configuration":
+        """Returns the configuration a control directory holds, read from its own files.
+
+        The realms come from `nuopc.runconfig`, by the rules Payu's own ACCESS-OM3 driver reads them with: a
+        realm whose model starts with `s` is a stub and absent, `d` is a data component, and `cice`, `mom` and
+        `ww3` are the models. The sea ice is read from `ice_in` with the block size the control pins; a study
+        choosing the blocks from the rank count, as the presets do, replaces it:
+        `replace(sea_ice, block_shape=None, blocks_per_rank_range=OM3_CICE6_BLOCKS_PER_RANK_RANGE)`. `MOM_input`
+        is read only to warn: a LAYOUT or a MASKTABLE pinned there without AUTO_MASKTABLE has to be removed, and
+        AUTO_MASKTABLE set, through `control_options` before a generated ocean core count runs.
+
+        Args:
+            directory (Path): The control directory, as `clone_control` returns it or as an
+                `ExistingDirectoryControlSource` names it.
+            name (str | None): The configuration's name. Defaults to the `jobname` of `config.yaml`.
+
+        Returns:
+            OM3Configuration: The configuration.
+
+        Raises:
+            ValueError: If `nuopc.runconfig` or `ice_in` is missing, if the ocean is not MOM6, or if the sea ice
+                is not CICE - a stub or a data sea ice is a subclass of this class returning its own components.
+        """
+        runconfig_path = directory / "nuopc.runconfig"
+        if not runconfig_path.is_file():
+            raise ValueError(f"The control at {directory} has no nuopc.runconfig, so it is not an ACCESS-OM3 control.")
+        models = NUOPCParser().parse(runconfig_path.read_text()).get("ALLCOMP_attributes") or {}
+        ice_model, ocn_model, wav_model = (models.get(f"{realm}_model") for realm in ("ICE", "OCN", "WAV"))
+        if ice_model != "cice":
+            raise ValueError(
+                f"The sea ice of the control at {directory} is {ice_model!r}, not CICE: a configuration with a data "
+                "or a stub sea ice is a subclass of OM3Configuration returning its own components."
+            )
+        if ocn_model != "mom":
+            raise ValueError(f"The ocean of the control at {directory} is {ocn_model!r}, not MOM6.")
+        waves = wav_model is not None and not wav_model.startswith("s")
+        sea_ice = CICEPartitioning.from_control(directory, "ice_in")
+        _warn_of_a_pinned_ocean_layout(directory)
+        return cls(name=control_name(directory, name), sea_ice=sea_ice, waves=waves)
 
     @property
     def shared(self) -> tuple[PayuComponent, ...]:
@@ -428,6 +475,25 @@ class OM3Configuration(PayuConfiguration):
         )
 
 
+def _warn_of_a_pinned_ocean_layout(directory: Path) -> None:
+    """Warns when a control's MOM_input pins MOM6's decomposition, which a generated layout cannot use.
+
+    Args:
+        directory (Path): The control directory.
+    """
+    mom_input_path = directory / "MOM_input"
+    if not mom_input_path.is_file():
+        return
+    mom_input = MOM6InputParser().parse(mom_input_path.read_text())
+    pinned = [key for key in ("LAYOUT", "MASKTABLE") if mom_input.get(key) is not None]
+    if pinned and not mom_input.get("AUTO_MASKTABLE"):
+        logger.warning(
+            f"The MOM_input of the control at {directory} pins {' and '.join(pinned)} without AUTO_MASKTABLE: a "
+            "generated ocean core count will not run until they are removed, and AUTO_MASKTABLE set, through "
+            "control_options."
+        )
+
+
 def _om3_leaf(name: str, n_cores: int, core_offset: int = 0) -> ComponentLayout:
     """Returns the layout of one ACCESS-OM3 realm, which runs one thread per rank throughout."""
 
@@ -456,13 +522,15 @@ OM3_25KM_CICE6: CICEPartitioning = CICEPartitioning(
     processor_shape="square-ice",
     blocks_per_rank_range=OM3_CICE6_BLOCKS_PER_RANK_RANGE,
     nghost=OM3_CICE6_GHOST_WIDTH,
+    grid_is_runtime=True,
 )
 """CICE6 as the 25 km releases configure it: square-ice blocks distributed roundrobin.
 
 Neither forms a process grid - roundrobin maps blocks to ranks without one, and square-ice is not a shape a
 one-dimensional domain could express anyway - so the search chooses how many ranks the sea ice gets and nothing
 else. The block size follows from that rank count, so that each rank keeps holding several blocks as the count
-changes, and is written into ice_in with max_blocks left for CICE6 to work out.
+changes, and is written into ice_in with max_blocks left for CICE6 to work out. The grid is a namelist entry of
+CICE6's, as of every ACCESS-OM3 partitioning, so it is written out with them.
 """
 
 OM3_MC_25KM: OM3Configuration = OM3Configuration(name="MC-25km", sea_ice=OM3_25KM_CICE6)
@@ -495,6 +563,7 @@ OM3_100KM_CICE6: CICEPartitioning = CICEPartitioning(
     grid=OM3_100KM_GRID,
     blocks_per_rank_range=OM3_CICE6_BLOCKS_PER_RANK_RANGE,
     nghost=OM3_CICE6_GHOST_WIDTH,
+    grid_is_runtime=True,
 )
 """CICE6 as dev-MC_100km_jra_ryf configures it: blocks distributed cartesian with one block row.
 
@@ -521,6 +590,7 @@ OM3_MCW_100KM_CICE6: CICEPartitioning = CICEPartitioning(
     distribution_type="roundrobin",
     blocks_per_rank_range=OM3_CICE6_BLOCKS_PER_RANK_RANGE,
     nghost=OM3_CICE6_GHOST_WIDTH,
+    grid_is_runtime=True,
 )
 """CICE6 as dev-MCW_100km_era_iaf configures it: blocks distributed roundrobin, in one block row."""
 OM3_MCW_100KM: OM3Configuration = OM3Configuration(name="MCW-100km", sea_ice=OM3_MCW_100KM_CICE6, waves=True)
@@ -544,6 +614,7 @@ OM3_8KM_CICE6: CICEPartitioning = CICEPartitioning(
     processor_shape="square-ice",
     blocks_per_rank_range=OM3_CICE6_BLOCKS_PER_RANK_RANGE,
     nghost=OM3_CICE6_GHOST_WIDTH,
+    grid_is_runtime=True,
 )
 """CICE6 as dev-MC_8km_jra_ryf configures it: square-ice blocks distributed roundrobin, as at 25 km."""
 OM3_MC_8KM: OM3Configuration = OM3Configuration(name="MC-8km", sea_ice=OM3_8KM_CICE6)
@@ -568,6 +639,7 @@ OM3_PANAN4KM_CICE6: CICEPartitioning = CICEPartitioning(
     processor_shape="square-ice",
     blocks_per_rank_range=OM3_CICE6_BLOCKS_PER_RANK_RANGE,
     nghost=OM3_CICE6_GHOST_WIDTH,
+    grid_is_runtime=True,
 )
 """CICE6 as the dev-MC_panan4km_jra_ryf configurations configure it: square-ice blocks distributed sectrobin."""
 OM3_MC_PANAN4KM: OM3Configuration = OM3Configuration(name="MC-panan4km", sea_ice=OM3_PANAN4KM_CICE6)

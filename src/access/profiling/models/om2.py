@@ -20,12 +20,19 @@ layout, and a study of one of them loads that module through `control_options`.
 """
 
 from dataclasses import dataclass
+from pathlib import Path
 
 from access.config.parallel_domain import Domain
 
 from access.profiling.models.cice import CICEPartitioning
 from access.profiling.models.components import CICEComponent, MOM5Component
-from access.profiling.payu_configuration import PayuSubmodel, PlainComponent, SubmodelsConfiguration
+from access.profiling.payu_configuration import (
+    PayuSubmodel,
+    PlainComponent,
+    SubmodelsConfiguration,
+    control_name,
+    read_submodels,
+)
 
 OM2_YATM_NAME: str = "YATM"
 """Component name of the data atmosphere, YATM."""
@@ -121,6 +128,44 @@ class OM2Configuration(SubmodelsConfiguration):
             PayuSubmodel("ocean", "mom", MOM5Component(self.ocean)),
             PayuSubmodel("ice", "cice5", CICEComponent(self.sea_ice), exe=self.sea_ice_executable),
         )
+
+    @classmethod
+    def from_control(cls, directory: Path, name: str | None = None) -> "OM2Configuration":
+        """Returns the configuration a control directory holds, read from its own files.
+
+        The submodels `config.yaml` declares have to be YATM, MOM5 and CICE5, by their Payu model types. The sea
+        ice comes from `ice/cice_in.nml`, which has to state the grid, as the runtime-grid build's does; the ocean
+        runs on the same grid.
+
+        Args:
+            directory (Path): The control directory, as `clone_control` returns it or as an
+                `ExistingDirectoryControlSource` names it.
+            name (str | None): The configuration's name. Defaults to the `jobname` of `config.yaml`.
+
+        Returns:
+            OM2Configuration: The configuration.
+
+        Raises:
+            ValueError: If the control is not an ACCESS-OM2 one, or if its CICE5 is built for its grid rather
+                than reading it from the namelist, as the `-4.1` and `_bgc` releases' are: such a release is
+                profiled with the preset of its resolution, with `access-om2/2026.08.002` loaded through
+                `control_options`.
+        """
+        types = sorted(submodel.model for submodel in read_submodels(directory))
+        if types != ["cice5", "mom", "yatm"]:
+            raise ValueError(
+                f"The control at {directory} declares submodels of types {types}, where ACCESS-OM2 runs yatm, mom "
+                "and cice5."
+            )
+        try:
+            sea_ice = CICEPartitioning.from_control(directory, "ice/cice_in.nml")
+        except ValueError as error:
+            raise ValueError(
+                f"{error} An ACCESS-OM2 control whose CICE5 is built for its grid, as the -4.1 and _bgc releases "
+                "are, is profiled with the preset of its resolution, loading access-om2/2026.08.002 through "
+                "control_options."
+            ) from error
+        return cls(name=control_name(directory, name), ocean=Domain(shape=sea_ice.grid), sea_ice=sea_ice)
 
 
 OM2_1DEG: OM2Configuration = OM2Configuration(name="1deg", ocean=OM2_1DEG_GRID, sea_ice=OM2_1DEG_CICE5)

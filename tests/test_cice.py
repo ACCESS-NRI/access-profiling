@@ -398,3 +398,87 @@ class TestBlocksChosenForTheRankCount:
     def test_blocks_per_rank_that_describe_nothing(self, kwargs, match):
         with pytest.raises(ValueError, match=match):
             CICEPartitioning(grid=GRID, **kwargs)
+
+
+RUNTIME_ICE_IN = """&domain_nml
+  block_size_x = 30
+  block_size_y = 27
+  distribution_type = "roundrobin"
+  distribution_wght = "latitude"
+  max_blocks = -1
+  nx_global = 1440
+  ny_global = 1152
+  processor_shape = "square-ice"
+/
+"""
+COMPILED_CICE_IN = """&setup_nml
+    days_per_year = 365
+/
+&domain_nml
+    nprocs = 12
+    processor_shape   = 'slenderX1'
+    distribution_type = 'cartesian'
+/
+"""
+
+
+class TestFromControl:
+    """Reading a partitioning off the namelist a control states it in."""
+
+    def test_a_runtime_grid_build_states_everything(self, tmp_path):
+        (tmp_path / "ice_in").write_text(RUNTIME_ICE_IN)
+
+        partitioning = CICEPartitioning.from_control(tmp_path, "ice_in")
+
+        assert partitioning == CICEPartitioning(
+            grid=(1440, 1152),
+            distribution_type="roundrobin",
+            processor_shape="square-ice",
+            block_shape=(30, 27),
+            grid_is_runtime=True,
+        )
+        assert not partitioning.writes_nprocs, "CICE6 takes its rank count from its communicator"
+        assert partitioning.mode is CICEPartitioningMode.OPAQUE, "the control's block size is pinned"
+
+    def test_a_build_compiled_for_its_grid_is_given_it(self, tmp_path):
+        (tmp_path / "ice").mkdir()
+        (tmp_path / "ice" / "cice_in.nml").write_text(COMPILED_CICE_IN)
+
+        partitioning = CICEPartitioning.from_control(tmp_path, "ice/cice_in.nml", grid=(360, 300))
+
+        assert partitioning == CICEPartitioning(grid=(360, 300), writes_nprocs=True, namelist_path="ice/cice_in.nml")
+        assert partitioning.mode is CICEPartitioningMode.BLOCK_PER_RANK, "no block size is pinned"
+
+    def test_a_namelist_stating_a_grid_is_believed_over_the_one_given(self, tmp_path):
+        (tmp_path / "ice_in").write_text(RUNTIME_ICE_IN)
+
+        assert CICEPartitioning.from_control(tmp_path, "ice_in", grid=(360, 300)).grid == (1440, 1152)
+
+    def test_a_grid_nothing_states_is_refused(self, tmp_path):
+        (tmp_path / "ice").mkdir()
+        (tmp_path / "ice" / "cice_in.nml").write_text(COMPILED_CICE_IN)
+
+        with pytest.raises(ValueError, match="states no grid"):
+            CICEPartitioning.from_control(tmp_path, "ice/cice_in.nml")
+
+    def test_a_missing_namelist_or_group_is_refused(self, tmp_path):
+        with pytest.raises(ValueError, match="has no ice_in"):
+            CICEPartitioning.from_control(tmp_path, "ice_in")
+
+        (tmp_path / "ice_in").write_text("&setup_nml\n    days_per_year = 365\n/\n")
+        with pytest.raises(ValueError, match="has no domain_nml group"):
+            CICEPartitioning.from_control(tmp_path, "ice_in")
+
+    def test_a_namelist_stating_no_scheme_is_refused(self, tmp_path):
+        """CICE has defaults for both, but reading them as this class's defaults would misread a control."""
+
+        (tmp_path / "ice_in").write_text("&domain_nml\n    nprocs = 12\n    nx_global = 360\n    ny_global = 300\n/\n")
+
+        with pytest.raises(ValueError, match="states no distribution_type or no processor_shape"):
+            CICEPartitioning.from_control(tmp_path, "ice_in")
+
+    def test_half_a_block_size_is_refused(self, tmp_path):
+        (tmp_path / "ice_in").write_text(RUNTIME_ICE_IN.replace("  block_size_y = 27\n", ""))
+
+        with pytest.raises(ValueError, match="one block extent and not the other"):
+            CICEPartitioning.from_control(tmp_path, "ice_in")
