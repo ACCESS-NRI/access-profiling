@@ -81,6 +81,8 @@ from access.profiling.models.esm16 import ESM16_HISTORICAL_SOURCE, ESM16_PI_CONT
 historical = replace(ESM16_PI_CONTROL, name="historical")
 ```
 
+The manager is then created with `historical` as its application and `ESM16_HISTORICAL_SOURCE` as its control.
+
 The AMIP configuration runs the atmosphere on its own, without an ocean, a sea ice or a coupler. It is the preset
 [`ESM16_AMIP`][access.profiling.models.esm16.ESM16_AMIP], and `release-amip-1.0` runs it on 208 cores.
 
@@ -117,7 +119,7 @@ the total number of cores of the layout as `ncpureq`. The decompositions of the 
 
 | | |
 |---|---|
-| Presets | [`OM2_1DEG`][access.profiling.models.om2.OM2_1DEG], [`OM2_025DEG`][access.profiling.models.om2.OM2_025DEG] and [`OM2_01DEG`][access.profiling.models.om2.OM2_01DEG], one per resolution: the forcing and the biogeochemistry of a release change its core counts, not how it is parallelised |
+| Presets | [`OM2_1DEG`][access.profiling.models.om2.OM2_1DEG], [`OM2_025DEG`][access.profiling.models.om2.OM2_025DEG] and [`OM2_01DEG`][access.profiling.models.om2.OM2_01DEG], one per resolution |
 | Controls | One per released configuration, at its latest release: [`OM2_1DEG_JRA55_RYF_SOURCE`][access.profiling.models.om2.OM2_1DEG_JRA55_RYF_SOURCE] and the others in the table below |
 | Manager | `PayuManager` |
 | Components | `YATM`, the data atmosphere, on one core; `MOM5` on the grid of the resolution, 360 × 300, 1440 × 1080 or 3600 × 2700; `CICE5` on the same grid |
@@ -127,19 +129,22 @@ the total number of cores of the layout as `ncpureq`. The decompositions of the 
 YATM is serial, so every layout gives it one core. The subdomains of MOM5 are at most four times longer than they
 are wide, as in ACCESS-ESM1.6, and at most 10% of the cores are left idle. CICE5 keeps the block size that its
 control fixes. At one degree, the blocks are distributed cartesian in one row. The search then chooses how the 24
-columns of blocks are shared out, so the number of CICE5 ranks divides 24. At a quarter and at a tenth of a degree,
-the blocks are distributed roundrobin and sectrobin. These distributions form no process grid, so the search only
-chooses the number of CICE5 ranks.
+columns of blocks are shared out, so the number of CICE5 ranks divides 24. At a quarter of a degree the blocks are
+distributed roundrobin, and at a tenth of a degree sectrobin. These two distributions form no process grid, so the
+search only chooses the number of CICE5 ranks.
 
 To run a layout, a few files are changed. `config.yaml` gets the number of cores of each submodel, and requests
 the total number of cores of the layout as `ncpureq`. The process grid of MOM5 goes into `ocean/input.nml`, and the
-number of ranks of CICE5, its grid and its blocks per rank into `ice/cice_in.nml`. Two things in the releases need
-control options, which are described in [Experiments with Payu](payu.md#generating-the-experiments). First, MOM5
-runs on a masked layout. The number of cores of the release is the product of the process grid, less the ranks that
-a mask table among the inputs of the ocean removes. A generated layout runs without a mask, once the table is taken
-out. Second, the sea ice runs `cice_auscom.exe`, the CICE5 of `access-om2/2026.08.002` and later, which reads its
-grid when it runs. The `+wombatlite` releases already run it, but the `-4.1` and `_bgc` releases run executables
-compiled for their layout, so a study of one of them loads that module.
+number of ranks of CICE5, its grid and its blocks per rank into `ice/cice_in.nml`.
+
+Two things in the releases need control options, which are described in
+[Experiments with Payu](payu.md#generating-the-experiments). First, MOM5 runs a layout with a mask in the releases.
+A mask table, which is one of the inputs of the ocean, removes the ranks that only hold land. The number of cores of
+the release is therefore the product of the process grid, less the ranks that the table removes. A generated layout
+runs without a mask, so the table has to be removed. Second, the sea ice has to run `cice_auscom.exe`. This is the
+CICE5 of `access-om2/2026.08.002` and later, which reads its grid when it runs. The `+wombatlite` releases already
+run it. The `-4.1` and `_bgc` releases run executables that are compiled for their layout instead, so a study of
+one of them has to load that module.
 
 | Log | Parser | Component | Read from |
 |---|---|---|---|
@@ -150,8 +155,9 @@ compiled for their layout, so a study of one of them loads that module.
 YATM writes no timers that this package reads.
 
 The forcing and the biogeochemistry of a release change its number of cores, but not how it is parallelised. Each
-release is therefore profiled with the preset of its resolution and with its own control. Give the preset the name
-of the release if several releases share a working directory:
+release is therefore profiled with the preset of its resolution and with its own control. If several releases share
+a working directory, give the preset the name of the release. The package has a control source for each released
+configuration, at its latest release:
 
 | Configuration | Control | Release |
 |---|---|---|
@@ -178,12 +184,12 @@ of the release if several releases share a working directory:
 
 | | |
 |---|---|
-| Presets | [`OM3_MC_25KM`][access.profiling.models.om3.OM3_MC_25KM], MOM6 and CICE6 at 25 km, which is the configuration of every release so far; and, under development, [`OM3_MC_100KM`][access.profiling.models.om3.OM3_MC_100KM] and [`OM3_MCW_100KM`][access.profiling.models.om3.OM3_MCW_100KM] at 100 km, without and with WW3, [`OM3_MC_8KM`][access.profiling.models.om3.OM3_MC_8KM] at 8 km, and the pan-Antarctic regional configurations at 4 km, [`OM3_MC_PANAN4KM`][access.profiling.models.om3.OM3_MC_PANAN4KM] and, with ice shelves, [`OM3_MC_PANAN4KM_ISF`][access.profiling.models.om3.OM3_MC_PANAN4KM_ISF] |
+| Presets | [`OM3_MC_25KM`][access.profiling.models.om3.OM3_MC_25KM], MOM6 and CICE6 at 25 km. Every release so far runs this configuration. The others are under development: [`OM3_MC_100KM`][access.profiling.models.om3.OM3_MC_100KM] and [`OM3_MCW_100KM`][access.profiling.models.om3.OM3_MCW_100KM] at 100 km, without and with WW3; [`OM3_MC_8KM`][access.profiling.models.om3.OM3_MC_8KM] at 8 km; and the pan-Antarctic regional configurations at 4 km, [`OM3_MC_PANAN4KM`][access.profiling.models.om3.OM3_MC_PANAN4KM] and, with ice shelves, [`OM3_MC_PANAN4KM_ISF`][access.profiling.models.om3.OM3_MC_PANAN4KM_ISF] |
 | Controls | One per released configuration, at its latest release, and one per configuration under development, at its `dev-*` branch: [`OM3_MC_25KM_JRA_RYF_SOURCE`][access.profiling.models.om3.OM3_MC_25KM_JRA_RYF_SOURCE] and the others in the table below |
 | Manager | `PayuManager` |
 | Components | `shared`, the range of cores `cpl`, `atm`, `ice` and `rof` take turns on, `ocn` beside it, and `wav` beside that where there are waves; all on the configuration's grid, 1440 × 1152 at 25 km |
 | Whole model | `ACCESS-OM3 MC-25km`, `ACCESS-OM3 MC-100km`, and so on |
-| Release cores | 275 for each of `cpl`, `atm`, `ice` and `rof`, and 2429 for `ocn`, on 26 nodes of 104 cores ([`OM3_MC_25KM_CORES`][access.profiling.models.om3.OM3_MC_25KM_CORES]); each development configuration's cores are beside its preset, as [`OM3_MC_100KM_CORES`][access.profiling.models.om3.OM3_MC_100KM_CORES] |
+| Release cores | 275 for each of `cpl`, `atm`, `ice` and `rof`, and 2429 for `ocn`, on 26 nodes of 104 cores ([`OM3_MC_25KM_CORES`][access.profiling.models.om3.OM3_MC_25KM_CORES]). The cores of each configuration under development are in a constant named after its preset, such as [`OM3_MC_100KM_CORES`][access.profiling.models.om3.OM3_MC_100KM_CORES] |
 
 In ACCESS-OM3, the mediator (`cpl`), the data atmosphere (`atm`), the sea ice (`ice`) and the data runoff (`rof`)
 take turns on the same cores, which are called `shared`. The ocean (`ocn`) runs next to them on cores of its own,
@@ -227,14 +233,15 @@ branches, and the package has a control source for each of them as well:
 | `MC_panan4km_jra_ryf` | `OM3_MC_PANAN4KM_JRA_RYF_SOURCE` | `dev-MC_panan4km_jra_ryf` |
 | `MC_panan4km_jra_ryf+isf` | `OM3_MC_PANAN4KM_JRA_RYF_ISF_SOURCE` | `dev-MC_panan4km_jra_ryf+isf` |
 
-You do not need to write any code for a configuration on another grid, or whose sea ice distributes its blocks
-differently. It is an [`OM3Configuration`][access.profiling.models.om3.OM3Configuration] with a `CICEPartitioning`
-of its own, like the presets. Other arrangements need a subclass of `OM3Configuration`. This is the case for a MOM6
-layout that the search chooses and writes into `MOM_input`, for a data sea ice, or for a shared realm that starts
-at an offset within its range. The subclass returns the components it wants from `shared` and `concurrent`, built
-from the package's own [`CICEComponent`][access.profiling.models.components.CICEComponent] and
-[`PlainComponent`][access.profiling.payu_configuration.PlainComponent]. Writing the PE layout and reading it back
-are still done by the base class.
+You do not need to write any code for a configuration on another grid, or for one whose sea ice distributes its
+blocks differently. Such a configuration is an [`OM3Configuration`][access.profiling.models.om3.OM3Configuration]
+with a `CICEPartitioning` of its own, like the presets. Other arrangements need a subclass of `OM3Configuration`.
+This is the case for a process grid of MOM6 that the search chooses and writes into `MOM_input`, for a data sea
+ice, or for a component that starts at an offset within the shared range of cores. The subclass returns the
+components that it wants from `shared` and `concurrent`. It builds them from the
+[`CICEComponent`][access.profiling.models.components.CICEComponent] and the
+[`PlainComponent`][access.profiling.payu_configuration.PlainComponent] of the package. The base class still writes
+the `PELAYOUT_attributes` and reads them back.
 
 ## ACCESS-AM3, ACCESS-rAM3 and ACCESS-CM3
 

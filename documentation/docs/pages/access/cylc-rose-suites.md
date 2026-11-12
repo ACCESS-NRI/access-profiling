@@ -143,10 +143,11 @@ run directory:
 How many CPUs did each experiment use? As for Payu, the answer is the number of CPUs that the job requested from
 PBS. This includes the cores that are left idle to fill whole nodes. To find it, the manager first works out how
 many CPUs the layout needs, from the `rose-suite.conf` that the run used. This is the product of the layout
-variables, plus the ranks of the I/O server, times the OpenMP threads of each rank, plus the cores of any other
-component that the suite names, as ACCESS-CM3 names those of its ocean and its sea ice. It then looks at the job
-scripts that Cylc submitted, `log/job/<cycle>/<task>/NN/job`, and takes the smallest `#PBS -l ncpus` request that
-is large enough for the layout. If no job requested that many CPUs, the number of CPUs of the layout is used.
+variables, plus the ranks of the I/O server, times the OpenMP threads of each rank. The cores of any other
+component that the suite names are then added, such as those of the ocean and the sea ice of ACCESS-CM3. Next,
+the manager looks at the job scripts that Cylc submitted, `log/job/<cycle>/<task>/NN/job`, and takes the smallest
+`#PBS -l ncpus` request that is large enough for the layout. If no job requested that many CPUs, the number of CPUs
+of the layout is used.
 
 The scaling plot then works as for any other manager, as described in
 [Scaling studies](../user-guide/scaling-studies.md). For example, we plot the time that the `atmos_main` task of

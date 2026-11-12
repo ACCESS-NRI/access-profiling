@@ -9,8 +9,8 @@ Payu, for example, is a subclass of
 [`PayuConfiguration`][access.profiling.payu_configuration.PayuConfiguration]. And if Payu couples its components
 as submodels, each with its own cores in `config.yaml`, the class is a subclass of
 [`SubmodelsConfiguration`][access.profiling.payu_configuration.SubmodelsConfiguration], which writes and reads the
-layout for you. What is left to write is a component for each code that the package does not know yet: what the
-code decomposes, what it writes, and which logs it produces.
+layout for you. What is left to write is a component for each code that is new to the package: what the code
+decomposes, what it writes, and which logs it produces.
 
 In this tutorial we write a component and a configuration class for a small coupled application that is run with
 Payu. Its atmosphere is a toy code, and its ocean is MOM5. The two run at the same time, each on its own cores. The
@@ -65,7 +65,12 @@ class ToyAtmosphere(PayuComponent):
     @property
     def logs(self) -> tuple[LogSpec, ...]:
         return (
-            LogSpec("atmosphere", log_at("atmosphere/timers.log"), FMSProfilingParser(has_hits=True), component=self.name),
+            LogSpec(
+                "atmosphere",
+                log_at("atmosphere/timers.log"),
+                FMSProfilingParser(has_hits=True),
+                component=self.name,
+            ),
         )
 
     def config_changes(self, layout: ComponentLayout) -> dict:
@@ -84,13 +89,16 @@ standard output Payu captured from the run. Mark a log `optional=True` if a run 
 are given for each file, with its path relative to the control directory, in the format of
 [experiment-generator](https://access-experiment-generator.access-hive.org.au/).
 [`require_process_grid`][access.profiling.payu_configuration.require_process_grid] reads the process grid that the
-search chose. If the layout has no process grid, which is the case for a layout read back from an experiment, it
-raises the `ValueError` that the contract asks for. Some components have nothing that the search can decompose,
-such as a data component or a serial one. These are
+search chose. A layout that is read back from an experiment has no process grid. For such a layout,
+`require_process_grid` raises a `ValueError`, which is what `config_changes` has to raise for a layout that it
+cannot write.
+
+Some components have nothing that the search can decompose, such as a data component or a serial one. These are
 [`PlainComponent`][access.profiling.payu_configuration.PlainComponent]s, with `n_ranks` set when the model fixes
-their number of ranks. Only put in the constraints of a component the rules that are always needed, as nobody can
-relax them later. Preferences, such as subdomains that are close to square, belong in the allocation strategy of a
-study.
+their number of ranks.
+
+Only put in the constraints of a component the rules that are always needed, as nobody can relax them later.
+Preferences, such as subdomains that are close to square, belong in the allocation strategy of a study.
 
 ## The configuration
 
@@ -186,8 +194,8 @@ toy-layout_demo_atm_8x6_mom_8x6
 {'config.yaml': {'ncpureq': 96, 'submodels': [[{'ncpus': 48}, {'ncpus': 48}]]}, 'atmosphere/input.nml': {'decomposition_nml': {'nprocx': 8, 'nprocy': 6}}, 'ocean/input.nml': {'ocean_model_nml': {'layout': '8, 6'}}}
 ```
 
-Be aware of how the experiment generator deals with lists. A list has to be wrapped in another list, because the
-generator reads a simple list as one value for each experiment.
+Note the list inside a list under `submodels`. The experiment generator reads a simple list as one value for each
+experiment, so a list has to be wrapped in another list.
 
 ## Other arrangements
 
@@ -203,12 +211,13 @@ The package ships the configuration classes of the ACCESS models. Each model has
 `src/access/profiling/models/`, with its class and its presets, and the components of their codes are in
 `src/access/profiling/models/components.py`. If you want to add yours to the package:
 
-1. Write the components for the codes that the package does not know yet, the configuration class, a preset for
-   each released configuration worth shipping, and a `GitControlSource` for the release each preset describes.
-   Give the class a `from_control` that reads a configuration from the files of a control, by the Payu model types
-   of its submodels, as the ACCESS models have. Give every public constant a docstring, so that it appears in the
-   API reference.
-2. Export the class and the presets from `src/access/profiling/__init__.py`, and add them to `__all__`.
+1. Write the components for the codes that are new to the package, the configuration class, and a preset for each
+   released configuration worth shipping. Write a `GitControlSource` for the release that each preset describes.
+   Give the class a `from_control`, as the ACCESS models have. It reads a configuration from the files of a
+   control, and finds the submodels by their Payu model types. Give every public constant a docstring, so that it
+   appears in the API reference.
+2. Export the class and the new components from `src/access/profiling/__init__.py`, and add them to `__all__`. The
+   presets and their control sources are not exported: a study imports them from the module of the model.
 3. Write the tests, in `tests/test_<model>.py`, and those of a new component in `tests/test_components.py`. The
    package's tests cover every line. The tests of ACCESS-ESM1.6 and ACCESS-OM3 show what to check: that every
    layout of the release can be found, that the names of the layouts are distinct, that `config_changes` writes

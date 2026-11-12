@@ -33,22 +33,25 @@ created, given for each file. They use the format of
 [Generating the experiments](../user-guide/experiments.md#generating-the-experiments) shows the options the releases of
 ACCESS-ESM1.6 and ACCESS-OM3 need.
 
-The releases of ACCESS-OM2 need two more options. Their ocean runs on a masked layout. Among the inputs of the ocean
-submodel there is a mask table of the ranks that only hold land, and it is named after the process grid it was made
-for. MOM5 refuses to run another process grid with it, so the table has to go, as the generated layouts run without a
-mask. The `input` list of a submodel is merged item by item, so the option restates the inputs of the ocean without
-the table, in the slot of the ocean:
+The releases of ACCESS-OM2 need two more options. The first one concerns the ocean. In the releases, MOM5 runs a
+parallelisation layout with a mask. A mask table, which is one of the inputs of the ocean submodel, lists the ranks
+that only hold land, so that they are not run. The table is named after the process grid it was made for, and MOM5
+refuses to run any other process grid with it. The generated layouts run without a mask, so the table has to be
+removed from the inputs. The `input` list of a submodel is merged item by item. The option therefore gives the inputs
+of the ocean again, without the table, in the position of the ocean among the submodels. In this example, `...`
+stands for those inputs:
 
 ```python
 control_options = {"config.yaml": {"submodels": ["PRESERVE", {"input": [...]}, "PRESERVE"]}}
 ```
 
 The alternative is the `mask: true` option of Payu on the ocean submodel. It needs a reference table,
-`mask_table.<masked>.<nx>x<ny>`, among the inputs for every layout of the study. The second option concerns the sea
-ice. The presets write the grid and the blocks of CICE5 for `cice_auscom.exe`, the executable of
-`access-om2/2026.08.002` and later, which reads its grid when it runs. The `+wombatlite` releases already run it,
-but the `-4.1` and `_bgc` releases run a CICE5 compiled for their layout. For these, the control options also load
-that module:
+`mask_table.<masked>.<nx>x<ny>`, among the inputs for every layout of the study.
+
+The second option concerns the sea ice. The presets write the grid and the blocks of CICE5 for `cice_auscom.exe`.
+This is the executable of `access-om2/2026.08.002` and later, and it reads its grid when it runs. The `+wombatlite`
+releases already run it. The `-4.1` and `_bgc` releases run a CICE5 that is compiled for their layout instead. For
+these, the control options also load that module:
 
 ```python
 control_options["config.yaml"]["modules"] = {"use": ["/g/data/vk83/modules"], "load": ["access-om2/2026.08.002"]}
@@ -76,9 +79,13 @@ The files have to be on disk, but the manager that would clone them cannot be cr
 This is what [`clone_control`][access.profiling.payu_manager.clone_control] is for. It clones the control first, in
 the same way as generating the study does: into the working directory, under the directory of the control, at its
 start point, with experiment-generator. When the study is generated later, the clone is found there and reused, so
-nothing is fetched twice, and a control that is already cloned is left alone. This is the only place where the
-package fetches anything, and it is an explicit call. If the repository of the control asks for credentials, it
-does so here, from a terminal, and never while a configuration is being created.
+nothing is fetched twice. A control that is already cloned is left alone.
+
+This is the only place where the package fetches anything, and it is an explicit call. If the repository of the
+control asks for credentials, it does so here, from a terminal, and never while a configuration is being created.
+
+In this example we read the 100 km configuration of ACCESS-OM3 from its development branch, and then create the
+manager with it. `work_dir` and `archive_dir` are the two directories of your study:
 
 ```python
 from access.profiling import GitControlSource, OM3Configuration, PayuManager
@@ -91,17 +98,21 @@ manager = PayuManager(work_dir, archive_dir, om3, control)
 ```
 
 An [`ExistingDirectoryControlSource`][access.profiling.control.ExistingDirectoryControlSource] needs no clone:
-read the configuration from its `path`. What you get is what the control states. For ACCESS-OM3, this means the
-block size that the control fixes for CICE6. The presets choose it from the number of ranks instead, so that every
-rank holds [`OM3_CICE6_BLOCKS_PER_RANK_RANGE`][access.profiling.models.om3.OM3_CICE6_BLOCKS_PER_RANK_RANGE] blocks
-at any number of cores. If you want the same for a configuration read from a control, replace the partitioning:
+read the configuration from its `path`. A configuration that is read in this way is what its control states. For
+ACCESS-OM3, this means the block size that the control fixes for CICE6. The presets choose it from the number of
+ranks instead, so that every rank holds 5 to 8 blocks at any number of cores
+([`OM3_CICE6_BLOCKS_PER_RANK_RANGE`][access.profiling.models.om3.OM3_CICE6_BLOCKS_PER_RANK_RANGE]). If you want the
+same for a configuration read from a control, replace the partitioning:
 
 ```python
 from dataclasses import replace
 
 from access.profiling.models.om3 import OM3_CICE6_BLOCKS_PER_RANK_RANGE
 
-om3 = replace(om3, sea_ice=replace(om3.sea_ice, block_shape=None, blocks_per_rank_range=OM3_CICE6_BLOCKS_PER_RANK_RANGE))
+om3 = replace(
+    om3,
+    sea_ice=replace(om3.sea_ice, block_shape=None, blocks_per_rank_range=OM3_CICE6_BLOCKS_PER_RANK_RANGE),
+)
 ```
 
 The reader of ACCESS-OM3 warns you when the control fixes a `LAYOUT` or a `MASKTABLE` in `MOM_input` without

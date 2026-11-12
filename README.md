@@ -36,8 +36,7 @@ ACCESS-OM3, ACCESS-AM3, ACCESS-rAM3 and ACCESS-CM3.
 - Managers for Payu and for Cylc Rose suites.
 - Parsers for the timers of FMS (MOM5 and MOM6), ESMF, CICE and the UM, and for the records of Payu and Cylc.
 - Presets for ACCESS-ESM1.5, ACCESS-ESM1.6, ACCESS-OM2 and ACCESS-OM3, run with Payu, and for ACCESS-AM3,
-  ACCESS-rAM3 and ACCESS-CM3, run with Cylc and
-  Rose.
+  ACCESS-rAM3 and ACCESS-CM3, run with Cylc and Rose.
 
 ## Documentation
 
@@ -82,8 +81,7 @@ from pathlib import Path
 from access.config.parallel_allocation_strategies import FixedAllocation, RootAllocation
 
 from access.profiling import PayuManager
-from access.profiling.models.esm16 import ESM16_PI_CONTROL, ESM16_PI_CONTROL_SOURCE
-from access.profiling.models.esm16 import ESM16_PI_CONTROL_CORES
+from access.profiling.models.esm16 import ESM16_PI_CONTROL, ESM16_PI_CONTROL_CORES, ESM16_PI_CONTROL_SOURCE
 
 manager = PayuManager(
     work_dir=Path("/scratch/tm70/model_scaling/ACCESS-ESM1.6/piControl"),
