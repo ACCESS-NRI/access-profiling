@@ -3,10 +3,10 @@
 access-profiling comes with everything needed to profile the ACCESS climate models developed at
 [ACCESS-NRI](https://github.com/ACCESS-NRI), which run on NCI's Gadi supercomputer:
 
-- a manager for each of their workflow engines: [Payu](payu.md), for ACCESS-ESM1.6 and ACCESS-OM3, and
-  [Cylc and Rose](cylc-rose-suites.md), for ACCESS-AM3 and ACCESS-rAM3;
+- a manager for each of their workflow engines: [Payu](payu.md), for ACCESS-ESM1.5, ACCESS-ESM1.6, ACCESS-OM2 and
+  ACCESS-OM3, and [Cylc and Rose](cylc-rose-suites.md), for ACCESS-AM3 and ACCESS-rAM3;
 - parsers for the [log formats](log-formats.md) of their components and of these workflow engines;
-- a preset for each model, together with its official release to use as the control.
+- presets for each model, together with the official release that each describes, to use as the control.
 
 Each preset is described below. You will find the components of the model, the rules that every parallelisation layout
 follows, the logs that a run writes, and the number of cores used by the release. For the full details, see the [Models
@@ -60,6 +60,71 @@ historical_source = GitControlSource(ESM16_CONFIGS_REPOSITORY, "release-historic
 
 The AMIP configuration runs the atmosphere on its own, without an ocean, a sea ice or a coupler. It is the preset
 [`ESM16_AMIP`][access.profiling.models.esm16.ESM16_AMIP], and `release-amip-1.0` runs it on 208 cores.
+
+## ACCESS-ESM1.5
+
+| | |
+|---|---|
+| Presets | [`ESM15_PREINDUSTRIAL`][access.profiling.models.esm15.ESM15_PREINDUSTRIAL], the pre-industrial configuration, and [`ESM15_HISTORICAL`][access.profiling.models.esm15.ESM15_HISTORICAL], the historical one, both with concentration-driven greenhouse gases |
+| Controls | [`ESM15_PREINDUSTRIAL_SOURCE`][access.profiling.models.esm15.ESM15_PREINDUSTRIAL_SOURCE] and [`ESM15_HISTORICAL_SOURCE`][access.profiling.models.esm15.ESM15_HISTORICAL_SOURCE], `release-preindustrial+concentrations-2.0` and `release-historical+concentrations-2.0` of `access-esm1.5-configs` |
+| Manager | `PayuManager` |
+| Components | `UM7` on the N96 grid, 192 × 144; `MOM5` on the one-degree grid, 360 × 300; `CICE4` on 12 ranks |
+| Whole model | `ACCESS-ESM1.5 preindustrial+concentrations` |
+| Release cores | `UM7` 240, `MOM5` 180 and `CICE4` 12, on 9 nodes of 48 cores ([`ESM15_PREINDUSTRIAL_CORES`][access.profiling.models.esm15.ESM15_PREINDUSTRIAL_CORES]) |
+
+The UM and MOM5 run as in ACCESS-ESM1.6, and their layouts follow the same rules. The difference is CICE4. Its grid,
+its blocks and its number of ranks are compiled into its executable, `cice_access_360x300_12x1_12p.exe`. Every
+layout therefore gives it 12 ranks ([`ESM15_CICE4_RANKS`][access.profiling.models.esm15.ESM15_CICE4_RANKS]), and
+nothing is written for it. Note that an allocation strategy that does not allow the sea ice 12 cores finds no
+layout. Payu calls the model `access`, and this is the `model_type` of the configuration.
+
+To run a layout, a few files are changed. `config.yaml` gets the number of cores of each submodel, and requests
+the total number of cores of the layout as `ncpureq`. The decompositions of the UM and of MOM5 go into
+`atmosphere/um_env.yaml` and `ocean/input.nml`.
+
+| Log | Parser | Component | Read from |
+|---|---|---|---|
+| `UM` | `UMProfilingParser` | `UM7` | The UM's standard output, `atmosphere/<UM_STDOUT_FILE>0` |
+| `UM_Total_Walltime` | `UMTotalRuntimeParser` | `UM7` | The same file |
+| `MOM5` | `FMSProfilingParser(has_hits=False)` | `MOM5` | The model's standard output, `access.out` |
+| `CICE4` | `CICE5ProfilingParser` | `CICE4` | `ice/ice_diag.d`, which CICE4 writes in CICE5's format |
+| `payu` | `PayuJSONProfilingParser` | | Payu's job file of each run |
+
+## ACCESS-OM2
+
+| | |
+|---|---|
+| Presets | [`OM2_1DEG`][access.profiling.models.om2.OM2_1DEG], [`OM2_025DEG`][access.profiling.models.om2.OM2_025DEG] and [`OM2_01DEG`][access.profiling.models.om2.OM2_01DEG], one per resolution: the forcing and the biogeochemistry of a release change its core counts, not how it is parallelised |
+| Control | A `GitControlSource` of [`OM2_CONFIGS_REPOSITORY`][access.profiling.models.om2.OM2_CONFIGS_REPOSITORY] at the release, such as `release-1deg_jra55_ryf-4.1` |
+| Manager | `PayuManager` |
+| Components | `YATM`, the data atmosphere, on one core; `MOM5` on the grid of the resolution, 360 × 300, 1440 × 1080 or 3600 × 2700; `CICE5` on the same grid |
+| Whole model | `ACCESS-OM2 1deg`, `ACCESS-OM2 025deg` and `ACCESS-OM2 01deg` |
+| Release cores | `MOM5` 216 and `CICE5` 24 at one degree ([`OM2_1DEG_CORES`][access.profiling.models.om2.OM2_1DEG_CORES]), 1456 and 361 at a quarter ([`OM2_025DEG_CORES`][access.profiling.models.om2.OM2_025DEG_CORES]), 4358 and 722 at a tenth ([`OM2_01DEG_CORES`][access.profiling.models.om2.OM2_01DEG_CORES]), and `YATM` 1 in each |
+
+YATM is serial, so every layout gives it one core. The subdomains of MOM5 are at most four times longer than they
+are wide, as in ACCESS-ESM1.6, and at most 10% of the cores are left idle. CICE5 keeps the block size that its
+control fixes. At one degree, the blocks are distributed cartesian in one row. The search then chooses how the 24
+columns of blocks are shared out, so the number of CICE5 ranks divides 24. At a quarter and at a tenth of a degree,
+the blocks are distributed roundrobin and sectrobin. These distributions form no process grid, so the search only
+chooses the number of CICE5 ranks.
+
+To run a layout, a few files are changed. `config.yaml` gets the number of cores of each submodel, and requests
+the total number of cores of the layout as `ncpureq`. The process grid of MOM5 goes into `ocean/input.nml`, and the
+number of ranks of CICE5, its grid and its blocks per rank into `ice/cice_in.nml`. Two things in the releases need
+control options, which are described in [Experiments with Payu](payu.md#generating-the-experiments). First, MOM5
+runs on a masked layout. The number of cores of the release is the product of the process grid, less the ranks that
+a mask table among the inputs of the ocean removes. A generated layout runs without a mask, once the table is taken
+out. Second, the sea ice runs `cice_auscom.exe`, the CICE5 of `access-om2/2026.08.002` and later, which reads its
+grid when it runs. The `+wombatlite` releases already run it, but the `-4.1` and `_bgc` releases run executables
+compiled for their layout, so a study of one of them loads that module.
+
+| Log | Parser | Component | Read from |
+|---|---|---|---|
+| `MOM5` | `FMSProfilingParser(has_hits=False)` | `MOM5` | The model's standard output, `access-om2.out` |
+| `CICE5` | `CICE5ProfilingParser` | `CICE5` | `ice/ice_diag.d` |
+| `payu` | `PayuJSONProfilingParser` | | Payu's job file of each run |
+
+YATM writes no timers that this package reads.
 
 ## ACCESS-OM3
 

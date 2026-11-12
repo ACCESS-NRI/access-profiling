@@ -104,12 +104,14 @@ for the records Payu and Cylc keep of each run.
 
 | Model | Preset | Workflow engine |
 |---|---|---|
+| ACCESS-ESM1.5 | `ESM15_PREINDUSTRIAL` | Payu |
 | ACCESS-ESM1.6 | `ESM16_PI_CONTROL` | Payu |
+| ACCESS-OM2 | `OM2_1DEG` | Payu |
 | ACCESS-OM3 | `OM3_MC_25KM` | Payu |
 | ACCESS-AM3 | `AM3_N96E` | Cylc and Rose |
 | ACCESS-rAM3 | `RAM3` | Cylc and Rose |
 
-For the two Payu models, the package generates the experiments for you. For the other two, you prepare the suites
+For the four Payu models, the package generates the experiments for you. For the other two, you prepare the suites
 by hand. In both cases the profiling data is parsed, plotted and compared in the same way. If you want to profile
 another configuration of one of these models, you do not need to write any code: [ACCESS models](access/index.md)
 describes each preset and shows how. The
