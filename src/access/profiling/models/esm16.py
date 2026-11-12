@@ -14,14 +14,15 @@ A configuration is put together from the components of `access.profiling.models.
 CICE5, each the Payu submodel the control declares it as, with OASIS as a slot this package sets nothing in.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from pathlib import Path
 
 from access.config.parallel_domain import Domain
 
 from access.profiling.control import GitControlSource
 from access.profiling.models.cice import CICEPartitioning
 from access.profiling.models.components import CICEComponent, MOM5Component, UMComponent
-from access.profiling.payu_configuration import PayuSubmodel, SubmodelsConfiguration
+from access.profiling.payu_configuration import PayuSubmodel, SubmodelsConfiguration, control_name, read_submodels
 
 ESM16_UM7_NAME: str = UMComponent.name
 """Component name of the atmosphere, UM7."""
@@ -109,6 +110,52 @@ class ESM16Configuration(SubmodelsConfiguration):
         if len(submodels) > 1:
             submodels.append(PayuSubmodel("coupler", "oasis"))
         return tuple(submodels)
+
+    @classmethod
+    def from_control(cls, directory: Path, name: str | None = None) -> "ESM16Configuration":
+        """Returns the configuration a control directory holds, read from its own files.
+
+        The components are the submodels `config.yaml` declares, by their Payu model types: `um` is the
+        atmosphere on the N96 grid, `mom` the ocean on the one-degree grid, `cice5` the sea ice, whose
+        distribution and processor shape come from `ice/cice_in.nml`, and `oasis` the coupler. The grids are the
+        model's, since no ACCESS-ESM1.6 configuration runs others. The sea ice is read for the runtime-grid build
+        the configuration writes for, whether or not the control's executable is one: the releases name a CICE5
+        built for their grid, which `sea_ice_executable` replaces.
+
+        Args:
+            directory (Path): The control directory, as `clone_control` returns it or as an
+                `ExistingDirectoryControlSource` names it.
+            name (str | None): The configuration's name. Defaults to the `jobname` of `config.yaml`.
+
+        Returns:
+            ESM16Configuration: The configuration.
+
+        Raises:
+            ValueError: If the control is not an ACCESS-ESM1.6 one: no `config.yaml`, a submodel of a type the
+                model does not run, or a `cice` sea ice, which is CICE4 and ACCESS-ESM1.5's.
+        """
+        types = {submodel.model for submodel in read_submodels(directory)}
+        if "cice" in types:
+            raise ValueError(
+                f"The control at {directory} runs CICE4 (`model: cice`), which is ACCESS-ESM1.5's sea ice: read it "
+                "with ESM15Configuration.from_control."
+            )
+        unknown = types - {"um", "mom", "cice5", "oasis"}
+        if unknown:
+            raise ValueError(
+                f"The control at {directory} declares submodels of types {sorted(unknown)}, which ACCESS-ESM1.6 "
+                "does not run."
+            )
+        sea_ice = None
+        if "cice5" in types:
+            partitioning = CICEPartitioning.from_control(directory, "ice/cice_in.nml", grid=(360, 300))
+            sea_ice = replace(partitioning, grid_is_runtime=True)
+        return cls(
+            name=control_name(directory, name),
+            atmosphere=ESM16_N96_ATMOSPHERE if "um" in types else None,
+            ocean=ESM16_1DEG_OCEAN if "mom" in types else None,
+            sea_ice=sea_ice,
+        )
 
 
 ESM16_PI_CONTROL: ESM16Configuration = ESM16Configuration(

@@ -205,7 +205,9 @@ The package ships the configuration classes of the ACCESS models. Each model has
 
 1. Write the components for the codes that the package does not know yet, the configuration class, a preset for
    each released configuration worth shipping, and a `GitControlSource` for the release each preset describes.
-   Give every public constant a docstring, so that it appears in the API reference.
+   Give the class a `from_control` that reads a configuration from the files of a control, by the Payu model types
+   of its submodels, as the ACCESS models have. Give every public constant a docstring, so that it appears in the
+   API reference.
 2. Export the class and the presets from `src/access/profiling/__init__.py`, and add them to `__all__`.
 3. Write the tests, in `tests/test_<model>.py`, and those of a new component in `tests/test_components.py`. The
    package's tests cover every line. The tests of ACCESS-ESM1.6 and ACCESS-OM3 show what to check: that every

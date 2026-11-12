@@ -15,6 +15,7 @@ is the slot OASIS takes.
 """
 
 from dataclasses import dataclass, replace
+from pathlib import Path
 
 from access.config.parallel_domain import Domain
 
@@ -22,7 +23,13 @@ from access.profiling.application import LogSpec, log_at
 from access.profiling.cice5_parser import CICE5ProfilingParser
 from access.profiling.control import GitControlSource
 from access.profiling.models.components import MOM5Component, UMComponent
-from access.profiling.payu_configuration import PayuSubmodel, PlainComponent, SubmodelsConfiguration
+from access.profiling.payu_configuration import (
+    PayuSubmodel,
+    PlainComponent,
+    SubmodelsConfiguration,
+    control_name,
+    read_submodels,
+)
 
 ESM15_UM7_NAME: str = UMComponent.name
 """Component name of the atmosphere, UM7."""
@@ -107,6 +114,56 @@ class ESM15Configuration(SubmodelsConfiguration):
         if len(submodels) > 1:
             submodels.append(PayuSubmodel("coupler", "oasis"))
         return tuple(submodels)
+
+    @classmethod
+    def from_control(cls, directory: Path, name: str | None = None) -> "ESM15Configuration":
+        """Returns the configuration a control directory holds, read from its own files.
+
+        The components are the submodels `config.yaml` declares, by their Payu model types: `um` is the
+        atmosphere on the N96 grid, `mom` the ocean on the one-degree grid, `cice` the sea ice, on the ranks the
+        control gives it, which its executable is built for, and `oasis` the coupler. The grids are the model's,
+        since no ACCESS-ESM1.5 configuration runs others.
+
+        Args:
+            directory (Path): The control directory, as `clone_control` returns it or as an
+                `ExistingDirectoryControlSource` names it.
+            name (str | None): The configuration's name. Defaults to the `jobname` of `config.yaml`.
+
+        Returns:
+            ESM15Configuration: The configuration.
+
+        Raises:
+            ValueError: If the control is not an ACCESS-ESM1.5 one: no `config.yaml`, a submodel of a type the
+                model does not run, a `cice5` sea ice, which is ACCESS-ESM1.6's, or a sea ice given no cores.
+        """
+        submodels = read_submodels(directory)
+        types = {submodel.model for submodel in submodels}
+        if "cice5" in types:
+            raise ValueError(
+                f"The control at {directory} runs CICE5 (`model: cice5`), which is ACCESS-ESM1.6's sea ice: read it "
+                "with ESM16Configuration.from_control."
+            )
+        unknown = types - {"um", "mom", "cice", "oasis"}
+        if unknown:
+            raise ValueError(
+                f"The control at {directory} declares submodels of types {sorted(unknown)}, which ACCESS-ESM1.5 "
+                "does not run."
+            )
+        sea_ice = None
+        if "cice" in types:
+            (ice,) = (submodel for submodel in submodels if submodel.model == "cice")
+            if not ice.ncpus:
+                raise ValueError(
+                    f"The control at {directory} states no core count for its sea ice, which is the one thing "
+                    "CICE4's executable fixes."
+                )
+            sea_ice = ice.ncpus
+        return cls(
+            name=control_name(directory, name),
+            atmosphere=ESM15_N96_ATMOSPHERE if "um" in types else None,
+            ocean=ESM15_1DEG_OCEAN if "mom" in types else None,
+            sea_ice=sea_ice,
+        )
 
 
 ESM15_PREINDUSTRIAL: ESM15Configuration = ESM15Configuration(

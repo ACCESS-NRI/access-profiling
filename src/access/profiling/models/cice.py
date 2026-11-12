@@ -32,7 +32,9 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from enum import Enum
 from functools import cache
+from pathlib import Path
 
+from access.config import FortranNMLParser
 from access.config.parallel_component import ComponentLayout
 from access.config.parallel_constraints import (
     DomainDivisibleByRanksConstraint,
@@ -169,6 +171,75 @@ class CICEPartitioning:
                     f"{self.blocks_per_rank_range} blocks per rank. A pinned size leaves how many blocks a rank "
                     "holds to the rank count, so the blocks cannot be chosen as well."
                 )
+
+    @classmethod
+    def from_control(
+        cls,
+        directory: Path,
+        namelist_path: str,
+        grid: tuple[int, int] | None = None,
+        namelist_group: str = "domain_nml",
+    ) -> "CICEPartitioning":
+        """Returns the partitioning a control's namelist states.
+
+        The distribution and the processor shape are what the control states, and a block size it states is
+        pinned. The grid comes from the namelist where it states one, as the runtime-grid builds do, and from
+        `grid` otherwise, for a build whose grid is compiled in; `nprocs` is written back wherever the control
+        states it, since the build reads it there. A chosen block size is a study's policy rather than the
+        control's, so none is set: a caller wanting one replaces `block_shape` with `blocks_per_rank_range`.
+
+        Args:
+            directory (Path): The control directory.
+            namelist_path (str): Path of the namelist file, relative to the control directory, which is also
+                where the partitioning writes.
+            grid (tuple[int, int] | None): The grid, as nx_global and ny_global, for a namelist that states
+                none. Ignored where the namelist states one.
+            namelist_group (str): Namelist group the entries belong to.
+
+        Returns:
+            CICEPartitioning: The partitioning.
+
+        Raises:
+            ValueError: If the namelist or the group is missing, if it states no distribution type or
+                processor shape, if it states one block extent but not the other, or if it states no grid and
+                none is given.
+        """
+        path = directory / namelist_path
+        if not path.is_file():
+            raise ValueError(
+                f"The control at {directory} has no {namelist_path}: nothing states how CICE divides its grid."
+            )
+        group = FortranNMLParser().parse(path.read_text()).get(namelist_group)
+        if group is None:
+            raise ValueError(f"{path} has no {namelist_group} group, which is where CICE's distribution is stated.")
+        distribution_type, processor_shape = group.get("distribution_type"), group.get("processor_shape")
+        if distribution_type is None or processor_shape is None:
+            raise ValueError(
+                f"{path} states no distribution_type or no processor_shape, so what a search may choose about this "
+                "CICE cannot be told."
+            )
+        nx_global, ny_global = group.get("nx_global"), group.get("ny_global")
+        if nx_global is not None and ny_global is not None:
+            grid, grid_is_runtime = (nx_global, ny_global), True
+        elif grid is not None:
+            grid_is_runtime = False
+        else:
+            raise ValueError(
+                f"{path} states no grid, and none was given: this CICE is built for a grid nothing here can tell."
+            )
+        block_size_x, block_size_y = group.get("block_size_x"), group.get("block_size_y")
+        if (block_size_x is None) != (block_size_y is None):
+            raise ValueError(f"{path} states one block extent and not the other.")
+        return cls(
+            grid=grid,
+            distribution_type=distribution_type,
+            processor_shape=processor_shape,
+            block_shape=None if block_size_x is None else (block_size_x, block_size_y),
+            writes_nprocs=group.get("nprocs") is not None,
+            grid_is_runtime=grid_is_runtime,
+            namelist_path=namelist_path,
+            namelist_group=namelist_group,
+        )
 
     @property
     def mode(self) -> CICEPartitioningMode:
