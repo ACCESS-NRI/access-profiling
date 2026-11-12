@@ -44,6 +44,7 @@ class MockPayuConfiguration(PayuConfiguration):
 
     name = "mock"
     model_type = "mock-payu-model"
+    model_name = "mock"
     experiment_prefix = "mock"
 
     @property

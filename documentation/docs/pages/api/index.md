@@ -14,7 +14,7 @@ organised: the general modules first, and then those implementing them for the A
 | [Scaling and plotting](plotting.md) | `scaling`, `plotting_utils` | Speedup, efficiency and the plots |
 | [Payu](payu.md) | `payu_manager`, `payu_configuration`, `payujson_parser` | Applications run with Payu |
 | [Cylc and Rose](cylc-rose.md) | `cylc_manager`, `rose_configuration`, `cylc_parser` | Cylc suites configured with Rose |
-| [Models](models.md) | `models.esm16`, `models.om3`, `models.cice`, `models.um_suites` | The ACCESS models and their presets |
+| [Models](models.md) | `models.components`, `models.esm16`, `models.om3`, `models.cice`, `models.um_suites` | The ACCESS models, the components of their codes and their presets |
 | [Log formats](log-formats.md) | `fms_parser`, `esmf_parser`, `cice5_parser`, `um_parser` | The timers of the components of the ACCESS models |
 
 All module names are relative to `access.profiling`.
@@ -42,8 +42,8 @@ The package also exports the other types a study or an application is written wi
 these are the base class of the managers, `ProfilingManager`, the experiments and their statuses,
 `ProfilingExperiment` and `ProfilingExperimentStatus`, and the logs and how an application declares them,
 `ProfilingLog`, `LogSpec` and `log_at`. It also exports the application types, the control sources,
-`ProfilingMetric` and the parsers, and, for the ACCESS models, the configuration types and the CICE partitioning
-types.
+`ProfilingMetric` and the parsers, and, for the ACCESS models, the configuration types, the component types and the
+CICE partitioning types.
 
 Everything else is imported from the module that defines it. This includes the metrics themselves and the
 functions, such as the scaling functions:
