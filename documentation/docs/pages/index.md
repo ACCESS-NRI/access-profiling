@@ -108,13 +108,14 @@ for the records Payu and Cylc keep of each run.
 | ACCESS-ESM1.6 | `ESM16_PI_CONTROL` | Payu |
 | ACCESS-OM2 | `OM2_1DEG` | Payu |
 | ACCESS-OM3 | `OM3_MC_25KM` | Payu |
-| ACCESS-AM3 | `AM3_N96E` | Cylc and Rose |
+| ACCESS-AM3 | `AM3_N96E`, `AM3_N512E` | Cylc and Rose |
 | ACCESS-rAM3 | `RAM3` | Cylc and Rose |
+| ACCESS-CM3 | `CM3_O25KM` | Cylc and Rose |
 
-For the four Payu models, the package generates the experiments for you. For the other two, you prepare the suites
-by hand. In both cases the profiling data is parsed, plotted and compared in the same way. If you want to profile
-another configuration of one of these models, you do not need to write any code: [ACCESS models](access/index.md)
-describes each preset and shows how. The
+For the four Payu models, the package generates the experiments for you. For the other three, you prepare the
+suites by hand. In both cases the profiling data is parsed, plotted and compared in the same way. If you want to
+profile another configuration of one of these models, you do not need to write any code:
+[ACCESS models](access/index.md) describes each preset and shows how. The
 [access-model-scaling](https://github.com/ACCESS-NRI/access-model-scaling) repository holds the scaling studies of
 the ACCESS models that were done with this package.
 

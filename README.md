@@ -16,7 +16,7 @@ compare the timings. It is also possible to use experiments that were run in som
 
 The package comes with everything needed to profile the climate models developed at
 [ACCESS-NRI](https://github.com/ACCESS-NRI), which run on NCI's Gadi: ACCESS-ESM1.5, ACCESS-ESM1.6, ACCESS-OM2,
-ACCESS-OM3, ACCESS-AM3 and ACCESS-rAM3.
+ACCESS-OM3, ACCESS-AM3, ACCESS-rAM3 and ACCESS-CM3.
 
 ## Key features
 
@@ -35,8 +35,8 @@ ACCESS-OM3, ACCESS-AM3 and ACCESS-rAM3.
 
 - Managers for Payu and for Cylc Rose suites.
 - Parsers for the timers of FMS (MOM5 and MOM6), ESMF, CICE and the UM, and for the records of Payu and Cylc.
-- Presets for ACCESS-ESM1.5, ACCESS-ESM1.6, ACCESS-OM2 and ACCESS-OM3, run with Payu, and for ACCESS-AM3 and
-  ACCESS-rAM3, run with Cylc and
+- Presets for ACCESS-ESM1.5, ACCESS-ESM1.6, ACCESS-OM2 and ACCESS-OM3, run with Payu, and for ACCESS-AM3,
+  ACCESS-rAM3 and ACCESS-CM3, run with Cylc and
   Rose.
 
 ## Documentation
