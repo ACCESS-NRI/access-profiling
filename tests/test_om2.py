@@ -274,3 +274,18 @@ class TestOM2FromControl:
 
         with pytest.raises(ValueError, match="where ACCESS-OM2 runs yatm, mom and cice5"):
             OM2Configuration.from_control(control)
+
+
+def test_om2_ships_a_control_for_every_released_configuration():
+    """Eighteen: three resolutions, two forcings, each plain, with WOMBAT and with the older BGC, at their releases."""
+
+    from access.profiling.models import om2
+
+    sources = {name: value for name, value in vars(om2).items() if name.endswith("_SOURCE")}
+
+    assert len(sources) == 18
+    for source in sources.values():
+        assert source.repository == om2.OM2_CONFIGS_REPOSITORY
+        assert source.start_point.startswith("release-")
+    assert om2.OM2_1DEG_JRA55_RYF_SOURCE.start_point == "release-1deg_jra55_ryf-4.1"
+    assert om2.OM2_01DEG_JRA55_IAF_WOMBATLITE_SOURCE.start_point == "release-01deg_jra55_iaf+wombatlite-3.0"
