@@ -97,6 +97,12 @@ class TestPlainComponent:
 
         assert component.local_constraints == (FixedRanksConstraint(n_ranks=1),)
 
+    def test_it_refuses_a_pin_to_no_ranks(self):
+        """Refused when the component is built, so that a configuration is, rather than when the search runs."""
+
+        with pytest.raises(ValueError, match="must be positive"):
+            PlainComponent(name="YATM", token="atm", n_ranks=0)
+
     def test_its_logs_are_whatever_it_is_handed(self):
         spec = LogSpec("ocean", log_at("ocean.log"), fake_parser(), component="ocn")
 

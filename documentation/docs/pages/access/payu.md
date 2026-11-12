@@ -1,11 +1,12 @@
 # Experiments with Payu
 
 [`PayuManager`][access.profiling.payu_manager.PayuManager] is the manager for applications that are run with
-[Payu](https://payu.readthedocs.io/en/stable/), such as ACCESS-ESM1.6 and ACCESS-OM3. It creates the experiments with
-[experiment-generator](https://access-experiment-generator.access-hive.org.au/), and submits them on NCI's Gadi with
-[experiment-runner](https://access-experiment-runner.access-hive.org.au/). It then uses the records that Payu keeps of
-every run. If you are new to the package, start with [Generating and running experiments](../user-guide/experiments.md)
-and [Managing experiments](../user-guide/managing-experiments.md), which go through a whole study with Payu. Here you
+[Payu](https://payu.readthedocs.io/en/stable/), such as ACCESS-ESM1.5, ACCESS-ESM1.6, ACCESS-OM2 and ACCESS-OM3. It
+creates the experiments with [experiment-generator](https://access-experiment-generator.access-hive.org.au/), and
+submits them on NCI's Gadi with [experiment-runner](https://access-experiment-runner.access-hive.org.au/). It then
+uses the records that Payu keeps of every run. If you are new to the package, start with
+[Generating and running experiments](../user-guide/experiments.md) and
+[Managing experiments](../user-guide/managing-experiments.md), which go through a whole study with Payu. Here you
 will find the details that are specific to Payu. The examples below are based on the `manager` and the `control_options`
 of the first of those pages.
 
@@ -31,6 +32,27 @@ created, given for each file. They use the format of
 [experiment-generator](https://access-experiment-generator.access-hive.org.au/), where `"REMOVE"` deletes a key.
 [Generating the experiments](../user-guide/experiments.md#generating-the-experiments) shows the options the releases of
 ACCESS-ESM1.6 and ACCESS-OM3 need.
+
+The releases of ACCESS-OM2 need two more options. Their ocean runs on a masked layout. Among the inputs of the ocean
+submodel there is a mask table of the ranks that only hold land, and it is named after the process grid it was made
+for. MOM5 refuses to run another process grid with it, so the table has to go, as the generated layouts run without a
+mask. The `input` list of a submodel is merged item by item, so the option restates the inputs of the ocean without
+the table, in the slot of the ocean:
+
+```python
+control_options = {"config.yaml": {"submodels": ["PRESERVE", {"input": [...]}, "PRESERVE"]}}
+```
+
+The alternative is the `mask: true` option of Payu on the ocean submodel. It needs a reference table,
+`mask_table.<masked>.<nx>x<ny>`, among the inputs for every layout of the study. The second option concerns the sea
+ice. The presets write the grid and the blocks of CICE5 for `cice_auscom.exe`, the executable of
+`access-om2/2026.08.002` and later, which reads its grid when it runs. The `+wombatlite` releases already run it,
+but the `-4.1` and `_bgc` releases run a CICE5 compiled for their layout. For these, the control options also load
+that module:
+
+```python
+control_options["config.yaml"]["modules"] = {"use": ["/g/data/vk83/modules"], "load": ["access-om2/2026.08.002"]}
+```
 
 So what happens when the experiments are created? First, the control is cloned into the working directory, under
 `config`, and the control options are committed there on a branch named `ctrl`. Then one branch is created from `ctrl`
