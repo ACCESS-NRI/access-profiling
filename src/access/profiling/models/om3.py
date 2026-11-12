@@ -3,38 +3,36 @@
 
 """ACCESS-OM3 configurations.
 
-ACCESS-OM3 always runs the CMEPS mediator, and Payu additionally requires a data atmosphere and a data runoff.
-The ocean, the sea ice and the waves are optional, and a configuration has to have at least one of them to be
-worth profiling. Every component carries its own grid: the configurations released so far all happen to put
-every component on the tripolar ocean grid, but that is a property of those configurations rather than of the
-model.
+ACCESS-OM3 couples MOM6 and CICE6 through the CMEPS mediator, with the data atmosphere and the data runoff Payu
+requires, and optionally WW3. Every configuration released or under development runs MOM6, CICE6 and the data
+components; the waves are what the MCW configurations add. All of a configuration's components run on one grid,
+the sea ice's, which is what the configuration records.
 
 The components are named after their NUOPC realm prefixes in nuopc.runconfig - `cpl`, `atm`, `ice`, `rof`, `ocn`
 and `wav` - and the mediator, the data components and the sea ice sit under a parent named `shared`, the range of
 cores they take turns on. Those names are the keys of an allocation strategy.
+
+A configuration is put together from the components of `access.profiling.models.components` and of
+`access.profiling.payu_configuration`: CICE6 through the CICE component, and the rest as plain components, since
+ESMF decomposes the data components' meshes over whatever ranks they are given, MOM6 works its own decomposition
+out under AUTO_MASKTABLE and WW3 decomposes its own spectral grid. The arrangement is NUOPC's rather than Payu's,
+so the configuration writes and reads the PE layout itself.
 """
 
 import logging
-from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from access.config import NUOPCParser
 from access.config.parallel_component import ComponentLayout, CoreSharing, ParallelComponent
-from access.config.parallel_constraints import (
-    FixedThreadsPerRankConstraint,
-    MaxWastedCoreFractionConstraint,
-    MinSubdomainSizeConstraint,
-)
-from access.config.parallel_domain import Domain, DomainDecompositionSpec
 
 from access.profiling.application import LogSpec, log_at
-from access.profiling.cice5_parser import CICE5ProfilingParser
 from access.profiling.control import GitControlSource
 from access.profiling.esmf_parser import ESMFSummaryProfilingParser
 from access.profiling.fms_parser import FMSProfilingParser
 from access.profiling.models.cice import CICEPartitioning
-from access.profiling.payu_configuration import PayuConfiguration, payu_model_stdout
+from access.profiling.models.components import CICEComponent
+from access.profiling.payu_configuration import PayuComponent, PayuConfiguration, PlainComponent, payu_model_stdout
 
 logger = logging.getLogger(__name__)
 
@@ -58,20 +56,6 @@ OM3_SHARED_NAME: str = "shared"
 It is a component of the tree but not of the model, so its name is not a NUOPC realm.
 """
 
-OM3_MAX_WASTED_CORE_FRACTION: float = 0.1
-"""Ceiling on the fraction of its cores an ACCESS-OM3 layout may leave idle.
-
-This bounds what counts as a reasonable ACCESS-OM3 layout at all, rather than the budget of any particular study.
-Constraints are cumulative, so a caller can only tighten this one.
-"""
-
-OM3_MOM6_HALO_WIDTH: int = 4
-"""Floor on how thin a MOM6 rank's sub-domain may get.
-
-It must hold at least its halo width along every dimension, and NIHALO and NJHALO are 4 throughout ACCESS-OM3's
-MOM_input. Not a tolerance of any particular study - a layout that breaks it is not one the model can run - so
-anything beyond it, near-square sub-domains for one, is a choice and belongs in the allocation strategy.
-"""
 OM3_CICE6_GHOST_WIDTH: int = 1
 """CICE6's ghost width, the floor on how thin the sea ice's blocks may get."""
 
@@ -79,140 +63,98 @@ OM3_CICE6_BLOCKS_PER_RANK_RANGE: tuple[int, int] = (5, 8)
 """How many blocks each CICE6 rank should hold, land blocks included.
 
 Several per rank is how CICE6 balances its work, and the 25 km release holds about 7.5 of its 30 x 27 blocks on
-each of its 275 ranks.
+each of its 275 ranks. Every preset chooses its block size from the rank count to fall in this range, with the
+distribution and the processor shape its control states.
 """
 
-OM3_25KM_GRID: Domain = Domain(shape=(1440, 1152))
-"""The 25 km tripolar grid every ACCESS-OM3 configuration released so far runs every component on."""
+OM3_MOM6: PlainComponent = PlainComponent(
+    name=OM3_OCEAN_NAME,
+    token=OM3_OCEAN_NAME,
+    logs=(
+        LogSpec(
+            "MOM6", payu_model_stdout(), FMSProfilingParser(has_hits=True), component=OM3_OCEAN_NAME, optional=True
+        ),
+    ),
+)
+"""MOM6, as every ACCESS-OM3 configuration runs it: decomposing its own grid, and logging its FMS clocks.
+
+MOM6 works its own decomposition out from the ranks it is given, under AUTO_MASKTABLE, so the search chooses its
+cores alone and nothing is written to MOM_input. The log is in the standard output Payu captures, and optional,
+since a run may be configured not to write clocks.
+"""
+
+# The name ESMF gives its summary when ESMF_RUNTIME_PROFILE_OUTPUT is SUMMARY, at the top of the output directory
+# Payu archives a run to. That is where the ACCESS-OM3 25 km scaling study of access-model-scaling (commit 2108c21)
+# read its ESMF timings from. The log is optional, since a run without those settings writes none.
+_ESMF_SUMMARY: LogSpec = LogSpec("ESMF", log_at("ESMF_Profile.summary"), ESMFSummaryProfilingParser(), optional=True)
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, kw_only=True)
 class OM3Configuration(PayuConfiguration):
-    """One configuration of ACCESS-OM3: which components it runs, and the grid each one runs on.
+    """One configuration of ACCESS-OM3: how its sea ice divides its grid, and whether it runs waves.
 
-    Of those grids, only the ones a control directory states as a process grid reach the component tree and are
-    decomposed by the layout search, since a decomposition nothing reads is not one a search can be said to have
-    chosen. The sea ice's does where it is CICE6 *and* the scheme its ice_in configures forms a process grid at all,
-    which is what its CICEPartitioning says - and where that partitioning chooses the block size from the rank count
-    instead, nothing reaches the tree, though ice_in is still written; a configuration running CDEPS's data sea ice
-    instead says so with data_sea_ice, and then it does not. The ocean's does only where the configuration pins
-    MOM6's LAYOUT: MOM6 otherwise works its own decomposition out from the ranks it is given, which is what
-    auto_ocean_layout says and what a scaling study normally has it do. The mediator, the data components - the data
-    sea ice among them when there is one - and the waves are handed their meshes by ESMF, which decomposes them over
-    whatever ranks they are given, and state no process grid either. Every grid is recorded whether or not it reaches
-    the tree, because the configuration files state them, and because a grid is how this class says which components
-    a configuration runs.
+    The mediator, the data atmosphere and the data runoff are always there, on the range of cores they share with
+    the sea ice, and so is the ocean, on a range of its own. MOM6 works its own decomposition out from the ranks
+    it is given, under AUTO_MASKTABLE, so the search chooses its cores alone and config_changes writes no
+    MOM_input: a control that pins a LAYOUT and a MASKTABLE in MOM_input needs them removed, and AUTO_MASKTABLE
+    set, through control_options before a generated ocean core count means anything. Another arrangement - a
+    pinned MOM6 layout, a data sea ice, a shared realm starting at an offset - is a subclass returning the
+    components it wants from `shared` and `concurrent`.
 
     Args:
         name (str): Identifies the configuration in the names of the experiments generated for it.
-        ocean (Domain | None): MOM6's grid, or None if the configuration has no ocean. MOM6 takes a range of
-            cores of its own and decomposes this grid over them; whether the search chooses how is
-            auto_ocean_layout's business. Must be two-dimensional, as LAYOUT is.
-        sea_ice (CICEPartitioning | None): How CICE6 divides its grid, or None if the configuration has no sea
-            ice. CICE6 shares its cores with the mediator and the data components; what the search may choose
-            about its decomposition follows from the partitioning rather than being assumed here.
-        waves (Domain | None): WW3's grid, or None if the configuration has no waves. WW3 takes a range of
-            cores of its own. Recorded only: WW3 decomposes its own spectral grid and states no process grid.
-        atmosphere (Domain | None): The data atmosphere's grid, on the shared cores. Recorded only: CDEPS
-            hands the mesh to ESMF, which decomposes it over the ranks datm is given.
-        runoff (Domain | None): The data runoff's grid, on the shared cores. Recorded only, as for the
-            atmosphere.
-        shared_core_offsets (Mapping[str, int]): The first core each component on the shared range occupies,
-            counted from the start of that range. A component absent from the mapping starts at the beginning,
-            which is what every released configuration does. Keyed by realm, so one of OM3_MEDIATOR_NAME,
-            OM3_ATMOSPHERE_NAME, OM3_SEA_ICE_NAME or OM3_RUNOFF_NAME.
-        auto_ocean_layout (bool): Whether MOM6 works its own decomposition out from the ranks it is given,
-            rather than being handed a LAYOUT. True by default, which is how a scaling study normally runs
-            ACCESS-OM3: with AUTO_MASKTABLE set and no LAYOUT, so that MOM6 decomposes whatever ocean core count
-            each layout gives it. The released 25 km configurations do pin a LAYOUT and a MASKTABLE in MOM_input -
-            only the 1.0-beta releases set AUTO_MASKTABLE instead - so a study using one of them as its control
-            removes those and sets AUTO_MASKTABLE through control_options. The ocean then carries no grid into the
-            component tree - there is no process grid for the search to choose, so it enumerates none and
-            offers one layout per ocean core count instead of one per factorisation of it - and config_changes
-            writes no MOM_input, leaving the control directory to say how MOM6 decomposes. Note that this
-            leaves a control directory that *does* pin a LAYOUT still using it, the way one carrying a
-            MASKTABLE keeps that: a configuration whose ocean layout is really fixed should set this False and
-            have the search choose one. Set False, the ocean carries its grid, the search picks a process grid
-            subject to MOM6's halo width, and config_changes writes it to MOM_input.
-        data_sea_ice (bool): Whether the sea ice is CDEPS's data component rather than CICE6. False by
-            default, which is CICE6. Set True and the sea ice is treated as the data atmosphere and the data
-            runoff are: it still takes its turn on the shared range and still receives cores, but ESMF
-            decomposes its mesh over whatever ranks it is given, so it carries no grid into the component
-            tree, the search chooses no process grid for it, and config_changes writes no ice_in. Its grid is
-            still recorded in sea_ice, which is also what says the configuration has a sea ice at all.
+        sea_ice (CICEPartitioning): How CICE6 divides its grid, which is every component's grid. What the search
+            may choose about it follows from the partitioning: the presets choose the block size from the rank
+            count, so the search chooses that count alone.
+        waves (bool): Whether the configuration runs WW3, as the MCW configurations do. WW3 takes a range of
+            cores of its own after the ocean's and decomposes its own spectral grid, so the search chooses its
+            cores alone.
         model_type (str): The model type identifier, as Payu defines it.
+        model_name (str): The model's name, which names the root of the component tree with `name`.
         experiment_prefix (str): Prefix for the names of experiments generated for this configuration.
 
     Raises:
-        ValueError: If the configuration has no ocean, sea ice or waves; if the ocean's grid is not
-            two-dimensional; or if an offset is negative or names something other than a component on the
-            shared range.
+        ValueError: If the name is empty.
     """
 
-    # name is defaulted because every field after it is, not because it is optional: __post_init__ refuses
-    # an empty one.
-    name: str = ""
-    ocean: Domain | None = None
-    sea_ice: CICEPartitioning | None = None
-    waves: Domain | None = None
-    atmosphere: Domain | None = None
-    runoff: Domain | None = None
-    shared_core_offsets: Mapping[str, int] = field(default_factory=dict)
-    auto_ocean_layout: bool = True
-    data_sea_ice: bool = False
+    name: str
+    sea_ice: CICEPartitioning
+    waves: bool = False
     model_type: str = "access-om3"
+    model_name: str = "ACCESS-OM3"
     experiment_prefix: str = "om3-layout"
 
     def __post_init__(self) -> None:
         if not self.name:
             raise ValueError(
                 "OM3Configuration.name must be non-empty: it is what tells one configuration's experiments "
-                "from another's, and ACCESS-OM3's differ in which components they run."
+                "from another's, and ACCESS-OM3's differ in their grids and in which components they run."
             )
-        if self.ocean is None and self.sea_ice is None and self.waves is None:
-            raise ValueError(
-                f"ACCESS-OM3 configuration {self.name!r} has no ocean, sea ice or waves. A configuration of "
-                "nothing but the mediator and the data components has no model to profile."
-            )
-        # Checked here rather than where the grid is decomposed, so a configuration that cannot be written
-        # out is refused when it is built instead of once a layout has been found for it. The sea ice's grid
-        # is checked by CICEPartitioning itself.
-        if self.ocean is not None and self.ocean.ndim != 2:
-            raise ValueError(
-                f"ACCESS-OM3 configuration {self.name!r} gives {OM3_OCEAN_NAME!r} a {self.ocean.ndim}-"
-                f"dimensional grid {self.ocean.shape}. Its decomposition is written as MOM6's LAYOUT, a "
-                "two-dimensional process grid, so the grid it decomposes has to be one too."
-            )
-        for realm, offset in self.shared_core_offsets.items():
-            if realm not in self.shared_realms:
-                raise ValueError(
-                    f"ACCESS-OM3 configuration {self.name!r} gives a core offset for {realm!r}, which is not "
-                    f"one of the components sharing its cores: {self.shared_realms}."
-                )
-            if offset < 0:
-                raise ValueError(
-                    f"ACCESS-OM3 configuration {self.name!r} gives {realm!r} a negative core offset {offset}."
-                )
 
     @property
-    def shared_realms(self) -> tuple[str, ...]:
+    def shared(self) -> tuple[PayuComponent, ...]:
         """Returns the components taking turns on the shared range of cores, in NUOPC realm order."""
-        realms = [OM3_MEDIATOR_NAME]
-        if self.atmosphere is not None:
-            realms.append(OM3_ATMOSPHERE_NAME)
-        if self.sea_ice is not None:
-            realms.append(OM3_SEA_ICE_NAME)
-        if self.runoff is not None:
-            realms.append(OM3_RUNOFF_NAME)
-        return tuple(realms)
+        return (
+            PlainComponent(name=OM3_MEDIATOR_NAME, token=OM3_MEDIATOR_NAME),
+            PlainComponent(name=OM3_ATMOSPHERE_NAME, token=OM3_ATMOSPHERE_NAME),
+            CICEComponent(
+                self.sea_ice,
+                name=OM3_SEA_ICE_NAME,
+                token=OM3_SEA_ICE_NAME,
+                log_name="CICE6",
+                log_path="log/ice.log",
+                optional=True,
+            ),
+            PlainComponent(name=OM3_RUNOFF_NAME, token=OM3_RUNOFF_NAME),
+        )
 
     @property
-    def _cice6(self) -> CICEPartitioning | None:
-        """Returns the CICE6 partitioning the search may choose from, or None where there is none to choose.
-
-        A configuration running CDEPS's data sea ice has none, whatever grid it records for it.
-        """
-        return None if self.data_sea_ice else self.sea_ice
+    def concurrent(self) -> tuple[PayuComponent, ...]:
+        """Returns the components with a range of their own, in the order those ranges follow the shared one."""
+        components: list[PayuComponent] = [OM3_MOM6]
+        if self.waves:
+            components.append(PlainComponent(name=OM3_WAVE_NAME, token=OM3_WAVE_NAME))
+        return tuple(components)
 
     @property
     def parallel_component(self) -> ParallelComponent:
@@ -223,91 +165,57 @@ class OM3Configuration(PayuConfiguration):
         as their total. The ocean and the waves each take a range of their own, so they are siblings of that
         parent and their cores add to it.
 
-        The sea ice carries a domain where its own partitioning gives the search something to choose, and the
-        ocean does where the configuration pins MOM6's LAYOUT. The other leaves carry none, and nor does the
-        ocean under auto_ocean_layout: ESMF decomposes the data components' meshes over the ranks they are
-        given and MOM6 works its own decomposition out from them, so in neither case is there a process grid
-        to choose or to write.
+        Only the sea ice can carry a domain, where its partitioning gives the search something to choose. The
+        other leaves carry none: ESMF decomposes the data components' meshes over the ranks they are given, and
+        MOM6 and WW3 work their own decompositions out, so for none of them is there a process grid to choose or
+        to write.
 
         Returns:
             ParallelComponent: Root of the component tree.
         """
-        no_threads = (FixedThreadsPerRankConstraint(n_threads=1),)  # ACCESS-OM3 sets *_nthreads = 1 throughout.
-        cice6 = self._cice6
-        subcomponents = [
-            ParallelComponent(
-                name=OM3_SHARED_NAME,
-                core_sharing=CoreSharing.SHARED,
-                subcomponents=tuple(
-                    ParallelComponent(
-                        name=realm,
-                        domain=cice6.domain if realm == OM3_SEA_ICE_NAME and cice6 is not None else None,
-                        local_constraints=(
-                            no_threads + cice6.local_constraints
-                            if realm == OM3_SEA_ICE_NAME and cice6 is not None
-                            else no_threads
-                        ),
-                        core_offset=self.shared_core_offsets.get(realm, 0),
-                    )
-                    for realm in self.shared_realms
-                ),
-            )
-        ]
-        if self.ocean is not None:
-            # Under auto_ocean_layout MOM6 chooses the decomposition, so the grid stays off the tree and the
-            # search enumerates no process grid for it. MinSubdomainSizeConstraint goes with it rather than
-            # being left to raise: it reads a decomposition, and a sub-domain shape nobody chose here is not
-            # one this can speak for. MOM6 answers for the shape it picks.
-            subcomponents.append(
-                ParallelComponent(
-                    name=OM3_OCEAN_NAME,
-                    domain=None if self.auto_ocean_layout else self.ocean,
-                    local_constraints=(
-                        no_threads
-                        if self.auto_ocean_layout
-                        else no_threads + (MinSubdomainSizeConstraint(min_size=OM3_MOM6_HALO_WIDTH),)
-                    ),
-                )
-            )
-        if self.waves is not None:
-            subcomponents.append(ParallelComponent(name=OM3_WAVE_NAME, local_constraints=no_threads))
-        return ParallelComponent(
-            name=f"ACCESS-OM3 {self.name}",
-            subcomponents=tuple(subcomponents),
-            local_constraints=(MaxWastedCoreFractionConstraint(max_fraction=OM3_MAX_WASTED_CORE_FRACTION),),
+        shared = ParallelComponent(
+            name=OM3_SHARED_NAME,
+            core_sharing=CoreSharing.SHARED,
+            subcomponents=tuple(self._leaf(component) for component in self.shared),
         )
+        return self._root([shared, *(self._leaf(component) for component in self.concurrent)])
 
     @property
     def logs(self) -> tuple[LogSpec, ...]:
-        """Returns the profiling logs this configuration writes.
+        """Returns the profiling logs this configuration writes, every one of them optional.
 
-        Every one is optional. ACCESS-OM3 writes the ESMF summary only when the run asked for it, through
-        ESMF_RUNTIME_PROFILE, and that summary covers the whole model rather than any one component of it, so
-        it names no realm and has no cores of its own to be read against.
+        Besides its components' logs, ACCESS-OM3 writes the ESMF summary when the run asked for it, through
+        ESMF_RUNTIME_PROFILE, and that summary covers the whole model rather than any one component of it, so it
+        names no realm and has no cores of its own to be read against.
         """
-        specs: list[LogSpec] = []
-        if self.ocean is not None:
-            specs.append(
-                LogSpec(
-                    "MOM6",
-                    payu_model_stdout(),
-                    FMSProfilingParser(has_hits=True),
-                    component=OM3_OCEAN_NAME,
-                    optional=True,
-                )
+        return (*self._component_logs(self.shared), *self._component_logs(self.concurrent), _ESMF_SUMMARY)
+
+    def _realm_layouts(self, layout: ComponentLayout) -> dict[str, ComponentLayout]:
+        """Returns what each realm was given, keyed by realm.
+
+        The shared range is a component of the tree and not of the model, so it is its children that name
+        realms; everything else is a realm in its own right.
+
+        Args:
+            layout (ComponentLayout): Layout of the components, as returned by the layout search.
+
+        Returns:
+            dict[str, ComponentLayout]: The layout of each realm this configuration runs.
+
+        Raises:
+            ValueError: If the layout is not a layout of this configuration.
+        """
+        realms: dict[str, ComponentLayout] = {}
+        for component in layout.sub_layouts:
+            for realm in component.sub_layouts if component.name == OM3_SHARED_NAME else (component,):
+                realms[realm.name] = realm
+        expected = [component.name for component in (*self.shared, *self.concurrent)]
+        if sorted(realms) != sorted(expected):
+            raise ValueError(
+                f"The layout {layout.name!r} has the components {sorted(realms)}, but {self.model_name} "
+                f"configuration {self.name!r} runs {sorted(expected)}."
             )
-        if self._cice6 is not None:
-            specs.append(
-                LogSpec(
-                    "CICE6", log_at("log/ice.log"), CICE5ProfilingParser(), component=OM3_SEA_ICE_NAME, optional=True
-                )
-            )
-        # The name ESMF gives its summary when ESMF_RUNTIME_PROFILE_OUTPUT is SUMMARY, at the top of the output
-        # directory Payu archives a run to. That is where the ACCESS-OM3 25 km scaling study of
-        # access-model-scaling (commit 2108c21) read its ESMF timings from. The log is optional, since a run
-        # without those settings writes none.
-        specs.append(LogSpec("ESMF", log_at("ESMF_Profile.summary"), ESMFSummaryProfilingParser(), optional=True))
-        return tuple(specs)
+        return realms
 
     def _core_ranges(self, layout: ComponentLayout) -> dict[str, tuple[int, int]]:
         """Returns the cores each component occupies, as a (rootpe, ntasks) pair per realm.
@@ -326,6 +234,7 @@ class OM3Configuration(PayuConfiguration):
         Raises:
             ValueError: If the layout is not a layout of this configuration.
         """
+        self._realm_layouts(layout)
         ranges: dict[str, tuple[int, int]] = {}
         rootpe = 0
         for component in layout.sub_layouts:
@@ -336,29 +245,6 @@ class OM3Configuration(PayuConfiguration):
                 ranges[component.name] = (rootpe, component.n_cores)
             rootpe += component.n_cores
         return ranges
-
-    def _decompositions(self, layout: ComponentLayout) -> dict[str, DomainDecompositionSpec]:
-        """Returns the decomposition the search chose for each component that decomposes one.
-
-        Only the ocean and the sea ice do, so only those appear here, and only when the configuration has
-        them and leaves the choice to the search. The mediator, the data components and the waves are
-        decomposed by ESMF over the ranks they are given, and carry no grid for the search to split.
-
-        Args:
-            layout (ComponentLayout): Layout of the components, as returned by the layout search.
-
-        Returns:
-            dict[str, DomainDecompositionSpec]: The grid and process grid of each realm that has one.
-        """
-        decompositions: dict[str, DomainDecompositionSpec] = {}
-        for component in layout.sub_layouts:
-            # The shared range is a component of the tree and not of the model, so it is its children that
-            # name realms; everything else is a realm in its own right.
-            realms = component.sub_layouts if component.name == OM3_SHARED_NAME else (component,)
-            for realm in realms:
-                if realm.decomposition is not None:
-                    decompositions[realm.name] = realm.decomposition
-        return decompositions
 
     def experiment_name(self, layout: ComponentLayout) -> str:
         """Returns the name of the experiment holding a given layout.
@@ -379,13 +265,12 @@ class OM3Configuration(PayuConfiguration):
         Raises:
             ValueError: If the layout is not a layout of this configuration.
         """
-        ranges = self._core_ranges(layout)
-        decompositions = self._decompositions(layout)
+        realms = self._realm_layouts(layout)
         components = []
-        for realm in sorted(ranges):
-            decomposition = decompositions.get(realm)
+        for realm in sorted(realms):
+            decomposition = realms[realm].decomposition
             if decomposition is None:
-                components.append(f"{realm}_{ranges[realm][1]}")
+                components.append(f"{realm}_{realms[realm].n_cores}")
             else:
                 components.append(f"{realm}_" + "x".join(str(ranks) for ranks in decomposition.grid))
         return f"{self.experiment_prefix}_{self.name}_{'_'.join(components)}"
@@ -393,11 +278,9 @@ class OM3Configuration(PayuConfiguration):
     def config_changes(self, layout: ComponentLayout) -> dict:
         """Returns the configuration file changes needed to run this configuration with a given layout.
 
-        Every component's cores go into the PELAYOUT_attributes block of nuopc.runconfig, and the ocean and
-        the sea ice additionally have the decomposition the search chose for them written out: MOM6's as a
-        LAYOUT in MOM_input, CICE6's as whatever its partitioning says realises it. A configuration pinning
-        MOM6's decomposition with a MASKTABLE needs that table removed or regenerated for the LAYOUT written
-        here to mean anything; this does not touch it.
+        Every component's cores go into the PELAYOUT_attributes block of nuopc.runconfig, and each component
+        additionally has its own files changed as it says: the sea ice's block size, as its partitioning
+        realises its rank count, goes into ice_in.
 
         Args:
             layout (ComponentLayout): Layout of the components, as returned by the layout search.
@@ -409,25 +292,18 @@ class OM3Configuration(PayuConfiguration):
         Raises:
             ValueError: If the layout is not a layout of this configuration, or cannot be realised by it.
         """
-        ranges = self._core_ranges(layout)
         pelayout: dict[str, int] = {}
-        for realm, (rootpe, ntasks) in ranges.items():
+        for realm, (rootpe, ntasks) in self._core_ranges(layout).items():
             pelayout[f"{realm}_ntasks"] = ntasks
             pelayout[f"{realm}_rootpe"] = rootpe
-        changes = {
+        changes: dict = {
             # The whole budget, including any cores left idle: this is what the job occupies.
             "config.yaml": {"ncpus": layout.n_cores},
             "nuopc.runconfig": {"PELAYOUT_attributes": pelayout},
         }
-        decompositions = self._decompositions(layout)
-        ocean = decompositions.get(OM3_OCEAN_NAME)
-        if ocean is not None:
-            changes["MOM_input"] = {"LAYOUT": ", ".join(str(ranks) for ranks in ocean.grid)}
-        cice6 = self._cice6
-        if cice6 is not None:
-            ice_changes = cice6.namelist_changes(ranges[OM3_SEA_ICE_NAME][1], decompositions.get(OM3_SEA_ICE_NAME))
-            if ice_changes:
-                changes[cice6.namelist_path] = {cice6.namelist_group: ice_changes}
+        realms = self._realm_layouts(layout)
+        for component in (*self.shared, *self.concurrent):
+            changes.update(component.config_changes(realms[component.name]))
         return changes
 
     def parse_layout(self, output_dir: Path) -> ComponentLayout | None:
@@ -482,14 +358,9 @@ class OM3Configuration(PayuConfiguration):
             logger.debug(f"The NUOPC configuration at {runconfig_path} states no PE layout.")
             return None
 
-        realms = list(self.shared_realms)
-        if self.ocean is not None:
-            realms.append(OM3_OCEAN_NAME)
-        if self.waves is not None:
-            realms.append(OM3_WAVE_NAME)
-
         ranges = {}
-        for realm in realms:
+        for component in (*self.shared, *self.concurrent):
+            realm = component.name
             rootpe, ntasks = pelayout.get(f"{realm}_rootpe"), pelayout.get(f"{realm}_ntasks")
             if rootpe is None or ntasks is None:
                 logger.debug(f"The PE layout in {runconfig_path} does not say what {realm!r} was given.")
@@ -509,7 +380,7 @@ class OM3Configuration(PayuConfiguration):
         Raises:
             ValueError: If they do not describe a layout of this component tree.
         """
-        shared_realms = self.shared_realms
+        shared_realms = [component.name for component in self.shared]
         # The realms sharing a range are placed within it, so the range starts where the earliest of them
         # does and reaches as far as the furthest of them reaches.
         shared_start = min(ranges[realm][0] for realm in shared_realms)
@@ -531,10 +402,8 @@ class OM3Configuration(PayuConfiguration):
 
         # The realms with a range of their own follow it, in the order the tree declares them.
         placed = [(shared_start, shared)]
-        if self.ocean is not None:
-            placed.append((ranges[OM3_OCEAN_NAME][0], _om3_leaf(OM3_OCEAN_NAME, ranges[OM3_OCEAN_NAME][1])))
-        if self.waves is not None:
-            placed.append((ranges[OM3_WAVE_NAME][0], _om3_leaf(OM3_WAVE_NAME, ranges[OM3_WAVE_NAME][1])))
+        for component in self.concurrent:
+            placed.append((ranges[component.name][0], _om3_leaf(component.name, ranges[component.name][1])))
 
         # Each range has to start where the one before it ended, and the first of them at the first core.
         # Anything else leaves cores between the ranges that no component accounts for, which a tree of
@@ -550,7 +419,7 @@ class OM3Configuration(PayuConfiguration):
 
         sub_layouts = tuple(sub_layout for _, sub_layout in placed)
         return ComponentLayout(
-            name=f"ACCESS-OM3 {self.name}",
+            name=f"{self.model_name} {self.name}",
             n_cores=sum(sub_layout.n_cores for sub_layout in sub_layouts),
             n_ranks=sum(sub_layout.n_ranks for sub_layout in sub_layouts),
             threads_per_rank=None,
@@ -572,8 +441,17 @@ def _om3_leaf(name: str, n_cores: int, core_offset: int = 0) -> ComponentLayout:
     )
 
 
+OM3_25KM_GRID: tuple[int, int] = (1440, 1152)
+"""The 25 km tripolar grid, as nx_global and ny_global, which every component of the MC_25km configurations runs on."""
+OM3_100KM_GRID: tuple[int, int] = (360, 324)
+"""The 100 km tripolar grid of the MC_100km and MCW_100km configurations."""
+OM3_8KM_GRID: tuple[int, int] = (4320, 3360)
+"""The 8 km tripolar grid of the MC_8km configuration."""
+OM3_PANAN4KM_GRID: tuple[int, int] = (4320, 1442)
+"""The 4 km pan-Antarctic regional grid of the MC_panan4km configurations."""
+
 OM3_25KM_CICE6: CICEPartitioning = CICEPartitioning(
-    grid=(OM3_25KM_GRID.shape[0], OM3_25KM_GRID.shape[1]),
+    grid=OM3_25KM_GRID,
     distribution_type="roundrobin",
     processor_shape="square-ice",
     blocks_per_rank_range=OM3_CICE6_BLOCKS_PER_RANK_RANGE,
@@ -587,13 +465,7 @@ else. The block size follows from that rank count, so that each rank keeps holdi
 changes, and is written into ice_in with max_blocks left for CICE6 to work out.
 """
 
-OM3_MC_25KM: OM3Configuration = OM3Configuration(
-    name="MC-25km",
-    ocean=OM3_25KM_GRID,
-    sea_ice=OM3_25KM_CICE6,
-    atmosphere=OM3_25KM_GRID,
-    runoff=OM3_25KM_GRID,
-)
+OM3_MC_25KM: OM3Configuration = OM3Configuration(name="MC-25km", sea_ice=OM3_25KM_CICE6)
 """ACCESS-OM3 with MOM6 and CICE6 at 25 km, every component on the same tripolar grid.
 
 Every ACCESS-OM3 configuration released so far is this one. The releases differ in their forcing, their
@@ -601,17 +473,132 @@ biogeochemistry and the core counts they were run with, none of which changes ho
 
 Note what the mask table costs this configuration. Its control, `OM3_MC_25KM_SOURCE`, pins MOM6's decomposition in
 MOM_input with an explicit LAYOUT of 72 x 48 and a MASKTABLE naming a file of 1027 masked blocks, and ocn_ntasks is
-the layout's ranks less the masked ones: 2429. This configuration leaves the ocean's decomposition to MOM6
-(auto_ocean_layout), so config_changes writes no MOM_input and touches neither: a study has to remove LAYOUT,
-IO_LAYOUT and MASKTABLE and set AUTO_MASKTABLE through control_options before a generated ocean core count means
-anything. A study setting auto_ocean_layout False gets a LAYOUT written instead, but still has to remove or
-regenerate the MASKTABLE - config_changes never touches it, since dropping it silently would change what is
-computed, not just how it is divided.
+the layout's ranks less the masked ones: 2429. This configuration leaves the ocean's decomposition to MOM6, so a
+study has to remove LAYOUT, IO_LAYOUT and MASKTABLE and set AUTO_MASKTABLE through control_options before a
+generated ocean core count means anything, and the released core counts are then the budget the release occupied
+rather than a layout to reproduce.
+"""
+OM3_MC_25KM_CORES: dict[str, int] = {
+    OM3_MEDIATOR_NAME: 275,
+    OM3_ATMOSPHERE_NAME: 275,
+    OM3_SEA_ICE_NAME: 275,
+    OM3_RUNOFF_NAME: 275,
+    OM3_OCEAN_NAME: 2429,
+}
+"""Cores each component receives in release-MC_25km_jra_ryf-2.0-beta, keyed by component name.
 
-With auto_ocean_layout False, the released core counts are also out of the search's reach in all but name:
-ocn_ntasks is 2429, a masked count and so 7 x 347 as a process grid. The search still finds layouts on those counts,
-because nothing here rules them out, but a decomposition it writes for them is not the one the release runs. Treat
-`OM3_MC_25KM_RELEASE_CORES` as the budget the release occupied rather than as a layout to reproduce.
+These build no layout, and are provided as the reference a caller writing an allocation strategy is usually
+working from.
+"""
+
+OM3_100KM_CICE6: CICEPartitioning = CICEPartitioning(
+    grid=OM3_100KM_GRID,
+    blocks_per_rank_range=OM3_CICE6_BLOCKS_PER_RANK_RANGE,
+    nghost=OM3_CICE6_GHOST_WIDTH,
+)
+"""CICE6 as dev-MC_100km_jra_ryf configures it: blocks distributed cartesian with one block row.
+
+The scheme forms a process grid, so the block size chosen from the rank count is one whose blocks split evenly
+over it.
+"""
+OM3_MC_100KM: OM3Configuration = OM3Configuration(name="MC-100km", sea_ice=OM3_100KM_CICE6)
+"""ACCESS-OM3 with MOM6 and CICE6 at 100 km: the dev-MC_100km_jra_* configurations, as of November 2026.
+
+They differ in their forcing and their biogeochemistry, none of which changes how the model is parallelised.
+MOM_input sets AUTO_MASKTABLE, so a generated ocean core count runs as it is.
+"""
+OM3_MC_100KM_CORES: dict[str, int] = {
+    OM3_MEDIATOR_NAME: 24,
+    OM3_ATMOSPHERE_NAME: 24,
+    OM3_SEA_ICE_NAME: 24,
+    OM3_RUNOFF_NAME: 24,
+    OM3_OCEAN_NAME: 288,
+}
+"""Cores each component receives in dev-MC_100km_jra_ryf, keyed by component name: 3 nodes of 104 cores."""
+
+OM3_MCW_100KM_CICE6: CICEPartitioning = CICEPartitioning(
+    grid=OM3_100KM_GRID,
+    distribution_type="roundrobin",
+    blocks_per_rank_range=OM3_CICE6_BLOCKS_PER_RANK_RANGE,
+    nghost=OM3_CICE6_GHOST_WIDTH,
+)
+"""CICE6 as dev-MCW_100km_era_iaf configures it: blocks distributed roundrobin, in one block row."""
+OM3_MCW_100KM: OM3Configuration = OM3Configuration(name="MCW-100km", sea_ice=OM3_MCW_100KM_CICE6, waves=True)
+"""ACCESS-OM3 with MOM6, CICE6 and WW3 at 100 km: the dev-MCW_100km_era_iaf configuration, as of November 2026.
+
+MOM_input sets AUTO_MASKTABLE, so a generated ocean core count runs as it is.
+"""
+OM3_MCW_100KM_CORES: dict[str, int] = {
+    OM3_MEDIATOR_NAME: 56,
+    OM3_ATMOSPHERE_NAME: 56,
+    OM3_SEA_ICE_NAME: 56,
+    OM3_RUNOFF_NAME: 56,
+    OM3_OCEAN_NAME: 96,
+    OM3_WAVE_NAME: 56,
+}
+"""Cores each component receives in dev-MCW_100km_era_iaf, keyed by component name: 2 nodes of 104 cores."""
+
+OM3_8KM_CICE6: CICEPartitioning = CICEPartitioning(
+    grid=OM3_8KM_GRID,
+    distribution_type="roundrobin",
+    processor_shape="square-ice",
+    blocks_per_rank_range=OM3_CICE6_BLOCKS_PER_RANK_RANGE,
+    nghost=OM3_CICE6_GHOST_WIDTH,
+)
+"""CICE6 as dev-MC_8km_jra_ryf configures it: square-ice blocks distributed roundrobin, as at 25 km."""
+OM3_MC_8KM: OM3Configuration = OM3Configuration(name="MC-8km", sea_ice=OM3_8KM_CICE6)
+"""ACCESS-OM3 with MOM6 and CICE6 at 8 km: the dev-MC_8km_jra_ryf configuration, as of November 2026.
+
+Its control pins a LAYOUT of 108 x 96 and a MASKTABLE in MOM_input, which a study removes as for `OM3_MC_25KM`.
+Choosing the sea ice's block size on this grid is slow: every candidate block size of a 4320 x 3360 grid is
+weighed for each rank count the search visits.
+"""
+OM3_MC_8KM_CORES: dict[str, int] = {
+    OM3_MEDIATOR_NAME: 1749,
+    OM3_ATMOSPHERE_NAME: 1749,
+    OM3_SEA_ICE_NAME: 1749,
+    OM3_RUNOFF_NAME: 1749,
+    OM3_OCEAN_NAME: 6675,
+}
+"""Cores each component receives in dev-MC_8km_jra_ryf, keyed by component name: 81 nodes of 104 cores."""
+
+OM3_PANAN4KM_CICE6: CICEPartitioning = CICEPartitioning(
+    grid=OM3_PANAN4KM_GRID,
+    distribution_type="sectrobin",
+    processor_shape="square-ice",
+    blocks_per_rank_range=OM3_CICE6_BLOCKS_PER_RANK_RANGE,
+    nghost=OM3_CICE6_GHOST_WIDTH,
+)
+"""CICE6 as the dev-MC_panan4km_jra_ryf configurations configure it: square-ice blocks distributed sectrobin."""
+OM3_MC_PANAN4KM: OM3Configuration = OM3Configuration(name="MC-panan4km", sea_ice=OM3_PANAN4KM_CICE6)
+"""The regional pan-Antarctic ACCESS-OM3 at 4 km: the dev-MC_panan4km_jra_ryf configuration, as of November 2026.
+
+Its control pins a LAYOUT of 70 x 35 and a MASKTABLE in MOM_input, which a study removes as for `OM3_MC_25KM`.
+"""
+OM3_MC_PANAN4KM_CORES: dict[str, int] = {
+    OM3_MEDIATOR_NAME: 256,
+    OM3_ATMOSPHERE_NAME: 256,
+    OM3_SEA_ICE_NAME: 256,
+    OM3_RUNOFF_NAME: 256,
+    OM3_OCEAN_NAME: 1408,
+}
+"""Cores each component receives in dev-MC_panan4km_jra_ryf, keyed by component name: 16 nodes of 104 cores."""
+OM3_MC_PANAN4KM_ISF: OM3Configuration = replace(OM3_MC_PANAN4KM, name="MC-panan4km-isf")
+"""The pan-Antarctic ACCESS-OM3 at 4 km with ice shelves: dev-MC_panan4km_jra_ryf+isf, as of November 2026.
+
+The same grid and sea ice scheme as `OM3_MC_PANAN4KM`, so the same configuration under another name; its control
+pins a LAYOUT of 84 x 49 and a MASKTABLE in MOM_input, which a study removes as for `OM3_MC_25KM`.
+"""
+OM3_MC_PANAN4KM_ISF_CORES: dict[str, int] = {
+    OM3_MEDIATOR_NAME: 364,
+    OM3_ATMOSPHERE_NAME: 364,
+    OM3_SEA_ICE_NAME: 364,
+    OM3_RUNOFF_NAME: 364,
+    OM3_OCEAN_NAME: 2626,
+}
+"""Cores each component receives in dev-MC_panan4km_jra_ryf+isf, keyed by component name.
+
+Its control asks for 2990 cores, which is not a whole number of 104-core nodes.
 """
 
 OM3_CONFIGS_REPOSITORY: str = "git@github.com:ACCESS-NRI/access-om3-configs.git"
@@ -624,16 +611,4 @@ OM3_MC_25KM_SOURCE: GitControlSource = GitControlSource(
 
 This is a convenience rather than part of the configuration: the other 25 km releases are the same configuration
 against a different control, so a study profiling one passes its own and keeps `OM3_MC_25KM`.
-"""
-OM3_MC_25KM_RELEASE_CORES: dict[str, int] = {
-    OM3_MEDIATOR_NAME: 275,
-    OM3_ATMOSPHERE_NAME: 275,
-    OM3_SEA_ICE_NAME: 275,
-    OM3_RUNOFF_NAME: 275,
-    OM3_OCEAN_NAME: 2429,
-}
-"""Cores each component receives in release-MC_25km_jra_ryf-2.0-beta, keyed by component name.
-
-These build no layout, and are provided as the reference a caller writing an allocation strategy is usually
-working from.
 """
