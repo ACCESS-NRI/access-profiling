@@ -22,7 +22,8 @@ archive directory, where the finished experiments are kept, the application, and
     ```python
     from pathlib import Path
 
-    from access.profiling import ESM16_PI_CONTROL, ESM16_PI_CONTROL_SOURCE, PayuManager
+    from access.profiling import PayuManager
+    from access.profiling.models.esm16 import ESM16_PI_CONTROL, ESM16_PI_CONTROL_SOURCE
 
     manager = PayuManager(
         work_dir=Path("/scratch/tm70/model_scaling/ACCESS-ESM1.6/piControl"),
@@ -37,13 +38,14 @@ archive directory, where the finished experiments are kept, the application, and
     ```python
     from pathlib import Path
 
-    from access.profiling import OM3_MC_25KM, OM3_MC_25KM_SOURCE, PayuManager
+    from access.profiling import PayuManager
+    from access.profiling.models.om3 import OM3_MC_25KM, OM3_MC_25KM_JRA_RYF_SOURCE
 
     manager = PayuManager(
         work_dir=Path("/scratch/tm70/model_scaling/ACCESS-OM3/MC_25km_jra_ryf"),
         archive_dir=Path("/g/data/tm70/model_scaling/ACCESS-OM3/MC_25km_jra_ryf/archive"),
         application=OM3_MC_25KM,
-        control=OM3_MC_25KM_SOURCE,
+        control=OM3_MC_25KM_JRA_RYF_SOURCE,
     )
     ```
 

@@ -785,3 +785,23 @@ class TestOM3FromControl:
     def test_a_control_without_a_nuopc_configuration_is_refused(self, tmp_path):
         with pytest.raises(ValueError, match="not an ACCESS-OM3 control"):
             OM3Configuration.from_control(tmp_path)
+
+
+def test_om3_ships_a_control_for_every_configuration():
+    """The four 25 km releases at their tags, and the eight configurations under development at their branches."""
+
+    from access.profiling.models import om3
+
+    sources = {name: value for name, value in vars(om3).items() if name.endswith("_SOURCE")}
+
+    assert len(sources) == 12
+    assert all(source.repository == om3.OM3_CONFIGS_REPOSITORY for source in sources.values())
+    released = {name for name, source in sources.items() if source.start_point.startswith("release-")}
+    assert released == {
+        "OM3_MC_25KM_JRA_RYF_SOURCE",
+        "OM3_MC_25KM_JRA_IAF_SOURCE",
+        "OM3_MC_25KM_JRA_RYF_WOMBATLITE_SOURCE",
+        "OM3_MC_25KM_JRA_IAF_WOMBATLITE_SOURCE",
+    }
+    assert all(sources[name].start_point.startswith("dev-") for name in set(sources) - released)
+    assert om3.OM3_MC_PANAN4KM_JRA_RYF_ISF_SOURCE.start_point == "dev-MC_panan4km_jra_ryf+isf"

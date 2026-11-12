@@ -24,6 +24,7 @@ from pathlib import Path
 
 from access.config.parallel_domain import Domain
 
+from access.profiling.control import GitControlSource
 from access.profiling.models.cice import CICEPartitioning
 from access.profiling.models.components import CICEComponent, MOM5Component
 from access.profiling.payu_configuration import (
@@ -198,8 +199,130 @@ OM2_01DEG_CORES: dict[str, int] = {OM2_YATM_NAME: 1, OM2_MOM5_NAME: 4358, OM2_CI
 """Cores each component receives in release-01deg_jra55_ryf-4.1, keyed by component name; the ocean's is masked."""
 
 OM2_CONFIGS_REPOSITORY: str = "git@github.com:ACCESS-NRI/access-om2-configs.git"
-"""The repository holding the released ACCESS-OM2 configurations.
-
-A study passes a `GitControlSource` of this repository at the release it profiles, such as
-`release-1deg_jra55_ryf-4.1`, with the preset of that release's resolution.
+"""The repository holding the released ACCESS-OM2 configurations."""
+OM2_1DEG_JRA55_RYF_SOURCE: GitControlSource = GitControlSource(
+    repository=OM2_CONFIGS_REPOSITORY,
+    start_point="release-1deg_jra55_ryf-4.1",
+)
+"""The latest release of `1deg_jra55_ryf`, which `OM2_1DEG` describes; its CICE5 is compiled for its grid, so a study
+loads `access-om2/2026.08.002` through `control_options`.
+"""
+OM2_1DEG_JRA55_RYF_BGC_SOURCE: GitControlSource = GitControlSource(
+    repository=OM2_CONFIGS_REPOSITORY,
+    start_point="release-1deg_jra55_ryf_bgc-3.0",
+)
+"""The latest release of `1deg_jra55_ryf_bgc`, which `OM2_1DEG` describes; its CICE5 is compiled for its grid, so a
+study loads `access-om2/2026.08.002` through `control_options`.
+"""
+OM2_1DEG_JRA55_RYF_WOMBATLITE_SOURCE: GitControlSource = GitControlSource(
+    repository=OM2_CONFIGS_REPOSITORY,
+    start_point="release-1deg_jra55_ryf+wombatlite-3.0",
+)
+"""The latest release of `1deg_jra55_ryf+wombatlite`, which `OM2_1DEG` describes; it runs the runtime-grid CICE5
+already.
+"""
+OM2_1DEG_JRA55_IAF_SOURCE: GitControlSource = GitControlSource(
+    repository=OM2_CONFIGS_REPOSITORY,
+    start_point="release-1deg_jra55_iaf-4.1",
+)
+"""The latest release of `1deg_jra55_iaf`, which `OM2_1DEG` describes; its CICE5 is compiled for its grid, so a study
+loads `access-om2/2026.08.002` through `control_options`.
+"""
+OM2_1DEG_JRA55_IAF_BGC_SOURCE: GitControlSource = GitControlSource(
+    repository=OM2_CONFIGS_REPOSITORY,
+    start_point="release-1deg_jra55_iaf_bgc-3.0",
+)
+"""The latest release of `1deg_jra55_iaf_bgc`, which `OM2_1DEG` describes; its CICE5 is compiled for its grid, so a
+study loads `access-om2/2026.08.002` through `control_options`.
+"""
+OM2_1DEG_JRA55_IAF_WOMBATLITE_SOURCE: GitControlSource = GitControlSource(
+    repository=OM2_CONFIGS_REPOSITORY,
+    start_point="release-1deg_jra55_iaf+wombatlite-3.0",
+)
+"""The latest release of `1deg_jra55_iaf+wombatlite`, which `OM2_1DEG` describes; it runs the runtime-grid CICE5
+already.
+"""
+OM2_025DEG_JRA55_RYF_SOURCE: GitControlSource = GitControlSource(
+    repository=OM2_CONFIGS_REPOSITORY,
+    start_point="release-025deg_jra55_ryf-4.1",
+)
+"""The latest release of `025deg_jra55_ryf`, which `OM2_025DEG` describes; its CICE5 is compiled for its grid, so a
+study loads `access-om2/2026.08.002` through `control_options`.
+"""
+OM2_025DEG_JRA55_RYF_BGC_SOURCE: GitControlSource = GitControlSource(
+    repository=OM2_CONFIGS_REPOSITORY,
+    start_point="release-025deg_jra55_ryf_bgc-3.0",
+)
+"""The latest release of `025deg_jra55_ryf_bgc`, which `OM2_025DEG` describes; its CICE5 is compiled for its grid, so a
+study loads `access-om2/2026.08.002` through `control_options`.
+"""
+OM2_025DEG_JRA55_RYF_WOMBATLITE_SOURCE: GitControlSource = GitControlSource(
+    repository=OM2_CONFIGS_REPOSITORY,
+    start_point="release-025deg_jra55_ryf+wombatlite-3.0",
+)
+"""The latest release of `025deg_jra55_ryf+wombatlite`, which `OM2_025DEG` describes; it runs the runtime-grid CICE5
+already.
+"""
+OM2_025DEG_JRA55_IAF_SOURCE: GitControlSource = GitControlSource(
+    repository=OM2_CONFIGS_REPOSITORY,
+    start_point="release-025deg_jra55_iaf-4.1",
+)
+"""The latest release of `025deg_jra55_iaf`, which `OM2_025DEG` describes; its CICE5 is compiled for its grid, so a
+study loads `access-om2/2026.08.002` through `control_options`.
+"""
+OM2_025DEG_JRA55_IAF_BGC_SOURCE: GitControlSource = GitControlSource(
+    repository=OM2_CONFIGS_REPOSITORY,
+    start_point="release-025deg_jra55_iaf_bgc-3.0",
+)
+"""The latest release of `025deg_jra55_iaf_bgc`, which `OM2_025DEG` describes; its CICE5 is compiled for its grid, so a
+study loads `access-om2/2026.08.002` through `control_options`.
+"""
+OM2_025DEG_JRA55_IAF_WOMBATLITE_SOURCE: GitControlSource = GitControlSource(
+    repository=OM2_CONFIGS_REPOSITORY,
+    start_point="release-025deg_jra55_iaf+wombatlite-3.0",
+)
+"""The latest release of `025deg_jra55_iaf+wombatlite`, which `OM2_025DEG` describes; it runs the runtime-grid CICE5
+already.
+"""
+OM2_01DEG_JRA55_RYF_SOURCE: GitControlSource = GitControlSource(
+    repository=OM2_CONFIGS_REPOSITORY,
+    start_point="release-01deg_jra55_ryf-4.1",
+)
+"""The latest release of `01deg_jra55_ryf`, which `OM2_01DEG` describes; its CICE5 is compiled for its grid, so a study
+loads `access-om2/2026.08.002` through `control_options`.
+"""
+OM2_01DEG_JRA55_RYF_BGC_SOURCE: GitControlSource = GitControlSource(
+    repository=OM2_CONFIGS_REPOSITORY,
+    start_point="release-01deg_jra55_ryf_bgc-3.0",
+)
+"""The latest release of `01deg_jra55_ryf_bgc`, which `OM2_01DEG` describes; its CICE5 is compiled for its grid, so a
+study loads `access-om2/2026.08.002` through `control_options`.
+"""
+OM2_01DEG_JRA55_RYF_WOMBATLITE_SOURCE: GitControlSource = GitControlSource(
+    repository=OM2_CONFIGS_REPOSITORY,
+    start_point="release-01deg_jra55_ryf+wombatlite-3.0",
+)
+"""The latest release of `01deg_jra55_ryf+wombatlite`, which `OM2_01DEG` describes; it runs the runtime-grid CICE5
+already.
+"""
+OM2_01DEG_JRA55_IAF_SOURCE: GitControlSource = GitControlSource(
+    repository=OM2_CONFIGS_REPOSITORY,
+    start_point="release-01deg_jra55_iaf-4.1",
+)
+"""The latest release of `01deg_jra55_iaf`, which `OM2_01DEG` describes; its CICE5 is compiled for its grid, so a study
+loads `access-om2/2026.08.002` through `control_options`.
+"""
+OM2_01DEG_JRA55_IAF_BGC_SOURCE: GitControlSource = GitControlSource(
+    repository=OM2_CONFIGS_REPOSITORY,
+    start_point="release-01deg_jra55_iaf_bgc-3.0",
+)
+"""The latest release of `01deg_jra55_iaf_bgc`, which `OM2_01DEG` describes; its CICE5 is compiled for its grid, so a
+study loads `access-om2/2026.08.002` through `control_options`.
+"""
+OM2_01DEG_JRA55_IAF_WOMBATLITE_SOURCE: GitControlSource = GitControlSource(
+    repository=OM2_CONFIGS_REPOSITORY,
+    start_point="release-01deg_jra55_iaf+wombatlite-3.0",
+)
+"""The latest release of `01deg_jra55_iaf+wombatlite`, which `OM2_01DEG` describes; it runs the runtime-grid CICE5
+already.
 """

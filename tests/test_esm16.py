@@ -694,3 +694,18 @@ class TestESM16FromControl:
 
         with pytest.raises(ValueError, match=r"types \['yatm'\], which ACCESS-ESM1.6 does not run"):
             ESM16Configuration.from_control(control)
+
+
+def test_esm16_ships_a_control_for_every_released_configuration():
+    """Eighteen, each at a release tag of the configurations repository, and none for a branch."""
+
+    from access.profiling.models import esm16
+
+    sources = {name: value for name, value in vars(esm16).items() if name.endswith("_SOURCE")}
+
+    assert len(sources) == 18
+    for source in sources.values():
+        assert source.repository == esm16.ESM16_CONFIGS_REPOSITORY
+        assert source.start_point.startswith("release-")
+    assert esm16.ESM16_HISTORICAL_SOURCE.start_point == "release-historical-1.3"
+    assert esm16.ESM16_AMIP_SOURCE.start_point == "release-amip-1.0"
