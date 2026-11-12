@@ -62,7 +62,8 @@ class CICEPartitioningMode(Enum):
             are shared out. The block size is not written; how many blocks a rank may hold is.
         OPAQUE: The search chooses the rank count and nothing else. Either the distribution forms no process
             grid, or the processor shape is not one a one-dimensional domain can express - and either way
-            there is no decomposition here to choose or to write.
+            there is no decomposition here to choose or to write. The blocks per rank still follow from the
+            rank count, so max_blocks is written as -1, for CICE to work out.
         CHOSEN_BLOCKS: The search chooses the rank count and nothing else, and the block size follows from it,
             so that each rank holds as many blocks as the partitioning asks for. Whatever the distribution:
             it is the block size that is chosen here, not the process grid, which CICE still forms itself.
@@ -321,7 +322,8 @@ class CICEPartitioning:
         What is written is what the layout decided and nothing else. The grid extents go in only where they
         are namelist entries at all, the distribution and the processor shape never do, and a mode that
         decides no block size does not write one: a stale entry beside a fresh one is how a decomposition and
-        the configuration realising it come apart.
+        the configuration realising it come apart. How many blocks a rank holds is decided by every layout,
+        so every mode writes max_blocks, as -1 where it is CICE's to work out.
 
         Args:
             n_ranks (int): The ranks the search gave this component.
@@ -355,6 +357,10 @@ class CICEPartitioning:
             return changes
 
         if self.mode is CICEPartitioningMode.OPAQUE:
+            # The control's block size stays and the rank count changes, so a max_blocks the control pinned
+            # for its own rank count would be stale. -1 leaves CICE to work it out from the distribution it
+            # forms, which CICE6 and the runtime CICE5 both read it as.
+            changes["max_blocks"] = "-1"
             return changes
 
         if decomposition is None:

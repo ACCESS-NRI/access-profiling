@@ -616,11 +616,14 @@ class TestESM16SeaIceThatDecomposesNothing:
 
     def test_it_writes_its_ranks_and_its_grid_but_no_block_size(self, roundrobin, roundrobin_layout):
         """A block size left over from a decomposition this scheme never made is how a namelist and the layout
-        it is supposed to realise come apart."""
+        it is supposed to realise come apart. The blocks per rank are left to CICE, since they follow from
+        the rank count."""
 
         changes = roundrobin.config_changes(roundrobin_layout)
 
-        assert changes["ice/cice_in.nml"] == {"domain_nml": {"nprocs": "7", "nx_global": "360", "ny_global": "300"}}
+        assert changes["ice/cice_in.nml"] == {
+            "domain_nml": {"nprocs": "7", "nx_global": "360", "ny_global": "300", "max_blocks": "-1"}
+        }
 
 
 def test_esm16_config_changes_refuses_a_layout_that_states_no_decomposition(esm16, tmp_path):
