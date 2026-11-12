@@ -44,6 +44,7 @@ the code needs on top of them.
   the [ACCESS models](documentation/docs/pages/access/) pages describe the behaviour in detail, so a change of
   behaviour updates the docstrings and pages that describe it, in the same change: grep `src/` and
   `documentation/docs/pages` for the names you touched. The strict build catches a broken reference, not stale prose.
+  What is written on a page follows [Documentation pages](#documentation-pages).
 - **Be honest.** Report what you ran and what it showed: a failing test, a check you skipped, a test that passes
   without binding.
 
@@ -110,10 +111,10 @@ manager reads what the engine and the scheduler wrote; the application reads wha
 `config_changes` writes a layout into those files and `parse_layout` reads it back out: they are inverses over the
 same text, and stay side by side in every application so that they do not drift apart.
 
-**Public names.** The types a study is written with are re-exported from `access.profiling` and listed in its `__all__`,
-the presets and their control sources never (they are imported from their model module),
-the only one in the package, which `test_init.py` checks against what it imports; everything else is imported
-from the module that defines it, and `access.profiling.models` exports nothing. The API reference is generated
+**Public names.** The types a study is written with are re-exported from `access.profiling` and listed in its
+`__all__`, the only one in the package, which `test_init.py` checks against what it imports. The presets and their
+control sources never are: they are imported from their model module. Everything else is imported from the module
+that defines it, and `access.profiling.models` exports nothing. The API reference is generated
 from the docstrings, on pages in `documentation/docs/pages/api/` that are each a run of `::: access.profiling.<module>`
 blocks, one page per concept. A new module needs a block on the right page and a row in the table of
 `api/index.md`; a new page needs an entry in the `nav` of `mkdocs.yml`, or the strict build fails.
@@ -299,6 +300,41 @@ foot of each page comes from git, so a page that has not been committed yet make
 CI (`.github/workflows/ci.yml`) runs pre-commit, a PyPA build, a conda build, pytest on 3.11, 3.12 and 3.13 with the
 coverage uploaded to Codecov, and the strict documentation build. Releases are tag-driven (`v*`, to PyPI and the
 accessnri conda channel); there is nothing to run locally for one.
+
+## Documentation pages
+
+The pages in `documentation/docs/pages/` and the README are written for someone new to the package, in one style.
+New text follows it whatever the text around it looks like: a table cell or an example next door is not a model
+for a paragraph.
+
+- **Two voices, by kind of page.** A walkthrough guides as "we", addresses the reader as "you", and shows and reads
+  the output of what it runs: `getting-started.md`, the user guide pages other than `index.md` and
+  `logs-and-metrics.md`, `access/cylc-rose-suites.md`, `developer-guide/adding-an-application.md` and
+  `adding-a-parser.md`. Every other page is a manual: third person, "you" for an instruction, "we" only for a
+  recommendation. A code example on a manual page is still introduced in the walkthrough voice.
+- **Plain words first.** Say what a thing is before how it works, with one idea per sentence and per list item, one
+  topic per paragraph, and the ordinary connectives ("This means that", "You can also", "For example"). No sentence
+  runs over 40 words, in a table cell either. A term of a model or of an engine, such as a mask table or a block
+  distribution, is explained where the page first uses it.
+- **Overviews stay light, guides keep every fact.** The site's `index.md`, the `index.md` of each section and the
+  README's About and Key features say what the reader gets and link to the guide with the detail. A guide leaves
+  out no value, caveat, reason or error name.
+- **Every code block and every block of output follows a lead-in sentence that ends in a colon** ("This prints:"),
+  and what stands before the colon introduces the block, or the table, that follows it. An example uses the names
+  the page has defined, or says which page they come from, and its Python stays within 120 columns as in `src/`.
+  Where the page shows the output, it is the output of running the example.
+- **An example that names a filesystem path tells the reader to adapt it** to their setup: a project, a directory
+  on `/scratch` or `/g/data`, a file they are to save.
+- **"Parallelisation layout" on a page's first mention**, and "layout" after that: a file, a grid and MOM's
+  `LAYOUT` have layouts too.
+- **The present tense, about what the package does**: no "yet", "will" or "planned" about it. British spelling
+  ("parallelisation", "analyse").
+- **Structure is not style.** Pages, headings, tables, lists, notes and the order of prose, code and output change
+  only when the content does, never to restyle. An admonition (`!!!`) is for a caveat the reader must not miss.
+  Prose wraps at 120 columns.
+
+Nothing checks any of this, and the strict build passes on a page that breaks all of it, so read the page from the
+top as its reader would before calling a change done.
 
 ## Conventions
 
