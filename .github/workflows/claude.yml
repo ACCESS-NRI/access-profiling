@@ -1,0 +1,64 @@
+# Runs Claude Code when someone with write access mentions @claude in an issue, a pull request comment or a review:
+# to answer a question, review a pull request, or make a change and push it.
+# Needs the repository secret ANTHROPIC_API_KEY.
+
+name: Claude Code
+
+on:
+  issue_comment:
+    types: [created]
+  pull_request_review_comment:
+    types: [created]
+  pull_request_review:
+    types: [submitted]
+  issues:
+    types: [opened, assigned]
+
+env:
+  PIP_UPLOADED_PRIOR_TO: P7D
+
+jobs:
+  claude:
+    if: |
+      (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude')) ||
+      (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude')) ||
+      (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@claude')) ||
+      (github.event_name == 'issues' && (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude')))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      id-token: write
+      actions: read  # lets Claude read the CI results of a pull request
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+
+      # The environment of the CI's test job, so that Claude can run the tests and the linters on its changes.
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.13'
+          cache: 'pip'
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install --uploaded-prior-to=P0D access-config-utils
+          pip install '.[devel,test]'
+
+      - uses: anthropics/claude-code-action@cc98b3ae241b0fcfb6a42a2690751afffecb4452 # v1.0.278
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          additional_permissions: |
+            actions: read
+          claude_args: >-
+            --append-system-prompt "Follow AGENTS.md. Before pushing a change, run python -m pytest and
+            pre-commit run --all-files, and report what they showed. When asked to review a pull request, review it
+            against AGENTS.md: first bugs, including a broken invariant or import boundary; then tests missing for a
+            changed behaviour or an error path, or passing without binding to the code; then docstrings and pages
+            the change left stale, and new prose that breaks the documentation style; then code the change does not
+            need. Leave out what ruff, pytest and the strict documentation build already check in CI. Report only
+            what you have verified, ranked by severity, with inline comments on specific lines and no praise or
+            nits."
+            --allowedTools "Bash(python -m pytest:*),Bash(pre-commit run:*)"
