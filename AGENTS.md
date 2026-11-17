@@ -303,8 +303,9 @@ accessnri conda channel); there is nothing to run locally for one.
 
 `claude.yml` answers an `@claude` mention in an issue, a pull request or a review by someone with write access, for
 example a request to review a pull request against this file. `.github/scripts/claude_reply.py` sends this file, the
-package source, the thread and a pull request's changes to the Claude Messages API in one request, and posts the reply.
-It needs the repository secret `ANTHROPIC_API_KEY`. `CLAUDE.md` imports this file, which is how Claude Code reads it.
+package source and tests, the thread and a pull request's changes to the Claude Messages API in one request, and posts
+the reply. It needs the repository secret `ANTHROPIC_API_KEY`. `CLAUDE.md` imports this file, which is how Claude Code
+reads it.
 
 ## Documentation pages
 
