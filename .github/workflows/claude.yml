@@ -50,9 +50,13 @@ jobs:
       - uses: anthropics/claude-code-action@cc98b3ae241b0fcfb6a42a2690751afffecb4452 # v1.0.278
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          # Temporary: prints Claude's output, to diagnose sessions that end before their first request.
+          show_full_output: true
           additional_permissions: |
             actions: read
+          # acceptEdits, rather than the action's default auto mode: a tool outside --allowedTools is refused.
           claude_args: >-
+            --permission-mode acceptEdits
             --append-system-prompt "Follow AGENTS.md. Before pushing a change, run python -m pytest and
             pre-commit run --all-files, and report what they showed. When asked to review a pull request, review it
             against AGENTS.md: first bugs, including a broken invariant or import boundary; then tests missing for a
