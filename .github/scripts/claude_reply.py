@@ -5,9 +5,9 @@
 
 `.github/workflows/claude.yml` runs this script. It calls the Messages API directly, rather than running Claude Code
 through `claude-code-action`, because the organisation's monthly subscriber API credits pay for Messages API requests
-but not for Claude Code's. This means that Claude sees only what the script sends: `AGENTS.md` and the package source
-on the default branch, the thread of the issue or pull request and, for a pull request, its diff and the new version
-of every file it changes. It cannot run code or push a change, so it proposes changes as diffs.
+but not for Claude Code's. This means that Claude sees only what the script sends: `AGENTS.md`, the package source
+and its tests on the default branch, the thread of the issue or pull request and, for a pull request, its diff and the
+new version of every file it changes. It cannot run code or push a change, so it proposes changes as diffs.
 
 Only a mention by someone with write access is answered, since every request is paid for.
 """
@@ -30,8 +30,8 @@ GITHUB_API = os.environ.get("GITHUB_API_URL", "https://api.github.com")
 INSTRUCTIONS = """\
 You answer `@claude` mentions on the GitHub issues and pull requests of access-profiling, a Python library from \
 ACCESS-NRI for profiling parallel applications. The first file below is AGENTS.md, which sets out the project's \
-invariants, conventions and documentation style: follow it. The files after it are the package source on the default \
-branch.
+invariants, conventions and documentation style: follow it. The files after it are the package source and its tests on \
+the default branch.
 
 You get one request and write one reply, which is posted as a GitHub comment in Markdown. You cannot run code, read \
 other files, push commits or open pull requests. When asked to change something, propose the change as a unified diff \
@@ -105,8 +105,8 @@ def file_block(path: str, text: str) -> str:
 
 
 def source() -> str:
-    """AGENTS.md and the package source, from the default branch the job checked out."""
-    paths = [Path("AGENTS.md"), *sorted(Path("src").rglob("*.py"))]
+    """AGENTS.md, the package source and its tests, from the default branch the job checked out."""
+    paths = [Path("AGENTS.md"), *sorted(Path("src").rglob("*.py")), *sorted(Path("tests").rglob("*.py"))]
     return "\n\n".join(file_block(path.as_posix(), path.read_text()) for path in paths)
 
 
