@@ -1,8 +1,9 @@
-# Runs Claude Code when someone with write access mentions @claude in an issue, a pull request comment or a review:
-# to answer a question, review a pull request, or make a change and push it.
+# Answers an @claude mention in an issue, a pull request comment or a review, by someone with write access: a
+# question, or a request to review a pull request or to propose a change. .github/scripts/claude_reply.py makes one
+# request to the Claude Messages API and posts the reply; its module docstring says why it does not run Claude Code.
 # Needs the repository secret ANTHROPIC_API_KEY.
 
-name: Claude Code
+name: Claude
 
 on:
   issue_comment:
@@ -12,13 +13,13 @@ on:
   pull_request_review:
     types: [submitted]
   issues:
-    types: [opened, assigned]
+    types: [opened]
 
 env:
   PIP_UPLOADED_PRIOR_TO: P7D
 
 jobs:
-  claude:
+  reply:
     if: |
       (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude')) ||
       (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude')) ||
@@ -26,43 +27,27 @@ jobs:
       (github.event_name == 'issues' && (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude')))
     runs-on: ubuntu-latest
     permissions:
-      contents: write
-      pull-requests: write
+      contents: read
       issues: write
-      id-token: write
-      actions: read  # lets Claude read the CI results of a pull request
+      pull-requests: write
     steps:
+      # The default branch, whatever the event: the script and the source it sends come from there, never from a
+      # pull request, whose files it reads through the API instead.
       - uses: actions/checkout@v7
         with:
+          ref: ${{ github.event.repository.default_branch }}
           fetch-depth: 1
 
-      # The environment of the CI's test job, so that Claude can run the tests and the linters on its changes.
       - uses: actions/setup-python@v7
         with:
           python-version: '3.13'
-          cache: 'pip'
-      - name: Install dependencies
+      - name: Install the Anthropic SDK
         run: |
           python -m pip install --upgrade pip
-          python -m pip install --uploaded-prior-to=P0D access-config-utils
-          pip install '.[devel,test]'
+          pip install anthropic
 
-      - uses: anthropics/claude-code-action@cc98b3ae241b0fcfb6a42a2690751afffecb4452 # v1.0.278
-        with:
-          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
-          # Temporary: prints Claude's output, to diagnose sessions that end before their first request.
-          show_full_output: true
-          additional_permissions: |
-            actions: read
-          # acceptEdits, rather than the action's default auto mode: a tool outside --allowedTools is refused.
-          claude_args: >-
-            --permission-mode acceptEdits
-            --append-system-prompt "Follow AGENTS.md. Before pushing a change, run python -m pytest and
-            pre-commit run --all-files, and report what they showed. When asked to review a pull request, review it
-            against AGENTS.md: first bugs, including a broken invariant or import boundary; then tests missing for a
-            changed behaviour or an error path, or passing without binding to the code; then docstrings and pages
-            the change left stale, and new prose that breaks the documentation style; then code the change does not
-            need. Leave out what ruff, pytest and the strict documentation build already check in CI. Report only
-            what you have verified, ranked by severity, with inline comments on specific lines and no praise or
-            nits."
-            --allowedTools "Bash(python -m pytest:*),Bash(pre-commit run:*)"
+      - name: Reply
+        run: python .github/scripts/claude_reply.py
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GITHUB_TOKEN: ${{ github.token }}
