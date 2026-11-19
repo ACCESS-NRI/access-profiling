@@ -206,7 +206,8 @@ blocks, one page per concept. A new module needs a block on the right page and a
   rather than on them: at the configuration's latest release tag, or at its `dev-*` branch while it has no release,
   named `<MODEL>_<CONFIGURATION>_SOURCE`, with the preset it goes with in its docstring.
 - **A model's component tree holds requirements only**, what is true of every layout of it; a study's preferences
-  belong in its allocation strategy (the docstring of `SubmodelsConfiguration.parallel_component`).
+  belong in its allocation strategy (the docstring of `SubmodelsConfiguration.parallel_component`). How many cores a
+  layout may leave idle is one of them, so no tree limits it (the docstring of `PayuConfiguration._root`).
 - **The OM3 presets choose CICE6's blocks from the rank count** (`OM3_CICE6_BLOCKS_PER_RANK_RANGE`), as the
   user's studies do, with the distribution and the processor shape their control states; a preset is named as
   those studies archived their experiments (`MC-100km`, `MCW-100km`), so changing a name orphans an archive.

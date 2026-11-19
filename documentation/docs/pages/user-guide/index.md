@@ -61,10 +61,10 @@ grid, MOM5 256 cores in a 16 × 16 grid, and CICE5 12 cores.
 The manager finds the layouts of an application by searching for them, using
 [access-config-utils](https://github.com/ACCESS-NRI/access-config-utils). The application describes its components
 as a tree, together with what it needs in order to run at all. In ACCESS-ESM1.6, for example, the UM needs an even
-number of processes along x, and no layout may leave more than 10% of its cores idle. You will usually not want
-every possible layout, so an allocation strategy lets you narrow the search down: it sets how many cores each
-component may get, and can add further constraints. These limits can be given as fractions of the total number of
-cores, so the same strategy can be used for every size of a study.
+number of processes along x. You will usually not want every possible layout, so an allocation strategy lets you
+narrow the search down. It sets how many cores each component may get, and can add further constraints, such as a
+limit on the number of cores left idle. The numbers of cores it sets can be given as fractions of the total, so the
+same strategy can be used for every size of a study.
 
 The layouts are returned sorted by the number of cores they leave idle. Each layout becomes one experiment, and the
 name of the experiment is built from the layout. This means that the same layout always gives the same experiment.

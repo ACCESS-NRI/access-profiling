@@ -13,7 +13,6 @@ from conftest import fake_parser, grid_of, layout_of, select_layouts
 
 from access.profiling.application import LogSpec, log_at
 from access.profiling.payu_configuration import (
-    MAX_WASTED_CORE_FRACTION,
     FixedRanksConstraint,
     PayuComponent,
     PayuSubmodel,
@@ -195,7 +194,18 @@ class TestSubmodelsConfiguration:
         assert [component.name for component in tree.subcomponents] == ["grid", "serial"]
         assert tree.subcomponents[0].domain == Domain((8, 8))
         assert tree.subcomponents[1].domain is None
-        assert tree.local_constraints == (MaxWastedCoreFractionConstraint(max_fraction=MAX_WASTED_CORE_FRACTION),)
+        assert tree.local_constraints == ()
+
+    def test_how_many_cores_are_left_idle_is_the_study_s_to_limit(self):
+        """The tree sets no limit, since a study holding the other components fixed leaves cores idle on purpose.
+
+        Five of the ten cores are idle here, which only the strategy could rule out.
+        """
+
+        layouts = select_layouts(TOY, 10, allocations=TOY_ALLOCATIONS)
+
+        assert layouts
+        assert {layout.idle_cores for layout in layouts} == {5}
 
     def test_every_component_runs_one_thread_per_rank(self):
         """Which is what lets parse_layout read cores back as ranks, so it is the tree's to require."""
@@ -206,15 +216,17 @@ class TestSubmodelsConfiguration:
     def test_a_fixed_rank_count_holds_whatever_the_strategy_allows(self):
         """The model's requirement, not the study's: a band around it still yields that count alone.
 
-        Of the splits of six cores the bands admit, four and two would be the only one to idle nothing but for
-        the pin; with it, five and one is the one found.
+        The bands admit three splits of six cores: four and one, four and two, and five and one. The strategy
+        leaves no core idle, which rules out four and one, and the pin rules out four and two, so five and one is
+        the one found.
         """
 
         allocations = RootAllocation(
             subcomponents={
                 "grid": FreeAllocation(min_cores=4, max_cores=5),
                 "serial": FreeAllocation(min_cores=1, max_cores=2),
-            }
+            },
+            local_constraints=(MaxWastedCoreFractionConstraint(max_fraction=0.0),),
         )
         layouts = select_layouts(TOY, 6, allocations=allocations)
 

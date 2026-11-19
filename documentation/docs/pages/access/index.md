@@ -14,6 +14,10 @@ branch, a fork or a commit that the presets do not describe, you can read it fro
 `from_control` of its model, as [Experiments with Payu](payu.md#reading-a-configuration-from-its-control) shows. For
 the full details, see the [Models API](../api/models.md).
 
+None of the models limits how many cores a layout leaves idle. If you want a limit, set it in your allocation
+strategy, as [Generating and running experiments](../user-guide/experiments.md#choosing-an-allocation-strategy)
+shows.
+
 ## ACCESS-ESM1.6
 
 | | |
@@ -27,8 +31,8 @@ the full details, see the [Models API](../api/models.md).
 
 The three components run at the same time, each on its own cores, with one thread per rank. Every layout follows
 a few rules. The UM gets an even number of processes along x. The subdomains of the UM and of MOM5 are at most
-four times longer than they are wide. And at most 10% of the cores are left idle. Each CICE5 rank holds one block
-spanning the whole y extent of its grid, so CICE5 can only run on a number of cores that divides 360.
+four times longer than they are wide. Each CICE5 rank holds one block spanning the whole y extent of its grid, so
+CICE5 can only run on a number of cores that divides 360.
 
 To run a layout, a few files are changed. `config.yaml` gets the number of cores of each submodel, and requests
 the total number of cores of the layout as `ncpureq`. The decomposition of each component goes into its own file:
@@ -127,11 +131,10 @@ the total number of cores of the layout as `ncpureq`. The decompositions of the 
 | Release cores | `MOM5` 216 and `CICE5` 24 at one degree ([`OM2_1DEG_CORES`][access.profiling.models.om2.OM2_1DEG_CORES]), 1456 and 361 at a quarter ([`OM2_025DEG_CORES`][access.profiling.models.om2.OM2_025DEG_CORES]), 4358 and 722 at a tenth ([`OM2_01DEG_CORES`][access.profiling.models.om2.OM2_01DEG_CORES]), and `YATM` 1 in each |
 
 YATM is serial, so every layout gives it one core. The subdomains of MOM5 are at most four times longer than they
-are wide, as in ACCESS-ESM1.6, and at most 10% of the cores are left idle. CICE5 keeps the block size that its
-control fixes. At one degree, the blocks are distributed cartesian in one row. The search then chooses how the 24
-columns of blocks are shared out, so the number of CICE5 ranks divides 24. At a quarter of a degree the blocks are
-distributed roundrobin, and at a tenth of a degree sectrobin. These two distributions form no process grid, so the
-search only chooses the number of CICE5 ranks.
+are wide, as in ACCESS-ESM1.6. CICE5 keeps the block size that its control fixes. At one degree, the blocks are
+distributed cartesian in one row. The search then chooses how the 24 columns of blocks are shared out, so the number
+of CICE5 ranks divides 24. At a quarter of a degree the blocks are distributed roundrobin, and at a tenth of a degree
+sectrobin. These two distributions form no process grid, so the search only chooses the number of CICE5 ranks.
 
 To run a layout, a few files are changed. `config.yaml` gets the number of cores of each submodel, and requests
 the total number of cores of the layout as `ncpureq`. The process grid of MOM5 goes into `ocean/input.nml`, and the
@@ -194,8 +197,8 @@ configuration, at its latest release:
 In ACCESS-OM3, the mediator (`cpl`), the data atmosphere (`atm`), the sea ice (`ice`) and the data runoff (`rof`)
 take turns on the same cores, which are called `shared`. The ocean (`ocn`) runs next to them on cores of its own,
 and so do the waves (`wav`) of a configuration that has them. Every component has one thread per rank. Every layout
-leaves at most 10% of its cores idle, and gives each CICE6 rank 5 to 8 blocks. The blocks are distributed as in the
-control of the configuration, and their size is chosen from the number of ranks.
+gives each CICE6 rank 5 to 8 blocks. The blocks are distributed as in the control of the configuration, and their
+size is chosen from the number of ranks.
 
 To run a layout, a few files are changed. `config.yaml` requests the total number of cores as `ncpus`, the
 `PELAYOUT_attributes` of `nuopc.runconfig` get the cores of each component, and `ice_in` gets the grid and the
