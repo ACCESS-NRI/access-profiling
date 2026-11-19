@@ -314,10 +314,11 @@ class ProfilingManager(ABC, Generic[AppT]):
                 quickly with the number of cores.
             max_layouts (int | None): Maximum number of layouts to enumerate. None (the default) enumerates all of
                 them. Note that this bounds the *enumeration*, so the returned layouts are the first ones found and
-                not necessarily those with the fewest idle cores. Returning the best ones instead would mean
-                ranking the whole result set, which is the cost this argument exists to avoid: the search is lazy
-                and layout counts reach millions at production core counts. Sorting is applied to what was
-                enumerated, so it orders the returned layouts without deciding which ones they are.
+                not necessarily those with the fewest idle cores. Without lower bounds on the components or a limit
+                on idle cores, the first ones found can leave most of the cores idle. Returning the best ones
+                instead would mean ranking the whole result set, which is the cost this argument exists to avoid:
+                the search is lazy and layout counts reach millions at production core counts. Sorting is applied
+                to what was enumerated, so it orders the returned layouts without deciding which ones they are.
 
         Returns:
             list[ComponentLayout]: The layouts found, sorted by increasing number of idle cores.
@@ -452,11 +453,11 @@ class ProfilingManager(ABC, Generic[AppT]):
         planned earlier in the same call, are skipped, so the same layout found for two different numbers of
         nodes only generates one experiment.
 
-        That happens whenever a layout fits both budgets, which is a matter of how much waste the component
-        tree tolerates: a layout spending 508 cores is valid on 520 and on 546, leaving 2.3% and 7.0% of them
-        idle. Note that it does not arise for an allocation strategy written in fractions of the total, since
-        its bounds move with the budget; it is strategies stated in cores, and callables, that repeat
-        themselves.
+        That happens whenever a layout fits both budgets, which is a matter of how many idle cores the
+        allocation strategy tolerates: a layout spending 508 cores is valid on 520 and on 546, leaving 2.3% and
+        7.0% of them idle. It is rarer for a strategy that gives every component a lower bound in fractions of
+        the total, since its bounds move with the budget. Strategies stated in cores, strategies without lower
+        bounds, and callables repeat themselves more often.
 
         An experiment that failed may be generated again, which is what regenerate_failed asks for. The
         changes each experiment makes are worked out afresh from the arguments of this call rather than

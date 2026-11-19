@@ -216,9 +216,9 @@ class TestSubmodelsConfiguration:
     def test_a_fixed_rank_count_holds_whatever_the_strategy_allows(self):
         """The model's requirement, not the study's: a band around it still yields that count alone.
 
-        Of the splits of six cores the bands admit, four and two would be the only one to idle nothing but for
-        the pin; with it, five and one is the one found. The strategy leaves no core idle, which rules out four
-        and one.
+        The bands admit three splits of six cores: four and one, four and two, and five and one. The strategy
+        leaves no core idle, which rules out four and one, and the pin rules out four and two, so five and one is
+        the one found.
         """
 
         allocations = RootAllocation(

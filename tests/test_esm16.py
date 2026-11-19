@@ -218,14 +218,22 @@ def test_esm16_caller_supplied_allocations(esm16, total_cores):
 
 
 def test_esm16_component_tree_bounds_layouts_on_its_own(esm16):
-    """Test that the component tree rules out unreasonable layouts without any strategy constraints.
+    """Test that the component tree rules out unreasonable layouts that the strategy lets through.
 
     The bounds in the tree are the ones a caller cannot relax, so they must hold for every layout the search
-    returns when the caller states no preferences at all.
+    returns, whatever the strategy allows. The strategy only keeps the UM and MOM5 at realistic sizes: the first
+    layouts found without it give each a handful of cores, on which the bounds hold trivially.
     """
 
-    layouts = select_layouts(esm16, PI_CONTROL_TOTAL_CORES, max_layouts=200)
-    assert layouts, "The component tree alone should still admit layouts."
+    realistic = RootAllocation(
+        subcomponents={
+            ESM16_UM7_NAME: FreeAllocation(min_core_fraction=0.4),
+            ESM16_MOM5_NAME: FreeAllocation(min_core_fraction=0.4),
+            ESM16_CICE5_NAME: FreeAllocation(),
+        }
+    )
+    layouts = select_layouts(esm16, PI_CONTROL_TOTAL_CORES, allocations=realistic, max_layouts=200)
+    assert layouts, "The component tree should admit layouts at realistic sizes."
 
     for layout in layouts:
         for component in (layout.sub_layouts[0], layout.sub_layouts[1]):

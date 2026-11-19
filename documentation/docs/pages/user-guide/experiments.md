@@ -64,7 +64,7 @@ and pass a different [`GitControlSource`][access.profiling.control.GitControlSou
 
 Next we have to decide which parallelisation layouts we want to run. This is done with an allocation strategy, which
 says how many cores each component of the application may get. It can also add other constraints. Without an allocation
-strategy, the manager would find every layout the application can run, and there are a lot of them: 555,868 for
+strategy, the manager would find every layout the application can run, and there are a lot of them: 2,677,528 for
 ACCESS-ESM1.6 on 520 cores! The limits of a strategy can be given as fractions of the total number of cores, so the same
 strategy usually works for all the sizes of a study. These are the strategies we use:
 
@@ -145,8 +145,10 @@ strategy usually works for all the sizes of a study. These are the strategies we
     Note that the step depends on the number of nodes, which is why the strategy is a function.
 
 The models set no limit of their own on the number of cores a layout leaves idle. If you want one, add a
-`MaxWastedCoreFractionConstraint` to the strategy, as the ACCESS-OM3 strategy does. The ACCESS-ESM1.6 strategy sets
-none, but the lower bounds of its bands leave little room. For example, none of the layouts it finds for the sizes
+`MaxWastedCoreFractionConstraint` to the `local_constraints` of the `RootAllocation`, as the ACCESS-OM3 strategy
+does. Given to a single component, such as `UM7`, the constraint raises a `ValueError`. Given to `shared` in
+ACCESS-OM3, it has no effect, since the shared components use all the shared cores. The ACCESS-ESM1.6 strategy sets
+no limit, but the lower bounds of its bands leave little room. For example, none of the layouts it finds for the sizes
 counted in the next section leaves more than 5.2% of the cores idle.
 
 You can find the names of the components of each model in [ACCESS models](../access/index.md).
@@ -200,7 +202,9 @@ the study. Remember that every layout becomes an experiment:
     The ACCESS-ESM1.6 strategy above finds 810 layouts over the seven sizes. This means that the study would have
     810 experiments, and running it would submit 810 jobs! If that is more than you want to pay for, make the
     strategy stricter. You can also use `max_layouts` to limit the number of layouts for each size, but be aware
-    that it keeps the first layouts found, which are not necessarily the best ones.
+    that it keeps the first layouts found, which are not necessarily the best ones. If the strategy gives the
+    components no minimum number of cores and sets no limit on idle cores, the first layouts found can leave most
+    of the cores idle.
 
 ## Generating the experiments
 
