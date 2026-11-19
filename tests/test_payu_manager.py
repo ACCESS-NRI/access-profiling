@@ -1643,10 +1643,9 @@ class TestCloneControl:
 
         control = GitControlSource("https://example.com/repo", "release-1.0", directory="ctrl-clone")
 
-        path = clone_control(Path("/fake/work"), control, "mock-payu-model", Path("/fake/lab"))
+        path = clone_control(Path("/fake/work"), control, "mock-payu-model")
 
         assert path == Path("/fake/work/ctrl-clone")
-        digest = hashlib.sha256(b"/fake/work").hexdigest()[:8]
         assert mock_experiment_generator.call_args[0][0] == {
             "model_type": "mock-payu-model",
             "repository_url": "https://example.com/repo",
@@ -1654,7 +1653,7 @@ class TestCloneControl:
             "test_path": "/fake/work",
             "repository_directory": "ctrl-clone",
             "control_branch_name": "ctrl",
-            "Control_Experiment": {"config.yaml": {"laboratory": f"/fake/lab/mock-payu-model-{digest}"}},
+            "Control_Experiment": {},
             "Perturbation_Experiment": {},
         }
         mock_experiment_generator.return_value.run.assert_called_once_with()
@@ -1664,9 +1663,7 @@ class TestCloneControl:
         from access.profiling.control import ExistingDirectoryControlSource
 
         with pytest.raises(ValueError, match="states no start point"):
-            clone_control(
-                Path("/fake/work"), ExistingDirectoryControlSource(Path("/fake/control")), "mock", Path("/fake/lab")
-            )
+            clone_control(Path("/fake/work"), ExistingDirectoryControlSource(Path("/fake/control")), "mock")
         mock_experiment_generator.assert_not_called()
 
 
@@ -1755,10 +1752,38 @@ class TestLaboratory:
             self.generate(manager, {"config.yaml": {"laboratory": "/scratch/tm70/elsewhere"}})
         mock_experiment_generator.assert_not_called()
 
+    @mock.patch.dict(os.environ, {"PAYU_LAB_PATH": "/scratch/tm70/elsewhere"})
     @mock.patch("access.profiling.payu_manager.ExperimentGenerator")
-    def test_a_clone_made_before_the_manager_states_the_same_one(self, mock_experiment_generator, manager):
-        """clone_control and the manager compute it from the same three things."""
-        clone_control(manager.work_dir, MOCK_CONTROL, manager.application.model_type, manager.lab_dir)
+    def test_generation_is_refused_with_payu_lab_path_set(self, mock_experiment_generator, manager):
+        """Payu would use the variable on the login node, but the PBS job never receives it."""
+        with pytest.raises(RuntimeError, match="PAYU_LAB_PATH is set, to '/scratch/tm70/elsewhere'"):
+            self.generate(manager, {})
+        mock_experiment_generator.assert_not_called()
+        assert manager.experiments == {}
 
-        config = mock_experiment_generator.call_args[0][0]
-        assert config["Control_Experiment"] == {"config.yaml": {"laboratory": str(manager.laboratory)}}
+    @mock.patch.dict(os.environ, {"PAYU_LAB_PATH": "/scratch/tm70/elsewhere"})
+    @mock.patch("access.profiling.payu_manager.subprocess.run")
+    @mock.patch("access.profiling.payu_manager.ExperimentRunner")
+    def test_running_is_refused_with_payu_lab_path_set(self, mock_experiment_runner, mock_run, manager, tmp_path):
+        """Neither swept nor submitted: the runner's clones would link to one laboratory, and the job run in another."""
+        write_job_file(tmp_path, 0, {"stage": "archive", "payu_run_status": 1})
+        (tmp_path / "archive" / "output000").mkdir()
+        failed = _experiment(tmp_path, ProfilingExperimentStatus.FAILED)
+        with mock.patch.dict(manager.experiments, {"branch1": failed}):
+            with pytest.raises(RuntimeError, match="PAYU_LAB_PATH is set"):
+                manager.run_experiments(retry_failed=True)
+            assert failed.status == ProfilingExperimentStatus.FAILED
+        mock_run.assert_not_called()
+        mock_experiment_runner.assert_not_called()
+
+    @mock.patch.dict(os.environ, {"PAYU_LAB_PATH": "/scratch/tm70/elsewhere"})
+    @mock.patch("access.profiling.payu_manager.ExperimentRunner")
+    def test_deleting_is_refused_with_payu_lab_path_set(self, mock_experiment_runner, manager):
+        """A hard sweep would act on the variable's laboratory, which other studies may share."""
+        with mock.patch.dict(
+            manager.experiments, {"branch1": _experiment(Path("branch1"), ProfilingExperimentStatus.DONE)}
+        ):
+            with pytest.raises(RuntimeError, match="PAYU_LAB_PATH is set"):
+                manager.delete_experiments(["branch1"])
+            assert "branch1" in manager.experiments
+        mock_experiment_runner.assert_not_called()

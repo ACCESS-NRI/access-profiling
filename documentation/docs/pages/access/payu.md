@@ -87,6 +87,11 @@ create experiments, and the control options cannot name a laboratory. A manager 
 experiments needs no `lab_dir`. The experiments created before the study had a laboratory keep the one that their
 branch states.
 
+The `PAYU_LAB_PATH` environment variable would get in the way. When it is set, Payu uses it instead of the laboratory
+in `config.yaml`, but only on the login node: experiment-runner submits `payu run` without a laboratory, so the PBS
+job never receives it. The experiments would then run in one laboratory while the manager reads another. For this
+reason, the manager refuses to create, run or delete experiments while `PAYU_LAB_PATH` is set.
+
 Note that the first clone of the control still uses the control's own laboratory, as it is made before the laboratory
 of the study is written into the control. Payu leaves a few empty directories there, and a `metadata.yaml` under
 `archive/config-ctrl-<id>`.
@@ -107,9 +112,8 @@ the `jobname` of `config.yaml`, unless you give it a name. A control of another 
 The files have to be on disk, but the manager that would clone them cannot be created before the configuration.
 This is what [`clone_control`][access.profiling.payu_manager.clone_control] is for. It clones the control first, in
 the same way as generating the study does: into the working directory, under the directory of the control, at its
-start point, with experiment-generator. It also takes the `lab_dir` of the study, so that the clone states the
-laboratory of the study. When the study is generated later, the clone is found there and reused, so nothing is
-fetched twice. A control that is already cloned is left alone.
+start point, with experiment-generator. When the study is generated later, the clone is found there and reused, so
+nothing is fetched twice. A control that is already cloned is left alone.
 
 This is the only place where the package fetches anything, and it is an explicit call. If the repository of the
 control asks for credentials, it does so here, from a terminal, and never while a configuration is being created.
@@ -123,8 +127,7 @@ from access.profiling.models.om3 import OM3_CONFIGS_REPOSITORY
 from access.profiling.payu_manager import clone_control
 
 control = GitControlSource(OM3_CONFIGS_REPOSITORY, "dev-MC_100km_jra_ryf")
-clone = clone_control(work_dir, control, OM3Configuration.model_type, lab_dir)
-om3 = OM3Configuration.from_control(clone, name="MC-100km")
+om3 = OM3Configuration.from_control(clone_control(work_dir, control, OM3Configuration.model_type), name="MC-100km")
 manager = PayuManager(work_dir, archive_dir, om3, control, lab_dir=lab_dir)
 ```
 
@@ -250,4 +253,5 @@ These are the messages of Payu and of experiment-runner you may see, and what th
 | `-- You have duplicated runs for ... hence not submitting this job!` | A job of that experiment is still queued or running, so experiment-runner does not submit another. |
 | `The control '<label>' states no start point. ...` | The Payu manager branches every experiment from a particular revision of the control. Give an `ExistingDirectoryControlSource` its `revision`. |
 | `Cannot create experiments without a lab_dir: ...` | The manager has nowhere to put the laboratory of the study. Create it again with a `lab_dir` on `/scratch`. |
+| `PAYU_LAB_PATH is set, to '...'. ...` | Payu would run the experiments in another laboratory than the one the manager reads. Unset the variable, for example with `del os.environ["PAYU_LAB_PATH"]`, and try again. |
 | `The control options name a Payu laboratory, ...` | The laboratory of a study is the manager's to choose. Remove `laboratory` from the control options, and give the manager the directory that is to hold it as `lab_dir`. |
