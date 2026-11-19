@@ -30,9 +30,9 @@ from access.profiling.um_parser import UMProfilingParser, UMTotalRuntimeParser, 
 MAX_SUBDOMAIN_ASPECT_RATIO: float = 4.0
 """Ceiling on the aspect ratio of a UM or MOM5 rank's subdomain, its longest extent over its shortest.
 
-Like `MAX_WASTED_CORE_FRACTION`, this bounds what counts as a reasonable layout at all, rather than the tolerances
-of any particular study. Constraints are cumulative and a caller can only tighten them, so it is set loosely: a
-study that wants near-square subdomains says so in its own allocation strategy.
+This bounds what counts as a reasonable layout at all, rather than the tolerances of any particular study.
+Constraints are cumulative and a caller can only tighten them, so it is set loosely: a study that wants near-square
+subdomains says so in its own allocation strategy.
 """
 
 # Where Payu's drivers of the UM and of MOM5 read their files, relative to the control directory: the files are

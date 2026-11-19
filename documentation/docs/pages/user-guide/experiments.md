@@ -144,6 +144,11 @@ strategy usually works for all the sizes of a study. These are the strategies we
     numbers of cores that are multiples of 2, 5 or 15, which reduces the number of layouts for the larger sizes.
     Note that the step depends on the number of nodes, which is why the strategy is a function.
 
+The models set no limit of their own on the number of cores a layout leaves idle. If you want one, add a
+`MaxWastedCoreFractionConstraint` to the strategy, as the ACCESS-OM3 strategy does. The ACCESS-ESM1.6 strategy sets
+none, but the lower bounds of its bands leave little room. For example, none of the layouts it finds for the sizes
+counted in the next section leaves more than 5.2% of the cores idle.
+
 You can find the names of the components of each model in [ACCESS models](../access/index.md).
 
 ## Counting the layouts

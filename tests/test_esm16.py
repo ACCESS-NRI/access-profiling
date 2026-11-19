@@ -31,7 +31,6 @@ from access.profiling.models.esm16 import (
     ESM16_UM7_NAME,
     ESM16Configuration,
 )
-from access.profiling.payu_configuration import MAX_WASTED_CORE_FRACTION
 from access.profiling.payu_manager import PayuManager
 from access.profiling.um_parser import UMProfilingParser, UMTotalRuntimeParser
 
@@ -229,7 +228,6 @@ def test_esm16_component_tree_bounds_layouts_on_its_own(esm16):
     assert layouts, "The component tree alone should still admit layouts."
 
     for layout in layouts:
-        assert layout.idle_cores / layout.n_cores <= MAX_WASTED_CORE_FRACTION
         for component in (layout.sub_layouts[0], layout.sub_layouts[1]):
             local_shape = decomposition_of(component).mean_local_shape
             assert max(local_shape) / min(local_shape) <= MAX_SUBDOMAIN_ASPECT_RATIO

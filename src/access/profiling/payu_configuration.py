@@ -28,24 +28,12 @@ from pathlib import Path
 
 from access.config import YAMLParser
 from access.config.parallel_component import ComponentLayout, ParallelComponent
-from access.config.parallel_constraints import (
-    FixedThreadsPerRankConstraint,
-    LocalConstraint,
-    MaxWastedCoreFractionConstraint,
-)
+from access.config.parallel_constraints import FixedThreadsPerRankConstraint, LocalConstraint
 from access.config.parallel_domain import Domain
 
 from access.profiling.application import Application, LogLocator, LogSpec
 
 logger = logging.getLogger(__name__)
-
-MAX_WASTED_CORE_FRACTION: float = 0.1
-"""Ceiling on the fraction of its cores a layout of a Payu model may leave idle.
-
-This bounds what counts as a reasonable layout at all, rather than the budget of any particular study. Constraints
-are cumulative, so a caller can only tighten it: a study that wants no waste at all says so in its own allocation
-strategy.
-"""
 
 # The marker the experiment generator reads as "leave this slot as the control has it".
 _PRESERVE: str = "PRESERVE"
@@ -373,17 +361,18 @@ class PayuConfiguration(Application):
     def _root(self, subcomponents: Iterable[ParallelComponent]) -> ParallelComponent:
         """Returns the root of the component tree, named after the model and the configuration.
 
+        The root sets no limit on how many cores a layout leaves idle. That is a study's choice rather than a
+        requirement of the model: a study that keeps the other components fixed while one grows leaves cores idle
+        on purpose. A study that wants a limit states it in its allocation strategy, with a
+        `MaxWastedCoreFractionConstraint`.
+
         Args:
             subcomponents (Iterable[ParallelComponent]): The components, in the order the tree declares them.
 
         Returns:
-            ParallelComponent: The root, holding the one requirement every layout of a Payu model meets.
+            ParallelComponent: The root.
         """
-        return ParallelComponent(
-            name=f"{self.model_name} {self.name}",
-            subcomponents=tuple(subcomponents),
-            local_constraints=(MaxWastedCoreFractionConstraint(max_fraction=MAX_WASTED_CORE_FRACTION),),
-        )
+        return ParallelComponent(name=f"{self.model_name} {self.name}", subcomponents=tuple(subcomponents))
 
     @staticmethod
     def _component_logs(components: Iterable[PayuComponent]) -> tuple[LogSpec, ...]:
