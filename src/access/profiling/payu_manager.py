@@ -9,6 +9,7 @@ scheduler recorded about each run - the CPUs it occupied, the state it reached a
 is being profiled arrives as a `PayuConfiguration`.
 """
 
+import hashlib
 import json
 import logging
 import re
@@ -37,6 +38,26 @@ _PAYU_DEFAULT_NODE_SIZE = 48
 _PAYU_DEFAULT_NCPUS = 1
 
 
+def _study_laboratory(lab_dir: Path, model_type: str, work_dir: Path) -> Path:
+    """Returns the Payu laboratory of the study whose working directory is given, under the user's `lab_dir`.
+
+    The study's own directory is named after the model and a digest of the working directory: the same in every
+    session of a study, and different for another study, so that one `lab_dir` can hold the laboratories of any
+    number of studies without two of them sharing one. Both the manager and `clone_control` know all three, so a
+    clone made before the manager states the same laboratory.
+
+    Args:
+        lab_dir (Path): The directory the user chose for the laboratories of their studies.
+        model_type (str): The model type identifier, as Payu defines it.
+        work_dir (Path): The working directory of the study.
+
+    Returns:
+        Path: The study's laboratory, absolute: `<lab_dir>/<model type>-<8 hex digits>`.
+    """
+    digest = hashlib.sha256(str(work_dir.resolve()).encode()).hexdigest()[:8]
+    return lab_dir.resolve() / f"{model_type}-{digest}"
+
+
 def _generator_config(
     model_type: str,
     control: ControlSource,
@@ -44,12 +65,14 @@ def _generator_config(
     repository_directory: str,
     control_options: dict,
     perturbations: dict,
+    laboratory: Path,
 ) -> dict:
     """Returns the configuration the experiment generator is run with.
 
     The generator clones the control into the working directory, under the repository directory, at the
     control's start point, and branches `ctrl` from it; the control options are applied to that branch, and
-    then each perturbation becomes a branch of its own.
+    then each perturbation becomes a branch of its own. The control options gain the study's laboratory, so
+    that every experiment branches from a control that states it.
 
     Args:
         model_type (str): The model type identifier, as Payu defines it.
@@ -57,14 +80,15 @@ def _generator_config(
         work_dir (Path): The working directory of the study.
         repository_directory (str): The name the clone takes under the working directory.
         control_options (dict): The changes made to the control before any experiment is created from it,
-            keyed by file.
+            keyed by file. Not modified.
         perturbations (dict): The perturbation blocks, keyed by experiment number.
+        laboratory (Path): The study's Payu laboratory, absolute.
 
     Returns:
         dict: The configuration.
 
     Raises:
-        ValueError: If the control states no start point.
+        ValueError: If the control states no start point, or if the control options name a laboratory.
     """
     if control.start_point is None:
         raise ValueError(
@@ -72,6 +96,21 @@ def _generator_config(
             "clones the control and branches every experiment from a particular state of it, so it has "
             "to be told which: give the control a tag, a branch, a commit or a revision."
         )
+    config_options = control_options.get("config.yaml", {})
+    if "laboratory" in config_options:
+        raise ValueError(
+            "The control options name a Payu laboratory, but each study runs in a laboratory of its own, under "
+            "the manager's lab_dir. Remove 'laboratory' from the control options, and pass the directory to put "
+            "the study's laboratory in as lab_dir."
+        )
+    # Payu runs every experiment in a laboratory, and every Payu step, on the login node and in the PBS job, reads
+    # it from config.yaml. The default, /scratch/<project>/<user>/<model>, is shared by every study of the model,
+    # while a layout's name is only unique within a study: two studies would run in each other's directories, the
+    # runner would skip a layout another study already ran, and a hard sweep would delete another study's runs.
+    # The generator's and the runner's lab_path reaches Payu only while it checks a branch out, and PAYU_LAB_PATH
+    # never reaches the PBS job, so the laboratory is written into the control, which every experiment branches
+    # from.
+    control_experiment = {**control_options, "config.yaml": {**config_options, "laboratory": str(laboratory)}}
     return {
         "model_type": model_type,
         "repository_url": control.origin,
@@ -79,12 +118,12 @@ def _generator_config(
         "test_path": str(work_dir),
         "repository_directory": repository_directory,
         "control_branch_name": "ctrl",
-        "Control_Experiment": control_options,
+        "Control_Experiment": control_experiment,
         "Perturbation_Experiment": perturbations,
     }
 
 
-def clone_control(work_dir: Path, control: ControlSource, model_type: str) -> Path:
+def clone_control(work_dir: Path, control: ControlSource, model_type: str, lab_dir: Path) -> Path:
     """Clones a control into a working directory, the way generating a study does, and returns where it is.
 
     A configuration can be read out of a control's own files, with `from_control`, but the manager that
@@ -101,6 +140,8 @@ def clone_control(work_dir: Path, control: ControlSource, model_type: str) -> Pa
         control (ControlSource): Where the control comes from. Must state a start point.
         model_type (str): The model type identifier, as Payu defines it: the `model_type` of the configuration
             the control is to be read into, which the generator checks against Payu's list of models.
+        lab_dir (Path): The directory to put the study's Payu laboratory in, as the manager is given it. The
+            clone's control states that laboratory.
 
     Returns:
         Path: The clone, `work_dir / control.directory`.
@@ -108,7 +149,8 @@ def clone_control(work_dir: Path, control: ControlSource, model_type: str) -> Pa
     Raises:
         ValueError: If the control states no start point.
     """
-    ExperimentGenerator(_generator_config(model_type, control, work_dir, control.directory, {}, {})).run()
+    laboratory = _study_laboratory(lab_dir, model_type, work_dir)
+    ExperimentGenerator(_generator_config(model_type, control, work_dir, control.directory, {}, {}, laboratory)).run()
     return work_dir / control.directory
 
 
@@ -145,10 +187,38 @@ class PayuManager(ProfilingManager[PayuConfiguration]):
         application (PayuConfiguration): The application being profiled.
         control (ControlSource | None): Where the control every experiment perturbs comes from.
             None (the default) is enough to read and plot experiments that already exist.
+        lab_dir (Path | None): Directory, on the scratch file system, to put the study's Payu laboratory in:
+            Payu runs the study's experiments in `<lab_dir>/<model type>-<8 hex digits>`, and keeps their outputs
+            there. One directory can hold the laboratories of any number of studies. None (the default) is enough
+            to read, plot, archive and delete experiments that already exist, but not to generate any.
     """
 
     _nruns: int = 1  # Number of repetitions for the Payu experiments.
     _startfrom_restart: str = "cold"  # Restart option for the Payu experiments.
+
+    def __init__(
+        self,
+        work_dir: Path,
+        archive_dir: Path,
+        application: PayuConfiguration,
+        control: ControlSource | None = None,
+        *,
+        lab_dir: Path | None = None,
+    ):
+        super().__init__(work_dir, archive_dir, application, control)
+        self.lab_dir = lab_dir
+
+    @property
+    def laboratory(self) -> Path | None:
+        """Returns the Payu laboratory the study's experiments are generated to run in.
+
+        Returns:
+            Path | None: The laboratory, absolute: `<lab_dir>/<model type>-<8 hex digits>`, the digits being the
+                same in every session of the study and different for another one. None without a `lab_dir`.
+        """
+        if self.lab_dir is None:
+            return None
+        return _study_laboratory(self.lab_dir, self.application.model_type, self.work_dir)
 
     @property
     def _repository_directory(self) -> str:
@@ -247,7 +317,8 @@ class PayuManager(ProfilingManager[PayuConfiguration]):
         Args:
             plans (list[ExperimentPlan]): The experiments to create.
             control_options (dict | None): Options of the control experiment, passed to the experiment
-                generator. None (the default) passes none.
+                generator together with the study's laboratory, which they must not name. None (the default)
+                passes none.
             **runner_options: Ignored. Accepted so that this stays substitutable for the base method, whose
                 callers may pass options other runners take.
 
@@ -255,8 +326,8 @@ class PayuManager(ProfilingManager[PayuConfiguration]):
             dict[str, ProfilingExperiment]: The experiments new to this manager, keyed by branch name.
 
         Raises:
-            ValueError: If this manager has no control, or if the control states no start point, which the
-                generator needs to branch from.
+            ValueError: If this manager has no control or no `lab_dir`, if the control states no start point,
+                which the generator needs to branch from, or if the control options name a laboratory.
             Exception: Whatever the experiment generator raises, unchanged.
         """
         # Bound once, and checked before anything is read off it. generate_scaling_experiments refuses a
@@ -268,6 +339,12 @@ class PayuManager(ProfilingManager[PayuConfiguration]):
                 "Cannot create experiments without a control: every experiment is a branch of one, so there "
                 "is nothing to clone. Pass a ControlSource to this manager."
             )
+        laboratory = self.laboratory
+        if laboratory is None:
+            raise ValueError(
+                "Cannot create experiments without a lab_dir: Payu runs every experiment in a laboratory, and the "
+                "study's own is made under it. Pass this manager a lab_dir on the scratch file system."
+            )
         generator_config = _generator_config(
             self.application.model_type,
             control,
@@ -275,7 +352,9 @@ class PayuManager(ProfilingManager[PayuConfiguration]):
             self._repository_directory,
             control_options if control_options is not None else {},
             {f"Experiment_{seqnum}": self._perturbation_block(plan) for seqnum, plan in enumerate(plans, start=1)},
+            laboratory,
         )
+        logger.info(f"The experiments of this study run in the Payu laboratory '{laboratory}'.")
         ExperimentGenerator(generator_config).run()
 
         # The layout goes with each one: this is the whole of it, grids and all, and an experiment asked

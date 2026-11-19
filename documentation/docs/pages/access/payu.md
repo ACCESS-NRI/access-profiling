@@ -16,8 +16,9 @@ To run a study, you need:
 
 - An NCI project with enough compute allocation for every experiment of the study. Each experiment is a PBS job,
   and a study easily has hundreds of them.
-- A working directory on `/scratch`, where the experiments are generated and run, and an archive directory on
-  `/g/data`, where the finished experiments are kept.
+- Three directories. The working directory is where the experiments are generated. The directory for the
+  laboratories, on `/scratch`, is where Payu runs them (see [The laboratory](#the-laboratory)). The archive
+  directory, on `/g/data`, is where the finished experiments are kept.
 - Access to the control's repository. The presets name their releases by `git@github.com:` URLs, which need an
   SSH key registered with GitHub on Gadi. If you have none, pass a control with the repository's HTTPS URL instead:
   `GitControlSource("https://github.com/ACCESS-NRI/access-esm1.6-configs.git", "release-piControl-2.1")`.
@@ -58,9 +59,37 @@ control_options["config.yaml"]["modules"] = {"use": ["/g/data/vk83/modules"], "l
 ```
 
 So what happens when the experiments are created? First, the control is cloned into the working directory, under
-`config`, and the control options are committed there on a branch named `ctrl`. Then one branch is created from `ctrl`
-for each experiment. The branch is named after the parallelisation layout, and contains the changes for that layout, its
-walltime and its name.
+`config`, and the control options are committed there on a branch named `ctrl`, together with the laboratory of the
+study. Then one branch is created from `ctrl` for each experiment. The branch is named after the parallelisation
+layout, and contains the changes for that layout, its walltime and its name.
+
+### The laboratory
+
+Payu runs every experiment in a laboratory. During a run, the files of the experiment are in
+`<laboratory>/work/<experiment>`. When the run is over, Payu moves its outputs and the records of its jobs to
+`<laboratory>/archive/<experiment>`. The directory of the experiment links to both, as `work` and `archive`, and the
+manager reads everything through these links.
+
+Each study has a laboratory of its own, in the directory that you give the manager as `lab_dir`. The laboratory is
+named after the model and 8 hexadecimal digits that identify the working directory of the study, for example
+`/scratch/tm70/model_scaling/access-esm1.6-763e5952`. This means that one `lab_dir` can hold the laboratories of all
+your studies. The manager writes the laboratory into the `config.yaml` of the control, so that every experiment and
+every Payu command uses it. It also logs it when it creates the experiments, and you can find it in its
+[`laboratory`][access.profiling.payu_manager.PayuManager.laboratory] property. Put `lab_dir` on `/scratch`, which is
+meant for the large files that the runs write.
+
+Why does each study need its own laboratory? Without one, Payu uses its default,
+`/scratch/<project>/<user>/<model>`, which every study of the model and all your other Payu experiments share. Two
+studies of the same configuration name their experiments in the same way, so they would share directories. A study
+would then skip the experiments that another study has already run, and read their results instead. Deleting an
+experiment would also delete the runs of the other study. For this reason, a manager without a `lab_dir` refuses to
+create experiments, and the control options cannot name a laboratory. A manager that only reads, archives or deletes
+experiments needs no `lab_dir`. The experiments created before the study had a laboratory keep the one that their
+branch states.
+
+Note that the first clone of the control still uses the control's own laboratory, as it is made before the laboratory
+of the study is written into the control. Payu leaves a few empty directories there, and a `metadata.yaml` under
+`archive/config-ctrl-<id>`.
 
 ## Reading a configuration from its control
 
@@ -78,14 +107,15 @@ the `jobname` of `config.yaml`, unless you give it a name. A control of another 
 The files have to be on disk, but the manager that would clone them cannot be created before the configuration.
 This is what [`clone_control`][access.profiling.payu_manager.clone_control] is for. It clones the control first, in
 the same way as generating the study does: into the working directory, under the directory of the control, at its
-start point, with experiment-generator. When the study is generated later, the clone is found there and reused, so
-nothing is fetched twice. A control that is already cloned is left alone.
+start point, with experiment-generator. It also takes the `lab_dir` of the study, so that the clone states the
+laboratory of the study. When the study is generated later, the clone is found there and reused, so nothing is
+fetched twice. A control that is already cloned is left alone.
 
 This is the only place where the package fetches anything, and it is an explicit call. If the repository of the
 control asks for credentials, it does so here, from a terminal, and never while a configuration is being created.
 
 In this example we read the 100 km configuration of ACCESS-OM3 from its development branch, and then create the
-manager with it. `work_dir` and `archive_dir` are the two directories of your study:
+manager with it. `work_dir`, `archive_dir` and `lab_dir` are the three directories of your study:
 
 ```python
 from access.profiling import GitControlSource, OM3Configuration, PayuManager
@@ -93,8 +123,9 @@ from access.profiling.models.om3 import OM3_CONFIGS_REPOSITORY
 from access.profiling.payu_manager import clone_control
 
 control = GitControlSource(OM3_CONFIGS_REPOSITORY, "dev-MC_100km_jra_ryf")
-om3 = OM3Configuration.from_control(clone_control(work_dir, control, OM3Configuration.model_type), name="MC-100km")
-manager = PayuManager(work_dir, archive_dir, om3, control)
+clone = clone_control(work_dir, control, OM3Configuration.model_type, lab_dir)
+om3 = OM3Configuration.from_control(clone, name="MC-100km")
+manager = PayuManager(work_dir, archive_dir, om3, control, lab_dir=lab_dir)
 ```
 
 An [`ExistingDirectoryControlSource`][access.profiling.control.ExistingDirectoryControlSource] needs no clone:
@@ -218,3 +249,5 @@ These are the messages of Payu and of experiment-runner you may see, and what th
 |---|---|
 | `-- You have duplicated runs for ... hence not submitting this job!` | A job of that experiment is still queued or running, so experiment-runner does not submit another. |
 | `The control '<label>' states no start point. ...` | The Payu manager branches every experiment from a particular revision of the control. Give an `ExistingDirectoryControlSource` its `revision`. |
+| `Cannot create experiments without a lab_dir: ...` | The manager has nowhere to put the laboratory of the study. Create it again with a `lab_dir` on `/scratch`. |
+| `The control options name a Payu laboratory, ...` | The laboratory of a study is the manager's to choose. Remove `laboratory` from the control options, and give the manager the directory that is to hold it as `lab_dir`. |

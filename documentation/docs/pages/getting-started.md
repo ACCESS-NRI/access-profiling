@@ -60,8 +60,8 @@ A profiling study needs three things. The first is the application to profile, w
 control configuration of ACCESS-ESM1.6. The second is the control, the experiment that is modified to create the
 other experiments, which here is the official release of that configuration. The third is a manager, which creates
 and runs the experiments. ACCESS-ESM1.6 is run with Payu, so we use the manager for Payu. The manager also needs
-a working directory, where the experiments are created and run, and an archive directory, where they are kept once
-they have finished. We start by creating it:
+three directories: a working directory, where the experiments are created, a directory on `/scratch`, where Payu runs
+them, and an archive directory, where they are kept once they have finished. We start by creating it:
 
 ```python
 from pathlib import Path
@@ -74,11 +74,12 @@ manager = PayuManager(
     archive_dir=Path("/g/data/tm70/model_scaling/ACCESS-ESM1.6/piControl/archive"),
     application=ESM16_PI_CONTROL,
     control=ESM16_PI_CONTROL_SOURCE,
+    lab_dir=Path("/scratch/tm70/model_scaling"),
 )
 print(manager)
 ```
 
-The two directories are only examples, so adapt them to your own setup, replacing `tm70` with your own project.
+The three directories are only examples, so adapt them to your own setup, replacing `tm70` with your own project.
 Creating a manager does not write anything to disk. It only looks in the archive directory, to see if there are
 experiments from an earlier study, and here there are none. With the directories above, the output should be:
 

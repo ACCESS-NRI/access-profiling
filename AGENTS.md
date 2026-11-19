@@ -153,6 +153,13 @@ blocks, one page per concept. A new module needs a block on the right page and a
   directory under `work_dir`, Payu's `experiment`, and the name of its tarball. `Application.experiment_name` must
   therefore be distinct for every layout and the same every time for the same one, and changing how a model names
   its layouts orphans every experiment already on disk.
+- **Each Payu study runs in a laboratory of its own**, `<lab_dir>/<model type>-<8 hex digits of the working
+  directory>` (`_study_laboratory`). `_generator_config` writes it, absolute, into the control's `config.yaml` as
+  `laboratory`, which every experiment branches from and every Payu step reads, and refuses a `laboratory` control
+  option. Payu's default laboratory is shared by every study of a model, and layout names repeat between studies,
+  so sharing one makes the runner skip another study's layouts and `payu sweep --hard` delete its runs. The
+  generator's and the runner's `lab_path` reaches Payu only while it checks a branch out, and `PAYU_LAB_PATH` never
+  reaches the PBS job, so neither can replace the key. `lab_dir` is needed to generate, not to read, archive or delete.
 - **No manager state is stored.** A new manager finds the tarballs in `archive_dir` again, as ARCHIVED; every other
   status is read afresh from what the engine recorded, by `update_statuses`, which archiving, parsing and running
   all call first. ARCHIVED is terminal, since reading a status out of a tarball would mean extracting it.
