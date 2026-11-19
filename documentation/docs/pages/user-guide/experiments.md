@@ -13,9 +13,9 @@ to look at their results.
 
 ## Creating the manager
 
-To create a manager, we need four things: a working directory, where the experiments are created and run, an
-archive directory, where the finished experiments are kept, the application, and its control. Here we create a
-[`PayuManager`][access.profiling.payu_manager.PayuManager]:
+To create a manager, we need five things: a working directory, where the experiments are created, a directory on
+`/scratch`, where they run, an archive directory, where the finished experiments are kept, the application, and its
+control. Here we create a [`PayuManager`][access.profiling.payu_manager.PayuManager]:
 
 === "ACCESS-ESM1.6"
 
@@ -30,6 +30,7 @@ archive directory, where the finished experiments are kept, the application, and
         archive_dir=Path("/g/data/tm70/model_scaling/ACCESS-ESM1.6/piControl/archive"),
         application=ESM16_PI_CONTROL,
         control=ESM16_PI_CONTROL_SOURCE,
+        lab_dir=Path("/scratch/tm70/model_scaling"),
     )
     ```
 
@@ -46,11 +47,16 @@ archive directory, where the finished experiments are kept, the application, and
         archive_dir=Path("/g/data/tm70/model_scaling/ACCESS-OM3/MC_25km_jra_ryf/archive"),
         application=OM3_MC_25KM,
         control=OM3_MC_25KM_JRA_RYF_SOURCE,
+        lab_dir=Path("/scratch/tm70/model_scaling"),
     )
     ```
 
-The two directories are only examples, so remember to adapt them to your own setup, replacing `tm70` with your own
-project. The controls used here are the official releases of the two models, `release-piControl-2.1` and
+The three directories are only examples, so remember to adapt them to your own setup, replacing `tm70` with your own
+project. Payu runs the experiments of the study in a laboratory of its own, which the manager creates in `lab_dir`. One
+`lab_dir` can therefore hold the laboratories of all your studies. [The laboratory](../access/payu.md#the-laboratory)
+explains why each study needs its own.
+
+The controls used here are the official releases of the two models, `release-piControl-2.1` and
 `release-MC_25km_jra_ryf-2.0-beta`. If you want to profile another release, or a fork, keep the same application
 and pass a different [`GitControlSource`][access.profiling.control.GitControlSource] as the control.
 

@@ -191,6 +191,7 @@ def test_esm15_generate_scaling_experiments(mock_experiment_generator, esm15):
         Path("/fake/archive_path"),
         esm15,
         GitControlSource("https://example.com/repo", "commit"),
+        lab_dir=Path("/fake/lab"),
     )
     manager.generate_scaling_experiments(
         num_nodes_list=[9.0], cores_per_node=48, walltime=2.0, allocations=PREINDUSTRIAL_ALLOCATIONS

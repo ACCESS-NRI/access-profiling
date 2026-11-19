@@ -1,6 +1,7 @@
 # Copyright 2025 ACCESS-NRI and contributors. See the top-level COPYRIGHT file for details.
 # SPDX-License-Identifier: Apache-2.0
 
+import hashlib
 import json
 import logging
 import os
@@ -79,7 +80,13 @@ MOCK_CONTROL = GitControlSource("https://example.com/repo", "commit")
 
 @pytest.fixture(scope="function")
 def manager():
-    return PayuManager(Path("/fake/test_path"), Path("/fake/archive_path"), MockPayuConfiguration(), MOCK_CONTROL)
+    return PayuManager(
+        Path("/fake/test_path"),
+        Path("/fake/archive_path"),
+        MockPayuConfiguration(),
+        MOCK_CONTROL,
+        lab_dir=Path("/fake/lab"),
+    )
 
 
 def test_nruns(manager):
@@ -649,7 +656,7 @@ def test_generate_scaling_experiments(mock_experiment_generator, manager):
     assert config["test_path"] == "/fake/test_path"
     assert config["repository_directory"] == "config"
     assert config["control_branch_name"] == "ctrl"
-    assert config["Control_Experiment"] == {"some": "option"}
+    assert config["Control_Experiment"] == {"some": "option", "config.yaml": {"laboratory": str(manager.laboratory)}}
 
     # One perturbation experiment per layout, numbered sequentially
     perturbations = config["Perturbation_Experiment"]
@@ -1658,3 +1665,125 @@ class TestCloneControl:
         with pytest.raises(ValueError, match="states no start point"):
             clone_control(Path("/fake/work"), ExistingDirectoryControlSource(Path("/fake/control")), "mock")
         mock_experiment_generator.assert_not_called()
+
+
+class TestLaboratory:
+    """Each study runs in a Payu laboratory of its own, under the lab_dir the user chose, which the control states."""
+
+    @staticmethod
+    def generate(manager, control_options):
+        manager.generate_scaling_experiments(
+            num_nodes_list=[1.0],
+            control_options=control_options,
+            cores_per_node=4,
+            walltime=2.0,
+            allocations=MOCK_ALLOCATIONS,
+        )
+
+    def test_it_is_named_after_the_model_and_the_working_directory(self, manager):
+        """A digest of the working directory, so that one lab_dir can hold the laboratories of many studies."""
+        digest = hashlib.sha256(b"/fake/test_path").hexdigest()[:8]
+
+        assert manager.laboratory == Path(f"/fake/lab/mock-payu-model-{digest}")
+
+    def test_it_is_the_same_for_the_same_working_directory_and_absolute(self, tmp_path):
+        """A relative working directory or lab_dir names the same laboratory as the absolute one, which Payu needs:
+        a relative laboratory would be put under /scratch/<project>/<user> instead."""
+        work_dir, lab_dir = tmp_path / "work", tmp_path / "lab"
+        absolute = PayuManager(work_dir, tmp_path / "archive", MockPayuConfiguration(), lab_dir=lab_dir)
+        relative = PayuManager(
+            Path(os.path.relpath(work_dir)),
+            tmp_path / "archive",
+            MockPayuConfiguration(),
+            lab_dir=Path(os.path.relpath(lab_dir)),
+        )
+
+        assert relative.laboratory == absolute.laboratory
+        assert absolute.laboratory.is_absolute()
+
+    def test_another_working_directory_gives_another_laboratory(self, tmp_path):
+        """Two studies sharing a lab_dir do not share a laboratory."""
+        first, second = (
+            PayuManager(tmp_path / name, tmp_path / "archive", MockPayuConfiguration(), lab_dir=tmp_path / "lab")
+            for name in ("first", "second")
+        )
+
+        assert first.laboratory != second.laboratory
+        assert first.laboratory.parent == second.laboratory.parent == (tmp_path / "lab").resolve()
+
+    def test_there_is_none_without_a_lab_dir(self):
+        """A manager that only reads, archives or deletes experiments needs no laboratory."""
+        manager = PayuManager(Path("/fake/test_path"), Path("/fake/archive_path"), MockPayuConfiguration())
+
+        assert manager.laboratory is None
+
+    @mock.patch("access.profiling.payu_manager.ExperimentGenerator")
+    def test_generation_without_a_lab_dir_is_refused(self, mock_experiment_generator):
+        """Nothing is generated, and nothing registered, without a laboratory to run in."""
+        manager = PayuManager(
+            Path("/fake/test_path"), Path("/fake/archive_path"), MockPayuConfiguration(), MOCK_CONTROL
+        )
+
+        with pytest.raises(ValueError, match="without a lab_dir"):
+            self.generate(manager, {})
+        mock_experiment_generator.assert_not_called()
+        assert manager.experiments == {}
+
+    @mock.patch("access.profiling.payu_manager.ExperimentGenerator")
+    def test_the_control_states_it_beside_the_other_options(self, mock_experiment_generator, manager, caplog):
+        """Written into config.yaml of the control, which every experiment branches from, without touching the
+        other options, or the caller's dictionary, which may be passed again for another study."""
+        control_options = {"config.yaml": {"umask": 18}, "MOM_input": {"DT": 1800.0}}
+
+        with caplog.at_level(logging.INFO, logger="access.profiling.payu_manager"):
+            self.generate(manager, control_options)
+
+        assert mock_experiment_generator.call_args[0][0]["Control_Experiment"] == {
+            "config.yaml": {"umask": 18, "laboratory": str(manager.laboratory)},
+            "MOM_input": {"DT": 1800.0},
+        }
+        assert control_options == {"config.yaml": {"umask": 18}, "MOM_input": {"DT": 1800.0}}
+        assert str(manager.laboratory) in caplog.text, "the user is told where the runs are"
+
+    @mock.patch("access.profiling.payu_manager.ExperimentGenerator")
+    def test_a_laboratory_in_the_control_options_is_refused(self, mock_experiment_generator, manager):
+        """One place states it: the control options would otherwise silently lose to the manager's laboratory."""
+        with pytest.raises(ValueError, match="name a Payu laboratory"):
+            self.generate(manager, {"config.yaml": {"laboratory": "/scratch/tm70/elsewhere"}})
+        mock_experiment_generator.assert_not_called()
+
+    @mock.patch.dict(os.environ, {"PAYU_LAB_PATH": "/scratch/tm70/elsewhere"})
+    @mock.patch("access.profiling.payu_manager.ExperimentGenerator")
+    def test_generation_is_refused_with_payu_lab_path_set(self, mock_experiment_generator, manager):
+        """Payu would use the variable on the login node, but the PBS job never receives it."""
+        with pytest.raises(RuntimeError, match="PAYU_LAB_PATH is set, to '/scratch/tm70/elsewhere'"):
+            self.generate(manager, {})
+        mock_experiment_generator.assert_not_called()
+        assert manager.experiments == {}
+
+    @mock.patch.dict(os.environ, {"PAYU_LAB_PATH": "/scratch/tm70/elsewhere"})
+    @mock.patch("access.profiling.payu_manager.subprocess.run")
+    @mock.patch("access.profiling.payu_manager.ExperimentRunner")
+    def test_running_is_refused_with_payu_lab_path_set(self, mock_experiment_runner, mock_run, manager, tmp_path):
+        """Neither swept nor submitted: the runner's clones would link to one laboratory, and the job run in another."""
+        write_job_file(tmp_path, 0, {"stage": "archive", "payu_run_status": 1})
+        (tmp_path / "archive" / "output000").mkdir()
+        failed = _experiment(tmp_path, ProfilingExperimentStatus.FAILED)
+        with mock.patch.dict(manager.experiments, {"branch1": failed}):
+            with pytest.raises(RuntimeError, match="PAYU_LAB_PATH is set"):
+                manager.run_experiments(retry_failed=True)
+            assert failed.status == ProfilingExperimentStatus.FAILED
+        mock_run.assert_not_called()
+        mock_experiment_runner.assert_not_called()
+
+    @mock.patch.dict(os.environ, {"PAYU_LAB_PATH": "/scratch/tm70/elsewhere"})
+    @mock.patch("access.profiling.payu_manager.ExperimentRunner")
+    def test_deleting_is_refused_with_payu_lab_path_set(self, mock_experiment_runner, manager):
+        """A hard sweep would act on the variable's laboratory, which other studies may share."""
+        with mock.patch.dict(
+            manager.experiments, {"branch1": _experiment(Path("branch1"), ProfilingExperimentStatus.DONE)}
+        ):
+            with pytest.raises(RuntimeError, match="PAYU_LAB_PATH is set"):
+                manager.delete_experiments(["branch1"])
+            assert "branch1" in manager.experiments
+        mock_experiment_runner.assert_not_called()

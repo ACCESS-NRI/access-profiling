@@ -88,6 +88,7 @@ manager = PayuManager(
     archive_dir=Path("/g/data/tm70/model_scaling/ACCESS-ESM1.6/piControl/archive"),
     application=ESM16_PI_CONTROL,
     control=ESM16_PI_CONTROL_SOURCE,
+    lab_dir=Path("/scratch/tm70/model_scaling"),
 )
 released = RootAllocation(
     subcomponents={component: FixedAllocation(cores) for component, cores in ESM16_PI_CONTROL_CORES.items()}
@@ -96,7 +97,7 @@ for layout in manager.select_layouts(5 * 104, allocations=released):
     print(ESM16_PI_CONTROL.experiment_name(layout))
 ```
 
-The two directories are only examples, so adapt them to your own setup, replacing `tm70` with your own project. The
+The three directories are only examples, so adapt them to your own setup, replacing `tm70` with your own project. The
 code prints the 14 ways of arranging those cores into process grids, the release's own
 `esm1p6-layout_piControl_atm_16x16_mom_16x15_ice_12` among them.
 

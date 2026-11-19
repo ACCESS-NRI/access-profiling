@@ -155,7 +155,7 @@ the changes to the files of each component. And the layout is read back from `co
 
 The class is now complete, so let us try it. We create an instance for one configuration of the application, and
 use it with a manager like any other application. We then ask for the layouts of 96 cores that give each
-component about half of them. The two directories of the manager are only examples, so adapt them to your own
+component about half of them. The three directories of the manager are only examples, so adapt them to your own
 setup:
 
 ```python
@@ -173,6 +173,7 @@ manager = PayuManager(
     archive_dir=Path("/g/data/tm70/toy/archive"),
     application=TOY_DEMO,
     control=GitControlSource("https://github.com/<organisation>/<repository>.git", "<tag>"),
+    lab_dir=Path("/scratch/tm70/model_scaling"),
 )
 half = FreeAllocation(
     min_core_fraction=0.45,

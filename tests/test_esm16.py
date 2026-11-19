@@ -65,6 +65,7 @@ def manager(esm16):
         Path("/fake/archive_path"),
         esm16,
         GitControlSource("https://example.com/repo", "commit"),
+        lab_dir=Path("/fake/lab"),
     )
 
 

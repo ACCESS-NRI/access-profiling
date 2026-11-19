@@ -215,6 +215,7 @@ def test_om2_generate_scaling_experiments(mock_experiment_generator):
         Path("/fake/archive_path"),
         OM2_1DEG,
         GitControlSource("https://example.com/repo", "release-1deg_jra55_ryf-4.1"),
+        lab_dir=Path("/fake/lab"),
     )
     manager.generate_scaling_experiments(
         num_nodes_list=[5.0], cores_per_node=53, walltime=2.0, allocations=_pinned(240, 24)

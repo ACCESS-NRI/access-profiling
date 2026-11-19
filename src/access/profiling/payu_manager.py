@@ -9,8 +9,10 @@ scheduler recorded about each run - the CPUs it occupied, the state it reached a
 is being profiled arrives as a `PayuConfiguration`.
 """
 
+import hashlib
 import json
 import logging
+import os
 import re
 import subprocess
 from pathlib import Path
@@ -35,6 +37,44 @@ _OUTPUT_DIR = re.compile(r"output(\d+)")
 # the body of that function, and exposes them nowhere: if Payu ever changes them, these have to follow.
 _PAYU_DEFAULT_NODE_SIZE = 48
 _PAYU_DEFAULT_NCPUS = 1
+
+
+def _study_laboratory(lab_dir: Path, model_type: str, work_dir: Path) -> Path:
+    """Returns the Payu laboratory of the study whose working directory is given, under the user's `lab_dir`.
+
+    The study's own directory is named after the model and a digest of the working directory: the same in every
+    session of a study, and different for another study, so that one `lab_dir` can hold the laboratories of any
+    number of studies without two of them sharing one.
+
+    Args:
+        lab_dir (Path): The directory the user chose for the laboratories of their studies.
+        model_type (str): The model type identifier, as Payu defines it.
+        work_dir (Path): The working directory of the study.
+
+    Returns:
+        Path: The study's laboratory, absolute: `<lab_dir>/<model type>-<8 hex digits>`.
+    """
+    digest = hashlib.sha256(str(work_dir.resolve()).encode()).hexdigest()[:8]
+    return lab_dir.resolve() / f"{model_type}-{digest}"
+
+
+def _refuse_payu_lab_path() -> None:
+    """Refuses to have Payu act while `PAYU_LAB_PATH` is set in the environment.
+
+    Payu takes the laboratory from this variable before `config.yaml`, but only where the variable is set: in the
+    Payu steps this process runs on the login node. experiment-runner submits `payu run` with no laboratory, so the
+    PBS job never receives it and reads `config.yaml`. The links the manager reads through would then lead to a
+    laboratory the runs never write to, and a hard sweep would act on a laboratory other studies may share.
+
+    Raises:
+        RuntimeError: If `PAYU_LAB_PATH` is set.
+    """
+    if "PAYU_LAB_PATH" in os.environ:
+        raise RuntimeError(
+            f"PAYU_LAB_PATH is set, to '{os.environ['PAYU_LAB_PATH']}'. Payu would use it instead of the laboratory "
+            "that each experiment's config.yaml states, but only on this node: the PBS job never receives it. Unset "
+            "it, for example with `del os.environ['PAYU_LAB_PATH']` in a notebook, and try again."
+        )
 
 
 def _generator_config(
@@ -145,10 +185,38 @@ class PayuManager(ProfilingManager[PayuConfiguration]):
         application (PayuConfiguration): The application being profiled.
         control (ControlSource | None): Where the control every experiment perturbs comes from.
             None (the default) is enough to read and plot experiments that already exist.
+        lab_dir (Path | None): Directory, on the scratch file system, to put the study's Payu laboratory in:
+            Payu runs the study's experiments in `<lab_dir>/<model type>-<8 hex digits>`, and keeps their outputs
+            there. One directory can hold the laboratories of any number of studies. None (the default) is enough
+            to read, plot, archive and delete experiments that already exist, but not to generate any.
     """
 
     _nruns: int = 1  # Number of repetitions for the Payu experiments.
     _startfrom_restart: str = "cold"  # Restart option for the Payu experiments.
+
+    def __init__(
+        self,
+        work_dir: Path,
+        archive_dir: Path,
+        application: PayuConfiguration,
+        control: ControlSource | None = None,
+        *,
+        lab_dir: Path | None = None,
+    ):
+        super().__init__(work_dir, archive_dir, application, control)
+        self.lab_dir = lab_dir
+
+    @property
+    def laboratory(self) -> Path | None:
+        """Returns the Payu laboratory the study's experiments are generated to run in.
+
+        Returns:
+            Path | None: The laboratory, absolute: `<lab_dir>/<model type>-<8 hex digits>`, the digits being the
+                same in every session of the study and different for another one. None without a `lab_dir`.
+        """
+        if self.lab_dir is None:
+            return None
+        return _study_laboratory(self.lab_dir, self.application.model_type, self.work_dir)
 
     @property
     def _repository_directory(self) -> str:
@@ -247,7 +315,8 @@ class PayuManager(ProfilingManager[PayuConfiguration]):
         Args:
             plans (list[ExperimentPlan]): The experiments to create.
             control_options (dict | None): Options of the control experiment, passed to the experiment
-                generator. None (the default) passes none.
+                generator together with the study's laboratory, which they must not name. None (the default)
+                passes none.
             **runner_options: Ignored. Accepted so that this stays substitutable for the base method, whose
                 callers may pass options other runners take.
 
@@ -255,8 +324,9 @@ class PayuManager(ProfilingManager[PayuConfiguration]):
             dict[str, ProfilingExperiment]: The experiments new to this manager, keyed by branch name.
 
         Raises:
-            ValueError: If this manager has no control, or if the control states no start point, which the
-                generator needs to branch from.
+            ValueError: If this manager has no control or no `lab_dir`, if the control states no start point,
+                which the generator needs to branch from, or if the control options name a laboratory.
+            RuntimeError: If `PAYU_LAB_PATH` is set in the environment.
             Exception: Whatever the experiment generator raises, unchanged.
         """
         # Bound once, and checked before anything is read off it. generate_scaling_experiments refuses a
@@ -268,14 +338,39 @@ class PayuManager(ProfilingManager[PayuConfiguration]):
                 "Cannot create experiments without a control: every experiment is a branch of one, so there "
                 "is nothing to clone. Pass a ControlSource to this manager."
             )
+        laboratory = self.laboratory
+        if laboratory is None:
+            raise ValueError(
+                "Cannot create experiments without a lab_dir: Payu runs every experiment in a laboratory, and the "
+                "study's own is made under it. Pass this manager a lab_dir on the scratch file system."
+            )
+        _refuse_payu_lab_path()
+        control_options = control_options if control_options is not None else {}
+        config_options = control_options.get("config.yaml", {})
+        if "laboratory" in config_options:
+            raise ValueError(
+                "The control options name a Payu laboratory, but each study runs in a laboratory of its own, under "
+                "the manager's lab_dir. Remove 'laboratory' from the control options, and pass the directory to put "
+                "the study's laboratory in as lab_dir."
+            )
+        # Payu runs every experiment in a laboratory, and with PAYU_LAB_PATH unset, as refused above, every Payu
+        # step reads it from config.yaml, on the login node and in the PBS job. The default,
+        # /scratch/<project>/<user>/<model>, is shared by every study of the model, while a layout's name is only
+        # unique within a study: two studies would run in each other's directories, the runner would skip a layout
+        # another study already ran, and a hard sweep would delete another study's runs. The generator's and the
+        # runner's lab_path reaches Payu only while it checks a branch out, and the runner's `payu run` passes no
+        # laboratory, so PAYU_LAB_PATH never reaches the PBS job. The laboratory is therefore written into the
+        # control, which every experiment branches from. The caller's dict is left as it is.
+        control_options = {**control_options, "config.yaml": {**config_options, "laboratory": str(laboratory)}}
         generator_config = _generator_config(
             self.application.model_type,
             control,
             self.work_dir,
             self._repository_directory,
-            control_options if control_options is not None else {},
+            control_options,
             {f"Experiment_{seqnum}": self._perturbation_block(plan) for seqnum, plan in enumerate(plans, start=1)},
         )
+        logger.info(f"The experiments of this study run in the Payu laboratory '{laboratory}'.")
         ExperimentGenerator(generator_config).run()
 
         # The layout goes with each one: this is the whole of it, grids and all, and an experiment asked
@@ -360,10 +455,12 @@ class PayuManager(ProfilingManager[PayuConfiguration]):
                 ones. False (the default) submits only the new ones.
 
         Raises:
+            RuntimeError: If `PAYU_LAB_PATH` is set in the environment. Nothing is submitted when it is.
             Exception: Whatever the experiment runner raises, unchanged. No status is advanced when it does.
             subprocess.CalledProcessError: If Payu could not sweep an experiment being run again. Nothing is
                 submitted and no status is advanced when it does.
         """
+        _refuse_payu_lab_path()
 
         # An experiment is only new as far as this manager knows: a status does not outlive the session, so
         # one generated and run in an earlier session comes back NEW. Ask before deciding what to submit.
@@ -458,7 +555,11 @@ class PayuManager(ProfilingManager[PayuConfiguration]):
                 after the deletion may still be run from it. Which ones keep it are logged at INFO.
             **kwargs: Ignored. Accepted so that this stays substitutable for the base method, whose callers
                 may pass options other runners take.
+
+        Raises:
+            RuntimeError: If `PAYU_LAB_PATH` is set in the environment. Nothing is deleted when it is.
         """
+        _refuse_payu_lab_path()
         if remove_repo_dir:
             self.update_statuses()
             still_to_run = {
