@@ -156,7 +156,7 @@ class CICEComponent(PayuComponent):
     Args:
         partitioning (CICEPartitioning): How it divides its grid among its ranks.
         name (str): How the component tree names it. ACCESS-OM3 names its realm `ice`.
-        token (str): How `experiment_name` abbreviates it.
+        token (str): How `layout_key` abbreviates it.
         log_name (str): What its profiling log is called in the parsed data.
         log_path (str): Where that log is, relative to the output directory: `ice/ice_diag.d` where Payu runs
             CICE as a submodel, `log/ice.log` in ACCESS-OM3.

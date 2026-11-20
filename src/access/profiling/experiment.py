@@ -8,23 +8,43 @@ and, once they are known, the cores it occupied and the layout it ran. Once fini
 tarball, and it is read from the tarball after that. A `ProfilingLog` pairs one log file with the parser that
 reads it, and an `ExperimentPlan` is an experiment a manager has decided to create, before any workflow engine
 has touched it.
+
+An experiment's name says nothing about it, so what it is has to be written down. Each experiment has a record, a
+small JSON file named `RECORD_FILENAME`: in its directory under the working directory, and as the first member of
+its archive. The record holds only what differs from one experiment to the next, which is what lets a new manager
+find the experiment again and tell whether a study already has it. Its status is not part of it: a status changes,
+and is the workflow engine's to say.
+
+The record also states the version of its own format, `RECORD_VERSION`. It is written once and may be read from an
+archive years later, by a later version of this package, so the file itself has to say how it is to be read.
 """
 
+import io
+import json
 import logging
 import os
 import tarfile
 import tempfile
+import time
 from contextlib import contextmanager
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 
 import xarray as xr
-from access.config.parallel_component import ComponentLayout
+from access.config.parallel_component import ComponentLayout, CoreSharing
+from access.config.parallel_domain import Domain, DomainDecompositionSpec
+from access.config.parallel_mpi_grid import MPICartesianGrid
 
 from access.profiling.parser import ProfilingParser, flatten_hierarchical
 
 logger = logging.getLogger(__name__)
+
+RECORD_FILENAME: str = "access-profiling.json"
+"""The name of an experiment's record, in its directory under the working directory and in its archive."""
+
+RECORD_VERSION: int = 1
+"""The version of the format of an experiment's record, which every record states."""
 
 
 def _make_unique_region_names(regions: list[object]) -> list[object]:
@@ -106,14 +126,35 @@ class ProfilingLog:
         )
 
 
+def _refuse_other_than_json(what: str, value: dict) -> None:
+    """Refuses a value that an experiment's record could not hold and give back as it was.
+
+    Args:
+        what (str): What the value is and whose, for the message.
+        value (dict): The value.
+
+    Raises:
+        ValueError: If the value is not made of JSON values, or is not the same once written and read again, as a
+            tuple or a key that is not a string is not.
+    """
+    try:
+        unchanged = json.loads(json.dumps(value)) == value
+    except (TypeError, ValueError) as error:
+        raise ValueError(f"The {what} must be JSON values. Got {value!r}.") from error
+    if not unchanged:
+        raise ValueError(
+            f"The {what} must be JSON values, which {value!r} is not: written to a record and read again, it is "
+            "not what it was. Use lists rather than tuples, and strings as keys."
+        )
+
+
 @dataclass(frozen=True)
 class ExperimentPlan:
     """One experiment a manager has decided to create, before any engine has touched it.
 
     Args:
-        name (str): What identifies the experiment. It is the key this manager holds it under, the branch or
-            directory it lives in, and the name written into the experiment's own configuration, so it has to
-            be distinct for every distinct layout and stable from one session to the next.
+        name (str): The experiment's name. It is the key this manager holds it under, the branch or directory it
+            lives in, and the name written into the experiment's own configuration.
         layout (ComponentLayout): The layout the experiment runs.
         changes (dict): The configuration file changes realising that layout, keyed by the path of each file
             relative to the control directory.
@@ -256,6 +297,114 @@ def experiment_directory_walker(path: Path, arcname: Path, root: Path, follow_sy
         yield path, arcname
 
 
+def _layout_record(layout: ComponentLayout) -> dict:
+    """Returns a layout as JSON values, field by field, its sub-layouts included.
+
+    Args:
+        layout (ComponentLayout): The layout.
+
+    Returns:
+        dict: What `_layout_from_record` builds the same layout from.
+    """
+    decomposition = layout.decomposition
+    return {
+        "name": layout.name,
+        "n_cores": layout.n_cores,
+        "n_ranks": layout.n_ranks,
+        "threads_per_rank": layout.threads_per_rank,
+        "decomposition": None
+        if decomposition is None
+        else {"domain": list(decomposition.domain.shape), "grid": list(decomposition.grid.shape)},
+        "sub_layouts": [_layout_record(sub_layout) for sub_layout in layout.sub_layouts],
+        "core_sharing": layout.core_sharing.name,
+        "core_offset": layout.core_offset,
+    }
+
+
+def _layout_from_record(record: dict) -> ComponentLayout:
+    """Returns the layout a record holds, the inverse of `_layout_record`.
+
+    The layout is built again rather than trusted, so one a record states wrongly is refused as any other is.
+
+    Args:
+        record (dict): The layout, as `_layout_record` wrote it.
+
+    Returns:
+        ComponentLayout: The layout.
+
+    Raises:
+        ValueError: If what the record states is not a layout.
+    """
+    decomposition = record["decomposition"]
+    return ComponentLayout(
+        name=record["name"],
+        n_cores=record["n_cores"],
+        n_ranks=record["n_ranks"],
+        threads_per_rank=record["threads_per_rank"],
+        decomposition=None
+        if decomposition is None
+        else DomainDecompositionSpec(
+            Domain(shape=tuple(decomposition["domain"])), MPICartesianGrid(shape=tuple(decomposition["grid"]))
+        ),
+        sub_layouts=tuple(_layout_from_record(sub_layout) for sub_layout in record["sub_layouts"]),
+        core_sharing=CoreSharing[record["core_sharing"]],
+        core_offset=record["core_offset"],
+    )
+
+
+def read_versioned(text: str | bytes, source: Path, what: str, version: int) -> dict:
+    """Returns what a file written by this package holds, refusing one in a format this version does not read.
+
+    Args:
+        text (str | bytes): The contents of the file.
+        source (Path): The file, or the archive it is in, for the message.
+        what (str): What the file is, for the message.
+        version (int): The version of the format that this version of the package reads.
+
+    Returns:
+        dict: What the file holds.
+
+    Raises:
+        ValueError: If the contents are not JSON, or state no format version or another one than `version`.
+    """
+    try:
+        content = json.loads(text)
+    except ValueError as error:
+        raise ValueError(f"The {what} '{source}' cannot be read, since it is not JSON: {error}.") from error
+    found = content.get("version")
+    if found != version:
+        stated = "no format version" if found is None else f"the format version {found}"
+        raise ValueError(
+            f"The {what} '{source}' states {stated}, and this version of access-profiling reads version {version}. "
+            "Update access-profiling if a later version of it wrote the file."
+        )
+    return content
+
+
+def read_archived_record(archive_file: Path) -> dict | None:
+    """Returns the record an archive holds, read without extracting the archive.
+
+    `ProfilingExperiment.archive` writes the record first, so only the start of the tarball is read.
+
+    Args:
+        archive_file (Path): The archive.
+
+    Returns:
+        dict | None: The record, or None for an archive that holds none, as one made before experiments had
+            records does.
+
+    Raises:
+        ValueError: If the record is not JSON, or states no format version or another one than `RECORD_VERSION`.
+    """
+    with tarfile.open(archive_file) as tar:
+        first = tar.next()
+        if first is None or first.name != RECORD_FILENAME:
+            return None
+        member = tar.extractfile(first)
+        assert member is not None, "the record is added as a regular file"
+        return read_versioned(member.read(), archive_file, "record in the archive", RECORD_VERSION)
+
+
 class ProfilingExperiment:
     """Represents a profiling experiment.
 
@@ -267,26 +416,41 @@ class ProfilingExperiment:
 
     The layout is kept here for the same reason, and arrives one of two ways. An experiment generated
     from a layout search is given the layout it was generated from, which is the whole of it, grids
-    included. One this manager did not generate - archived, or added from a directory - is read back from
-    its configuration on demand by ProfilingManager._layout(), which recovers what each component was
-    given rather than how it divided its domain.
+    included, and its record keeps it, so that the experiment has it again in a later session and once it
+    is archived. One that was given no layout - added from a directory, or archived before experiments had
+    records - is read back from its configuration on demand by ProfilingManager._layout(), which recovers
+    what each component was given rather than how it divided its domain.
 
     Args:
         path (Path): Path to the experiment directory.
         run_path (Path | None): Path to a separate runs directory. If None, runs are assumed to be
             inside path. When provided, the runs directory is also traversed during archival.
             path contents are stored under experiment/ and run_path contents under runs/.
-        layout (ComponentLayout | None): Layout the experiment runs, where it is known at construction.
-            None (the default) leaves it to be read back from the configuration when it is asked for.
+        layout (ComponentLayout | None): Layout the experiment was given, where it was given one. None (the
+            default) leaves it to be read back from the configuration when it is asked for.
+        changes (dict | None): What the study changed in the control beyond the layout, keyed by file. None (the
+            default) says they are unknown, as they are for an experiment this manager did not generate.
+        labels (dict | None): The study's own keys and values for this experiment, as JSON values, since the
+            record keeps them. None (the default) gives it none.
+        complete (bool): Whether the experiment was added as one that had finished. Defaults to False.
+
+    Raises:
+        ValueError: If the labels are not JSON values.
 
     Attributes:
         path (Path): Path to the experiment directory, or to its tarball once it has been archived.
         run_path (Path | None): Path to a separate runs directory, or None. Always None once the experiment has
             been archived, its runs being in the tarball.
-        status (ProfilingExperimentStatus): Status of the experiment. NEW at construction, or ARCHIVED where path
-            is a tarball.
+        status (ProfilingExperimentStatus): Status of the experiment. ARCHIVED where path is a tarball, DONE
+            where the experiment was added as complete, and NEW otherwise.
         ncpus (int | None): CPUs the experiment occupied, or None while that is still unknown.
         layout (ComponentLayout | None): Layout the experiment runs, or None while that is unknown.
+        layout_given (bool): Whether the layout is the one the experiment was given, rather than one read back
+            from its configuration. Only a given layout is part of what identifies the experiment, and only a
+            given one is written into its record.
+        changes (dict | None): What the study changed in the control beyond the layout, or None if unknown.
+        labels (dict): The study's own keys and values for this experiment.
+        complete (bool): Whether the experiment was added as one that had finished.
     """
 
     path: Path
@@ -295,12 +459,75 @@ class ProfilingExperiment:
     ncpus: int | None = None
     layout: ComponentLayout | None = None
 
-    def __init__(self, path: Path, run_path: Path | None = None, layout: ComponentLayout | None = None) -> None:
+    def __init__(
+        self,
+        path: Path,
+        run_path: Path | None = None,
+        layout: ComponentLayout | None = None,
+        changes: dict | None = None,
+        labels: dict | None = None,
+        complete: bool = False,
+    ) -> None:
         self.path = path
         self.run_path = run_path
         self.layout = layout
+        self.layout_given = layout is not None
+        self.changes = changes
+        self.labels = dict(labels) if labels is not None else {}
+        _refuse_other_than_json("labels of an experiment", self.labels)
+        self.complete = complete
         if self.path.name.endswith(".tar.gz"):
             self.status = ProfilingExperimentStatus.ARCHIVED
+        elif complete:
+            self.status = ProfilingExperimentStatus.DONE
+
+    @classmethod
+    def from_record(cls, record: dict, path: Path, run_path: Path | None = None) -> "ProfilingExperiment":
+        """Returns the experiment a record describes.
+
+        Args:
+            record (dict): The record, as `record` returned it.
+            path (Path): Where the experiment is now: its directory, or its tarball.
+            run_path (Path | None): Where its runs are, if they are kept elsewhere.
+
+        Returns:
+            ProfilingExperiment: The experiment, with the layout, the changes, the labels and the CPU count the
+                record states.
+
+        Raises:
+            ValueError: If the layout the record states is not a layout.
+        """
+        layout = None if record["layout"] is None else _layout_from_record(record["layout"])
+        experiment = cls(
+            path, run_path, layout, changes=record["changes"], labels=record["labels"], complete=record["complete"]
+        )
+        experiment.ncpus = record["ncpus"]
+        return experiment
+
+    def record(self, work_dir: Path) -> dict:
+        """Returns this experiment's record: the version of its format, and what differs from one experiment of a
+        study to the next.
+
+        Args:
+            work_dir (Path): The working directory of the study, which the experiment's path is stated
+                relative to where it is inside it.
+
+        Returns:
+            dict: The record, as JSON values.
+        """
+        path = self.path.relative_to(work_dir) if self.path.is_relative_to(work_dir) else self.path
+        return {
+            "version": RECORD_VERSION,
+            "path": str(path),
+            "run_path": None if self.run_path is None else str(self.run_path),
+            "complete": self.complete,
+            # A layout read back from the configuration is left out: it says less than the one the experiment
+            # was given, and is not what identifies it.
+            "layout": _layout_record(self.layout) if self.layout is not None and self.layout_given else None,
+            "changes": self.changes,
+            "labels": self.labels,
+            "ncpus": self.ncpus,
+        }
 
     def __repr__(self) -> str:
         """Returns a string representation of the ProfilingExperiment.
@@ -316,6 +543,8 @@ class ProfilingExperiment:
         fields.append(f"status={self.status.name}")
         if self.ncpus is not None:
             fields.append(f"ncpus={self.ncpus}")
+        if self.labels:
+            fields.append(f"labels={self.labels}")
         return f"{type(self).__name__}({', '.join(fields)})"
 
     @contextmanager
@@ -378,10 +607,13 @@ class ProfilingExperiment:
         exclude_files: list[str] | None = None,
         follow_symlinks: bool = False,
         overwrite: bool = False,
+        record: dict | None = None,
     ):
         """Archives the experiment to the specified archive path.
 
         Only experiments with status DONE will be archived. No error will be raised if the experiment is not DONE.
+
+        A record is written first, as `RECORD_FILENAME`, so that it can be read back without extracting the rest.
 
         Symlinks to files and directories inside the experiment directory will be included as symlinks, pointing
         to their targets relative to where they are in the archive, so that they still point at them once the archive
@@ -396,6 +628,7 @@ class ProfilingExperiment:
             exclude_files (list[str] | None): File patterns to exclude when archiving.
             follow_symlinks (bool): Whether to follow symlinks when archiving. Defaults to False.
             overwrite (bool): Whether to overwrite existing archives. Defaults to False.
+            record (dict | None): The experiment's record, to keep in the archive. None (the default) keeps none.
 
         Raises:
             FileExistsError: If the archive destination already exists and overwrite is False.
@@ -421,6 +654,12 @@ class ProfilingExperiment:
         )
 
         with tarfile.open(archive_file, mode) as tar:
+            if record is not None:
+                data = json.dumps(record, indent=2).encode()
+                info = tarfile.TarInfo(RECORD_FILENAME)
+                info.size = len(data)
+                info.mtime = time.time()
+                tar.addfile(info, io.BytesIO(data))
             for path, prefix in paths_to_walk:
                 # A directory reached through a symlink, as a Cylc run directory often is, is archived as what it
                 # points to, rather than as the one link.

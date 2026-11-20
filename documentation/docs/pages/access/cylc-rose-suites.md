@@ -114,6 +114,11 @@ The status of each suite is read from its run directory. A suite is DONE if all 
 one of them failed, RUNNING if some tasks are still going, and NEW if it has not run. Note that if you register a
 suite without its run directory, it stays NEW, because the manager has nowhere to read its status from.
 
+The experiment has the name of the suite, which can be anything except a name of the form `exp-<digits>`. The
+manager writes a record into the directory of the suite, with the run directory you gave. You therefore register
+each suite only once: a manager created in a later session finds the suites again from their records.
+[Managing experiments](../user-guide/managing-experiments.md#what-the-manager-keeps-on-disk) describes the record.
+
 ## Running the suites
 
 [`run_experiments`][access.profiling.cylc_manager.CylcRoseManager.run_experiments] runs every NEW suite with

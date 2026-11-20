@@ -56,8 +56,9 @@ src/access/profiling/
   application.py        Application (the ABC), LogSpec, log_at
   control.py            ControlSource, GitControlSource, ExistingDirectoryControlSource: where a control is
   experiment.py         ProfilingLog (one log -> one xr.Dataset), ExperimentPlan, ProfilingExperimentStatus,
-                        ProfilingExperiment (archived to and extracted from a tarball)
-  manager.py            ProfilingManager[AppT]: generation, statuses, parsing, selection and plotting
+                        ProfilingExperiment (its record, and its archive to and from a tarball)
+  manager.py            ProfilingManager[AppT]: generation, records and the study file, statuses, parsing,
+                        selection and plotting
   parser.py             ProfilingParser (the ABC), flatten_hierarchical, aggregate_pe_data
   metrics.py            ProfilingMetric and the predefined metrics (tmin, tmax, tavg, count, ...)
   plotting_utils.py     RegionGroup, plot_bar_metrics
@@ -149,29 +150,55 @@ blocks, one page per concept. A new module needs a block on the right page and a
 
 ### Experiments
 
-- **The experiment name is the key across sessions.** It is the key of `experiments`, the experiment's branch and
-  directory under `work_dir`, Payu's `experiment`, and the name of its tarball. `Application.experiment_name` must
-  therefore be distinct for every layout and the same every time for the same one, and changing how a model names
-  its layouts orphans every experiment already on disk.
-- **Each Payu study runs in a laboratory of its own**, `<lab_dir>/<model type>-<8 hex digits of the working
-  directory>` (`_study_laboratory`). `_create_experiments` adds it, absolute, to the control options as
-  `config.yaml`'s `laboratory`, which every experiment branches from and every Payu step reads, and refuses a
-  `laboratory` control option. Payu's default laboratory is shared by every study of a model, and layout names
-  repeat between studies, so sharing one makes the runner skip another study's layouts and `payu sweep --hard`
-  delete its runs. The generator's and the runner's `lab_path` reaches Payu only while it checks a branch out, and
-  the runner's `payu run` passes no laboratory, so `PAYU_LAB_PATH` never reaches the PBS job: neither can replace
-  the key. A set `PAYU_LAB_PATH` would override it on the login node only, so `_refuse_payu_lab_path` stops
-  generating, running and deleting while it is set. `lab_dir` is needed to generate, not to read, archive or delete.
-- **No manager state is stored.** A new manager finds the tarballs in `archive_dir` again, as ARCHIVED; every other
-  status is read afresh from what the engine recorded, by `update_statuses`, which archiving, parsing and running
-  all call first. ARCHIVED is terminal, since reading a status out of a tarball would mean extracting it.
+- **A name carries nothing, and nothing is read out of one.** A generated experiment is numbered, `exp-0001`
+  onwards (`_NUMBERED_NAME`), and an added one keeps the name it is given, which may not be of that form. The name
+  is still the key of `experiments`, the experiment's branch and directory under `work_dir`, Payu's `experiment`,
+  and the name of its tarball.
+- **What an experiment is, is in its record**, `<work_dir>/<name>/access-profiling.json` (`RECORD_FILENAME`), written
+  when it is created or added and put first in its archive, so that it is read without extracting the rest. Beside
+  the version of its format, it holds only what differs between experiments: `path`, `run_path`, `complete`,
+  `layout`, `changes`, `labels` and `ncpus`. What is true of the whole study goes in the study file instead
+  (`STUDY_FILENAME`): the highest number given, and one history entry per call that created, added or deleted
+  experiments. Don't add to the record what is the same for every experiment of a call. Labels are JSON values:
+  `ProfilingExperiment` refuses those a record would not give back as they were.
+- **Each of the two files states the version of its own format** (`RECORD_VERSION`, `STUDY_VERSION`), and
+  `read_versioned` refuses a file that states another one, or none, naming the file. The record states its own
+  because it is written once and read from an archive long after, by whatever version of the package is installed
+  then, while the study file is rewritten at every call and cannot speak for it. A change to what either file holds
+  is a new version, and a reader for the old one.
+- **An experiment is identified by its record, not its name**: the layout it was given, compared by
+  `Application.layout_key`, and its `changes`. `layout_key` must therefore be distinct for every layout and the same
+  every time for the same one, and changing how a model keys its layouts means generation no longer recognises
+  the experiments on disk. A layout read back from an experiment's files (`layout_given` False) identifies
+  nothing and is never recorded, and neither does an experiment whose changes are unknown (`None`). A layout the
+  application refuses, as one generated with another application is, makes `ProfilingManager.layout_key` raise with
+  the experiment's name, and so does generation. `__repr__` says so instead, since it never raises.
+- **A number is never given twice**, not even a deleted experiment's: Payu keeps the branch, and the generator would
+  apply a new experiment's changes on top of it. The numbers of a call are written to the study file before the
+  engine is called, and stay taken if it fails. A call the engine refuses beforehand takes none: `_refuse_plans` is
+  called before anything is written, so what an engine can check without writing is checked there, not in
+  `_create_experiments`.
+- **Each Payu study runs in a laboratory of its own**, `<lab_dir>/<model type>-<8 hex digits of the working directory>`
+  (`_study_laboratory`). `_create_experiments` adds it, absolute, to the control options as `config.yaml`'s
+  `laboratory`, which every experiment branches from and every Payu step reads. `_refuse_plans` refuses a `laboratory`
+  control option. Payu's default laboratory is shared by every study of a model, and every study numbers its experiments
+  from `exp-0001`, so sharing one makes the runner skip the experiments another study ran and `payu sweep --hard` delete
+  its runs. The generator's and the runner's `lab_path` reaches Payu only while it checks a branch out, and the runner's
+  `payu run` passes no laboratory, so `PAYU_LAB_PATH` never reaches the PBS job: neither can replace the key. A set
+  `PAYU_LAB_PATH` would override it on the login node only, so `_refuse_payu_lab_path` stops generating, running and
+  deleting while it is set. `lab_dir` is needed to generate, not to read, archive or delete.
+- **No status is stored.** A new manager finds the experiments of `work_dir` again from their records, as NEW, or
+  DONE where the record says `complete`, and the tarballs in `archive_dir`, as ARCHIVED, an archive replacing the
+  experiment found in `work_dir`. Every other status is read afresh from what the engine recorded, by
+  `update_statuses`, which archiving, parsing and running all call first. ARCHIVED is terminal, since reading a
+  status out of a tarball would mean extracting it. The records and the study file are all that is stored.
 - **`parse_status` never raises.** When it cannot tell, it logs why at DEBUG and returns `None`, which keeps the
   status the experiment has.
 - **Generation registers nothing unless all of it succeeds.** `generate_scaling_experiments` plans without touching
-  the disk, then calls `_create_experiments` once with every plan. If that raises, no new experiment is registered,
-  because one registered with nothing on disk would be run and never generated again. `_create_experiments` returns
-  only the new experiments, not those being regenerated (`ExperimentPlan.regenerating`), which are held already. A
-  plan's changes are computed afresh on every call, never replayed.
+  the disk, then calls `_create_experiments` once with every plan. If that raises, no new experiment is registered and
+  no record written, because one registered with nothing on disk would be run and never generated again.
+  `_create_experiments` returns only the new experiments, not those being regenerated (`ExperimentPlan.regenerating`),
+  which are held already. A plan's changes are computed afresh on every call, never replayed.
 - **Regenerating leaves a FAILED experiment FAILED**: the failure is the run's record, and
   `run_experiments(retry_failed=True)` is what clears it.
 - **An archive holds only what can be extracted again**, since `directory()` extracts it with `filter="data"`,
@@ -200,7 +227,7 @@ blocks, one page per concept. A new module needs a block on the right page and a
   decomposes, writes and logs, once, in `models/components.py`, and a configuration arranges components, deriving
   them from its fields (`ESM16Configuration.submodels`). `SubmodelsConfiguration` writes and reads the layout of
   every model Payu couples as submodels, so a model adds no code for that. A component's `name` and `token` are
-  user-facing: the first keys allocation strategies, the second appears in every experiment name.
+  user-facing: the first keys allocation strategies, the second appears in every layout key.
 - **Presets are module-level values with a docstring on the line after**, which is what puts them in the API
   reference. A model ships a preset per distinct layout, and a control source per configuration, beside the presets
   rather than on them: at the configuration's latest release tag, or at its `dev-*` branch while it has no release,
@@ -208,9 +235,9 @@ blocks, one page per concept. A new module needs a block on the right page and a
 - **A model's component tree holds requirements only**, what is true of every layout of it; a study's preferences
   belong in its allocation strategy (the docstring of `SubmodelsConfiguration.parallel_component`). How many cores a
   layout may leave idle is one of them, so no tree limits it (the docstring of `PayuConfiguration._root`).
-- **The OM3 presets choose CICE6's blocks from the rank count** (`OM3_CICE6_BLOCKS_PER_RANK_RANGE`), as the
-  user's studies do, with the distribution and the processor shape their control states; a preset is named as
-  those studies archived their experiments (`MC-100km`, `MCW-100km`), so changing a name orphans an archive.
+- **The OM3 presets choose CICE6's blocks from the rank count** (`OM3_CICE6_BLOCKS_PER_RANK_RANGE`), as the user's
+  studies do, with the distribution and the processor shape their control states. A preset's name is part of every
+  layout key (`MC-100km`, `MCW-100km`), so changing it means a study no longer recognises its experiments.
 - **`CICEPartitioning` must stay hashable**: `_choose_blocks` is cached on it with `functools.cache`.
 - **`config_changes` returns what experiment-generator merges into the control, in its format**: a list is wrapped
   in another list, and `"PRESERVE"` holds a position, because the generator merges lists by position and truncates
@@ -268,7 +295,8 @@ same second leaves the mutant's `.pyc` loaded.
 - **Fake the engine, keep the rest real.** Faked: experiment-generator and experiment-runner (their classes in
   `payu_manager`), `subprocess.run`, and the plotting functions `manager` calls. Real: the layout search, files
   under `tmp_path`, including Payu's job files (`write_job_file` and `pbs_job_info` in `test_payu_manager.py`), Cylc
-  suite databases written with `sqlite3`, and tarballs.
+  suite databases written with `sqlite3`, and tarballs. A manager that generates, adds or deletes experiments
+  writes records and the study file, so its working directory is under `tmp_path` too.
 - A stand-in is `mock.Mock(spec=...)`, as `fake_parser` in `conftest.py` is. `MagicMock(autospec=True)` only sets
   an attribute named `autospec`.
 - **Sample logs are inline**, as triple-quoted strings in module-scoped fixtures; there is no `tests/data/`. Module
@@ -370,7 +398,8 @@ top as its reader would before calling a change done.
 - What a subclass must provide is declared abstract in its base class, `_`-prefixed members included
   (`_create_experiments`, `_delete_experiments`), except `_metrics`, which a parser sets as a class attribute or in
   `__init__`. `_`-prefixed names are left out of the API reference, so the contracts table of the developer guide
-  lists them all.
+  lists them all. A hook whose default suits an engine with nothing to add is not abstract (`_engine_record`,
+  `_refuse_plans`).
 - `documentation/` comes from the ACCESS-NRI template,
   [documentation-infra](https://github.com/ACCESS-NRI/documentation-infra), and is kept so that it can be updated
   from there: `hooks/`, `overrides/`, `docs/css/`, `docs/js/`, `docs/fontello/`, `docs/assets/logos/`,

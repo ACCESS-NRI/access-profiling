@@ -7,13 +7,25 @@
 and parses, selects and plots their profiling data. What depends on the engine - creating, running and deleting
 experiments, and reading what the engine and the scheduler recorded - is left to a subclass for each engine,
 `PayuManager` or `CylcRoseManager`.
+
+The experiments a manager generates are numbered, `exp-0001` onwards, and a name says nothing about its experiment:
+an experiment can also be added under any other name, so nothing is ever read out of one. What an experiment is, is
+written in its record, a file in its directory (see `access.profiling.experiment`). What is true of the whole study
+is written in the study file, `STUDY_FILENAME` in the working directory: the highest number given so far, and one
+entry for each call that created, added or deleted experiments. A manager stores nothing else, and never a status.
+Each of the two files states the version of its own format, and a file of another version is refused when it is read.
 """
 
 import itertools
+import json
 import logging
+import re
+import shutil
 import textwrap
 from abc import ABC, abstractmethod
 from collections.abc import Callable
+from datetime import UTC, datetime
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Generic, TypeVar
 
@@ -26,10 +38,14 @@ from matplotlib.figure import Figure
 from access.profiling.application import Application
 from access.profiling.control import ControlSource
 from access.profiling.experiment import (
+    RECORD_FILENAME,
+    RECORD_VERSION,
     ExperimentPlan,
     ProfilingExperiment,
     ProfilingExperimentStatus,
     ProfilingLog,
+    read_archived_record,
+    read_versioned,
 )
 from access.profiling.metrics import ProfilingMetric
 from access.profiling.plotting_utils import RegionGroup, plot_bar_metrics
@@ -45,10 +61,28 @@ drives a PayuConfiguration, a Cylc Rose suite a RoseSuiteConfiguration - so the 
 and should not have to rediscover it.
 """
 
+STUDY_FILENAME: str = "access-profiling-study.json"
+"""The name of the study file, in the working directory and, once experiments are archived, in the archive directory."""
+
+STUDY_VERSION: int = 1
+"""The version of the format of the study file, which the file states."""
+
+# The names given to generated experiments. Kept apart from the names experiments are added under, so that a
+# number is only ever one this manager gave.
+_NUMBERED_NAME = re.compile(r"exp-(\d+)")
+
 _RUN_DIM_ERROR = (
     "Profiling data still has a 'run' dimension. Use select_best_run() to keep the best run of each experiment, "
     "or aggregate_runs() to reduce over runs."
 )
+
+
+def _package_version() -> str:
+    """Returns the version of this package, or "unknown" where it is run without being installed."""
+    try:
+        return version("access-profiling")
+    except PackageNotFoundError:
+        return "unknown"
 
 
 def find_component(layout: ComponentLayout, name: str) -> ComponentLayout | None:
@@ -115,7 +149,8 @@ class ProfilingManager(ABC, Generic[AppT]):
     """Abstract base class to handle profiling data and workflows.
 
     This high-level class generates the experiments of a profiling study, one for each layout of every size the
-    study asks for, or takes in experiments that already exist. It keeps track of the status they reach, archives
+    study asks for, or takes in experiments that already exist. It finds the experiments of its working directory
+    and of its archive directory again when it is built. It keeps track of the status they reach, archives
     them, and parses, selects and plots their profiling data: the best performing experiment for each number of
     CPUs, the best of several runs, how each region scales, and how experiments compare region by region. What
     depends on the workflow engine - creating, running and deleting the experiments, and reading what the engine
@@ -139,11 +174,16 @@ class ProfilingManager(ABC, Generic[AppT]):
             None (the default) is enough to read and plot experiments that already exist, and is rejected by
             generate_scaling_experiments, which has nothing to perturb without it.
 
+    Raises:
+        ValueError: If the record of an experiment, in the working directory or in an archive, is not JSON, or
+            states no format version or another one than this version of the package reads.
+
     Attributes:
         work_dir (Path): Working directory where profiling experiments will be generated and run.
         archive_dir (Path): Directory where completed experiments will be archived.
         experiments (dict[str, ProfilingExperiment]): The experiments this manager holds, keyed by name: those
-            found in the archive directory when it was built, and those it has generated or been given since.
+            found in the working directory and in the archive directory when it was built, and those it has
+            generated or been given since.
         data (dict[str, dict[str, xr.Dataset]]): The profiling data `parse_profiling_data` parsed, keyed by
             experiment and then by log name. A dataset has a 'run' dimension where several runs of the
             experiment produced its log, until `select_best_run` or `aggregate_runs` reduces it.
@@ -169,13 +209,32 @@ class ProfilingManager(ABC, Generic[AppT]):
         self.experiments = {}
         self.data = {}
 
-        # Discover experiments in the archive directory
+        # The experiments of the working directory, each found again from the record in its directory.
+        for record_file in sorted(self.work_dir.glob(f"*/{RECORD_FILENAME}")):
+            name = record_file.parent.name
+            logger.info(f"Found experiment: {name}")
+            record = read_versioned(record_file.read_text(), record_file, "record", RECORD_VERSION)
+            path = Path(record["path"])
+            self.experiments[name] = ProfilingExperiment.from_record(
+                record,
+                path if path.is_absolute() else self.work_dir / path,
+                None if record["run_path"] is None else Path(record["run_path"]),
+            )
+
+        # Discover experiments in the archive directory. An archive is what an experiment is read from once it
+        # has one, so it replaces the experiment found in the working directory. The archives are taken in the order
+        # of their names, as the records are, so that the order of the experiments is not the file system's.
         if self.archive_dir.is_dir():
-            for branch_path in self.archive_dir.glob("*.tar.gz"):
+            for branch_path in sorted(self.archive_dir.glob("*.tar.gz")):
                 if branch_path.is_file():
                     branch_name = branch_path.name[: -len(".tar.gz")]
                     logger.info(f"Found archived experiment: {branch_name}")
-                    self.experiments[branch_name] = ProfilingExperiment(path=branch_path)
+                    record = read_archived_record(branch_path)
+                    self.experiments[branch_name] = (
+                        ProfilingExperiment(path=branch_path)
+                        if record is None
+                        else ProfilingExperiment.from_record(record, branch_path)
+                    )
 
     def __repr__(self) -> str:
         """Returns a string representation of the ProfilingManager."""
@@ -190,6 +249,15 @@ class ProfilingManager(ABC, Generic[AppT]):
         summary += indent + "Experiments:\n"
         for name, exp in self.experiments.items():
             summary += indent * 2 + f"'{name}': {exp!r}\n"
+            # The name says nothing about the experiment, so the layout it was given is said here. Printing a
+            # manager is how the experiments it found are looked at, so a layout of another application is said
+            # to be one, and nothing is raised.
+            try:
+                key = self.layout_key(name)
+            except ValueError:
+                key = f"not a layout of {self.application.name}"
+            if key is not None:
+                summary += indent * 3 + f"Layout: {key}\n"
         summary += indent + "Data:\n"
         if self.data == {}:
             summary += indent * 2 + "No parsed data.\n"
@@ -230,6 +298,175 @@ class ProfilingManager(ABC, Generic[AppT]):
             value (ControlSource | None): The control.
         """
         self._control = value
+
+    def _read_study(self) -> dict:
+        """Returns what the study file holds.
+
+        The file is read from the working directory, and failing that from the archive directory, where
+        archive_experiments copies it, so that a study whose working directory is gone still has its history.
+
+        Returns:
+            dict: The study: the version of the format, the highest number given so far and the history. A study
+                with no file yet starts at zero, with an empty history.
+
+        Raises:
+            ValueError: If the file is not JSON, or states no format version or another one than `STUDY_VERSION`.
+        """
+        for directory in (self.work_dir, self.archive_dir):
+            study_file = directory / STUDY_FILENAME
+            if study_file.is_file():
+                return read_versioned(study_file.read_text(), study_file, "study file", STUDY_VERSION)
+        return {"version": STUDY_VERSION, "last_number": 0, "history": []}
+
+    def _write_study(self, study: dict) -> None:
+        """Writes the study file into the working directory.
+
+        Args:
+            study (dict): The study, as _read_study returned it.
+        """
+        self.work_dir.mkdir(parents=True, exist_ok=True)
+        (self.work_dir / STUDY_FILENAME).write_text(json.dumps(study, indent=2, default=str) + "\n")
+
+    def _engine_record(self, **runner_options) -> dict:
+        """Returns what the workflow engine adds to the history entry of a call that generated experiments.
+
+        Args:
+            **runner_options: The options the call was given for the engine.
+
+        Returns:
+            dict: The options themselves, which are part of what every experiment of the call is. A subclass
+                adds what else only its engine can say.
+        """
+        return dict(runner_options)
+
+    def _log(self, call: str, experiments: list[str], generated: bool = False, **runner_options) -> None:
+        """Adds a call to the history the study file keeps.
+
+        What is true of every experiment of a call is written once here rather than in each experiment's
+        record: when it was, what made it, and for a call that generated experiments, what they perturb.
+
+        Args:
+            call (str): The method called.
+            experiments (list[str]): The experiments it created, added or deleted.
+            generated (bool): Whether the call generated the experiments, from this manager's control. False (the
+                default) records no control and nothing of the engine, which is what an experiment added or
+                deleted has to say of them.
+            **runner_options: The options the call was given for the engine.
+        """
+        study = self._read_study()
+        study["history"].append(
+            {
+                "when": datetime.now(UTC).isoformat(timespec="seconds"),
+                "call": call,
+                "access_profiling_version": _package_version(),
+                "manager": type(self).__name__,
+                "application": {"class": type(self.application).__name__, "name": self.application.name},
+                "control": self.control.provenance() if generated and self.control is not None else None,
+                "engine": self._engine_record(**runner_options) if generated else {},
+                "experiments": experiments,
+            }
+        )
+        self._write_study(study)
+
+    def _write_record(self, name: str) -> None:
+        """Writes an experiment's record into its directory under the working directory, creating it if need be.
+
+        Args:
+            name (str): Name of the experiment.
+        """
+        directory = self.work_dir / name
+        directory.mkdir(parents=True, exist_ok=True)
+        record = self.experiments[name].record(self.work_dir)
+        (directory / RECORD_FILENAME).write_text(json.dumps(record, indent=2) + "\n")
+
+    def _remove_record(self, name: str) -> None:
+        """Removes an experiment's record, and its directory if the record was all it held.
+
+        Args:
+            name (str): Name of the experiment.
+        """
+        directory = self.work_dir / name
+        (directory / RECORD_FILENAME).unlink(missing_ok=True)
+        if directory.is_dir() and not any(directory.iterdir()):
+            directory.rmdir()
+
+    @staticmethod
+    def _refuse_numbered_name(name: str) -> None:
+        """Refuses a name of the form generated experiments are given, for an experiment being added.
+
+        Args:
+            name (str): The name the experiment is being added under.
+
+        Raises:
+            ValueError: If the name is `exp-<digits>`.
+        """
+        if _NUMBERED_NAME.fullmatch(name) is not None:
+            raise ValueError(
+                f"Experiment name '{name}' is of the form this manager gives the experiments it generates. Add "
+                "the experiment under another name."
+            )
+
+    def _last_number(self) -> int:
+        """Returns the highest number given to an experiment of this study so far.
+
+        A number is never given twice, not even that of a deleted experiment: an engine may keep something
+        under the name, as Payu keeps the branch, and a new experiment would be created on top of it. So the
+        study file counts, and the names held are counted too, for a study whose file is gone.
+
+        Returns:
+            int: The number, or 0 where none has been given.
+        """
+        numbers = [self._read_study()["last_number"]]
+        for name in self.experiments:
+            match = _NUMBERED_NAME.fullmatch(name)
+            if match is not None:
+                numbers.append(int(match.group(1)))
+        return max(numbers)
+
+    def _held_identities(self) -> dict[tuple[str | None, str], str]:
+        """Returns the experiments whose record says what they are, keyed by what identifies them.
+
+        An experiment is identified by the layout it was given and by what the study changed beyond it. One
+        whose changes are unknown, as an added one's are, is identified by nothing and is left out.
+
+        Returns:
+            dict[tuple[str | None, str], str]: The name of each such experiment, keyed by the key of its layout,
+                or None if it was given none, and by its changes, written out with their keys in order.
+        """
+        held = {}
+        for name, experiment in self.experiments.items():
+            if experiment.changes is None:
+                continue
+            held[(self.layout_key(name), json.dumps(experiment.changes, sort_keys=True))] = name
+        return held
+
+    def layout_key(self, name: str) -> str | None:
+        """Returns the key of the layout an experiment was given, which says what the experiment's name does not.
+
+        Args:
+            name (str): Name of the experiment.
+
+        Returns:
+            str | None: The key, as the application states it, or None for an experiment that was given no
+                layout: one added by hand, or archived before experiments had records. A layout read back from
+                such an experiment's configuration has no key here, since it is not what identifies it.
+
+        Raises:
+            ValueError: If the layout is not a layout of this manager's application, as the layout of an
+                experiment generated with another application is not.
+        """
+        experiment = self.experiments[name]
+        if experiment.layout is None or not experiment.layout_given:
+            return None
+        try:
+            return self.application.layout_key(experiment.layout)
+        except ValueError as error:
+            raise ValueError(
+                f"Experiment '{name}' was given a layout that is not a layout of '{self.application.name}', the "
+                f"application of this manager. {error} A study has one application: build the manager with the "
+                "application its experiments were generated with, or give it working and archive directories of "
+                "its own."
+            ) from error
 
     @abstractmethod
     def profiling_logs(self, path: Path, run_path: Path | None = None) -> dict[str, dict[int, ProfilingLog]]:
@@ -387,10 +624,12 @@ class ProfilingManager(ABC, Generic[AppT]):
             list[ExperimentPlan]: What to create, in the order the sizes were asked for.
         """
         plans: list[ExperimentPlan] = []
-        # What this call has already covered. self.experiments on its own does not say, the registration
-        # being deferred until the engine has returned, and the same layout is regularly valid at two
-        # different node counts.
+        # The layouts this call has already covered. self.experiments on its own does not say, the
+        # registration being deferred until the engine has returned, and the same layout is regularly valid at
+        # two different node counts.
         planned: set[str] = set()
+        held = self._held_identities()
+        number = self._last_number()
         for num_nodes in num_nodes_list:
             total_cores = int(num_nodes * cores_per_node)
             layouts = self.select_layouts(
@@ -409,20 +648,26 @@ class ProfilingManager(ABC, Generic[AppT]):
             walltime_hrs = walltime(num_nodes) if callable(walltime) else walltime
 
             for layout in layouts:
-                name = self.application.experiment_name(layout)
-                if name in planned:
+                key = self.application.layout_key(layout)
+                if key in planned:
                     continue
 
-                existing = self.experiments.get(name)
+                # A scaling study changes nothing beyond the layout, so the layout is what identifies each of
+                # its experiments.
+                name = held.get((key, "{}"))
+                existing = self.experiments[name] if name is not None else None
                 if existing is not None and not (
                     regenerate_failed and existing.status == ProfilingExperimentStatus.FAILED
                 ):
-                    logger.info(f"Experiment {name} already exists. Skipping addition.")
+                    logger.info(f"Experiment {name} already exists for layout {key}. Skipping addition.")
                     continue
                 if existing is not None:
                     logger.info(f"Regenerating experiment {name}, whose run failed.")
+                else:
+                    number += 1
+                    name = f"exp-{number:04d}"
 
-                planned.add(name)
+                planned.add(key)
                 plans.append(
                     ExperimentPlan(
                         name=name,
@@ -453,6 +698,10 @@ class ProfilingManager(ABC, Generic[AppT]):
         planned earlier in the same call, are skipped, so the same layout found for two different numbers of
         nodes only generates one experiment.
 
+        The experiments are numbered, `exp-0001` onwards, in the order they are created. Which experiment
+        already runs a layout is told from the experiments' records, not from their names, so calling this
+        method again in a later session, on the same working directory, generates nothing twice.
+
         That happens whenever a layout fits both budgets, which is a matter of how many idle cores the
         allocation strategy tolerates: a layout spending 508 cores is valid on 520 and on 546, leaving 2.3% and
         7.0% of them idle. It is rarer for a strategy that gives every component a lower bound in fractions of
@@ -473,8 +722,10 @@ class ProfilingManager(ABC, Generic[AppT]):
         Experiments become known to this manager only once the engine has created them, since an experiment
         it holds is one that can be run, archived and deleted. A generation that fails therefore registers
         nothing, not even what the engine managed to create before failing, and it is the whole call that is
-        abandoned: correcting the cause and calling this method again generates the rest. A regenerated
-        experiment is already registered and so survives such a failure, whether or not the engine reached it.
+        abandoned: correcting the cause and calling this method again generates the rest, under the numbers
+        that follow, since the ones the failed call took are not given again. A call the engine refuses before
+        it creates anything, as `_refuse_plans` lets it, takes no numbers. A regenerated experiment is
+        already registered and so survives such a failure, whether or not the engine reached it.
 
         Deciding what to generate is the same question for every workflow engine and is answered here;
         creating it is each engine's own and is left to _create_experiments.
@@ -523,6 +774,18 @@ class ProfilingManager(ABC, Generic[AppT]):
             logger.warning("No new experiments to generate. Will skip generation.")
             return
 
+        # What the engine can tell it could not create is refused first: nothing is written yet, so a call
+        # refused here takes no number.
+        self._refuse_plans(plans, **runner_options)
+
+        # The numbers are taken before the engine is called and stay taken if it fails, since how far it got is
+        # unknown: an experiment it half created must not be created over.
+        new_numbers = [int(plan.name.removeprefix("exp-")) for plan in plans if not plan.regenerating]
+        if new_numbers:
+            study = self._read_study()
+            study["last_number"] = max(new_numbers)
+            self._write_study(study)
+
         try:
             created = self._create_experiments(plans, **runner_options)
         except Exception:
@@ -533,8 +796,8 @@ class ProfilingManager(ABC, Generic[AppT]):
             new_names = sorted(plan.name for plan in plans if not plan.regenerating)
             logger.warning(
                 f"Experiment generation failed, so none of {new_names} were added to this manager. Some may "
-                "already exist in the working directory; correcting the cause and calling this method again "
-                "generates the rest and leaves those alone."
+                "already exist in the working directory, so their numbers are not given again: correcting the "
+                "cause and calling this method again generates the experiments under the numbers that follow."
             )
             regenerating = sorted(plan.name for plan in plans if plan.regenerating)
             if regenerating:
@@ -545,14 +808,35 @@ class ProfilingManager(ABC, Generic[AppT]):
                 )
             raise
 
-        self.experiments.update(created)
+        for name, experiment in created.items():
+            experiment.changes = {}
+            self.experiments[name] = experiment
+            self._write_record(name)
+        self._log("generate_scaling_experiments", [plan.name for plan in plans], generated=True, **runner_options)
+
+    def _refuse_plans(self, plans: list[ExperimentPlan], **runner_options) -> None:
+        """Refuses the planned experiments that this manager's workflow engine can tell it could not create.
+
+        Called with what `_create_experiments` is about to be called with, before the study takes a number for any
+        of the plans. A call refused here leaves the study as it was, whereas one that fails in
+        `_create_experiments` keeps its numbers, how far the engine got being unknown. So a subclass checks here
+        whatever it can check without writing anything. Nothing is refused by default.
+
+        Args:
+            plans (list[ExperimentPlan]): What is about to be created, at least one plan.
+            **runner_options: Whatever the generating method was passed for this engine.
+
+        Raises:
+            Exception: Whatever the subclass refuses the plans with.
+        """
 
     @abstractmethod
     def _create_experiments(self, plans: list[ExperimentPlan], **runner_options) -> dict[str, ProfilingExperiment]:
         """Creates the planned experiments with this manager's workflow engine.
 
         Called once with everything generate_scaling_experiments decided to create, so that an engine which
-        sets up many experiments in one invocation is invoked once.
+        sets up many experiments in one invocation is invoked once, and only with what `_refuse_plans` let
+        through.
         Raising abandons the whole call and registers nothing.
 
         Args:
@@ -605,47 +889,71 @@ class ProfilingManager(ABC, Generic[AppT]):
 
         self.archive_dir.mkdir(parents=True, exist_ok=True)
         for branch, exp in self.experiments.items():
+            if exp.status == ProfilingExperimentStatus.DONE:
+                # The run is over, so the count can no longer change. Kept in the archive's record, it is not
+                # read out of the tarball again.
+                self._ncpus(branch)
             exp.archive(
                 self.archive_dir / branch,
                 exclude_dirs=exclude_dirs,
                 exclude_files=exclude_files,
                 follow_symlinks=follow_symlinks,
                 overwrite=overwrite,
+                record=exp.record(self.work_dir),
             )
 
-    def add_experiment_from_directory(self, name: str, path: Path) -> None:
+        # The study goes with its archives, so that it can still be told once the working directory is gone.
+        study_file = self.work_dir / STUDY_FILENAME
+        if study_file.is_file():
+            shutil.copyfile(study_file, self.archive_dir / STUDY_FILENAME)
+
+    def add_experiment_from_directory(self, name: str, path: Path, labels: dict | None = None) -> None:
         """Adds an existing experiment from the specified directory.
 
         Note that the directory must already exist on disk and be inside the working directory. Also, the experiment
         will be marked as DONE, so any runs associated with the experiment must already be completed.
 
+        The experiment keeps the name it is given, and gets a record in `<work_dir>/<name>`, from which a manager
+        built later finds it again.
+
         Args:
-            name (str): Name of the experiment.
+            name (str): Name of the experiment. Any name but one of the form `exp-<digits>`, which is what
+                generated experiments are named.
             path (Path): Path to the experiment directory.
+            labels (dict | None): The study's own keys and values for this experiment, as JSON values. None (the
+                default) gives it none.
 
         Raises:
-            ValueError: If the specified path does not exist, is not a directory, or is not inside the working
-                directory.
+            ValueError: If the name is of the form generated experiments are given, if the specified path does
+                not exist, is not a directory, or is not inside the working directory, or if the labels are not
+                JSON values. Nothing is added when it is raised.
         """
+        self._refuse_numbered_name(name)
         if not path.is_absolute():
             path = self.work_dir / path
         if not path.is_dir():
             raise ValueError(f"Experiment path '{path}' does not exist or is not a directory.")
         if not path.resolve().is_relative_to(self.work_dir.resolve()):
             raise ValueError(f"Experiment path '{path}' is not inside the working directory '{self.work_dir}'.")
-        self.experiments[name] = ProfilingExperiment(path=path)
-        self.experiments[name].status = ProfilingExperimentStatus.DONE
+        self.experiments[name] = ProfilingExperiment(path=path, labels=labels, complete=True)
+        self._write_record(name)
+        self._log("add_experiment_from_directory", [name])
 
     def delete_experiment(self, name: str) -> None:
         """Deletes the specified experiment.
 
-        Note that this only removes the experiment from the manager's tracking; it does not delete any files on disk.
+        Note that this only removes the experiment from the manager's tracking, together with its record in the
+        working directory, so that a manager built later does not find it there again. It does not delete any of
+        the experiment's own files, nor its archive: a manager built later still finds an experiment that was
+        archived, from its tarball in the archive directory.
 
         Args:
             name (str): Name of the experiment to delete.
         """
         if name in self.experiments:
             del self.experiments[name]
+            self._remove_record(name)
+            self._log("delete_experiment", [name])
         else:
             logger.warning(f"Experiment '{name}' not found; cannot delete.")
 
@@ -709,6 +1017,8 @@ class ProfilingManager(ABC, Generic[AppT]):
 
         for name in names_to_delete:
             del self.experiments[name]
+            self._remove_record(name)
+        self._log("delete_experiments", names_to_delete)
 
     def parse_profiling_data(self):
         """Parses profiling data from the experiments.
@@ -772,8 +1082,8 @@ class ProfilingManager(ABC, Generic[AppT]):
 
         The count is kept on the experiment itself, so it lasts exactly as long as the experiment does: an
         experiment added under a name used by a deleted one is parsed afresh rather than inheriting what the
-        old one used, and an archived experiment keeps the count parsed before it was archived instead of
-        having its tarball extracted again to read the same answer back.
+        old one used. An archived experiment has the count its record states, which archive_experiments put
+        there, instead of having its tarball extracted to read the same answer back.
 
         Args:
             exp_name (str): Name of the experiment.
@@ -790,10 +1100,11 @@ class ProfilingManager(ABC, Generic[AppT]):
     def _layout(self, exp_name: str) -> ComponentLayout | None:
         """Returns the layout an experiment runs, reading it back at most once.
 
-        An experiment generated from a layout search already carries the layout it was generated from, and
-        is answered from that: it is the whole of it, and nothing on disk says more. Only an experiment
-        this manager did not generate is read back from its configuration, and what that gives is kept on
-        the experiment afterwards, for the same reasons the CPU count is.
+        An experiment generated from a layout search already carries the layout it was generated from, in
+        this session and, through its record, in every later one. It is answered from that: it is the whole of
+        it, and nothing else on disk says more. Only an experiment that was given no layout is read back from
+        its configuration, and what that gives is kept on the experiment afterwards, for the same reasons the
+        CPU count is.
 
         Args:
             exp_name (str): Name of the experiment.

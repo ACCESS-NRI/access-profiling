@@ -24,10 +24,10 @@ regions](analysing-data.md#choosing-the-regions). The figure is drawn from synth
     )
     layouts = manager.select_layouts(5 * 104, allocations=released)
     for layout in layouts:
-        print(manager.application.experiment_name(layout))
+        print(manager.application.layout_key(layout))
     ```
 
-    This prints the names of the layouts:
+    This prints the keys of the layouts:
 
     ```text
     esm1p6-layout_piControl_atm_16x16_mom_10x24_ice_12
@@ -60,7 +60,7 @@ regions](analysing-data.md#choosing-the-regions). The figure is drawn from synth
     ```python
     layouts = manager.select_layouts(26 * 104, allocations=allocations(26))
     for layout in layouts:
-        print(manager.application.experiment_name(layout))
+        print(manager.application.layout_key(layout))
     ```
 
     This prints:
@@ -136,10 +136,14 @@ Then read the logs and select the fastest experiment:
 from access.profiling.metrics import tmax
 
 manager.parse_profiling_data()
-names = [manager.application.experiment_name(layout) for layout in layouts]
-parsed = [name for name in names if name in manager.data]
+keys = {manager.application.layout_key(layout) for layout in layouts}
+parsed = [name for name in manager.data if manager.layout_key(name) in keys]
 best = manager.select_best_experiments(log, region, tmax, experiments=parsed)
 ```
+
+The experiments are numbered, so we find the ones of our layouts by the key of their layout.
+[`layout_key`][access.profiling.manager.ProfilingManager.layout_key] gives the key of the layout an experiment was
+created with.
 
 [`select_best_experiments`][access.profiling.manager.ProfilingManager.select_best_experiments] keeps the fastest
 experiment for each number of CPUs. Here all the layouts use the same number of CPUs, so `best` contains a single
@@ -157,10 +161,10 @@ the best one, so we use the data directly:
 times = {name: float(manager.data[name][log][tmax].sel(region=region).pint.dequantify()) for name in parsed}
 ranking = sorted(times, key=times.get)
 for name in ranking:
-    print(f"{times[name]:8.1f} s  {name}")
+    print(f"{times[name]:8.1f} s  {name}  {manager.layout_key(name)}")
 ```
 
-This prints the layouts from the fastest to the slowest, with the time each took.
+This prints the experiments from the fastest to the slowest, with the time each took and the key of its layout.
 
 ## Comparing the fastest layouts
 
@@ -184,14 +188,14 @@ compare only a few layouts at a time. [Comparing experiments](comparing-experime
 ## Using the fastest layout
 
 Now that we know which layout is the fastest, how do we use it? The application can tell us which changes to
-make to the configuration files. With Payu, you can also find these changes in the branch of the layout, in
-`<work_dir>/config`, together with its walltime and its name. Ask the application for the changes of the fastest
-layout:
+make to the configuration files. With Payu, you can also find these changes in the branch of the experiment, in
+`<work_dir>/config`, together with its walltime and its name. Each experiment keeps the layout it was created
+with, so ask the application for the changes of the fastest one:
 
 ```python
 from pprint import pprint
 
-pprint(manager.application.config_changes(layouts[names.index(best[0])]))
+pprint(manager.application.config_changes(manager.experiments[best[0]].layout))
 ```
 
 For the release's own layout of ACCESS-ESM1.6, for example, they are:

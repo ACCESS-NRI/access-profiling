@@ -167,8 +167,11 @@ class CylcRoseManager(ProfilingManager[RoseSuiteConfiguration]):
                 config[key.strip()] = value.strip()
         return config
 
-    def add_rose_experiment(self, rose: str, run_path: Path | None = None) -> None:
+    def add_rose_experiment(self, rose: str, run_path: Path | None = None, labels: dict | None = None) -> None:
         """Adds the given rose as an experiment to this manager.
+
+        The experiment is named after the rose, and gets a record in its directory, from which a manager built
+        later finds it again.
 
         The experiment takes the status the suite database in its run directory records, as parse_status reads
         it: DONE once every task has succeeded, FAILED once one has not, and RUNNING while some are still going. A
@@ -179,18 +182,24 @@ class CylcRoseManager(ProfilingManager[RoseSuiteConfiguration]):
             run_path (Path | None): Path to the Cylc run directory of the suite, where its results are, or will be
                 once it runs: it does not have to exist yet. Without it, nothing the suite records can be read, so
                 the suite stays NEW, a run of it is never seen to finish, and its logs cannot be parsed.
+            labels (dict | None): The study's own keys and values for this experiment, as JSON values. None (the
+                default) gives it none.
 
         Raises:
-            ValueError: If the experiment path does not exist.
+            ValueError: If the rose is named as generated experiments are, `exp-<digits>`, if the experiment
+                path does not exist, or if the labels are not JSON values. Nothing is added when it is raised.
         """
+        self._refuse_numbered_name(rose)
         experiment_path = self.work_dir / rose
         if not experiment_path.is_dir():
             raise ValueError(f"Experiment path '{experiment_path}' does not exist or is not a directory.")
 
-        experiment = ProfilingExperiment(path=experiment_path, run_path=run_path)
+        experiment = ProfilingExperiment(path=experiment_path, run_path=run_path, labels=labels)
         status = self.parse_status(experiment_path, run_path)
         experiment.status = status if status is not None else ProfilingExperimentStatus.NEW
         self.experiments[rose] = experiment
+        self._write_record(rose)
+        self._log("add_rose_experiment", [rose])
 
     def run_experiments(self, retry_failed: bool = False) -> None:
         """Runs Rose Cylc experiments via `rose suite-run` for profiling data generation.

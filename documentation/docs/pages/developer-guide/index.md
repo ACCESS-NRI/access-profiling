@@ -51,7 +51,7 @@ classDiagram
         experiment_prefix
         parallel_component
         logs
-        experiment_name(layout)
+        layout_key(layout)
         config_changes(layout)
         parse_layout(output_dir)
     }
@@ -137,7 +137,7 @@ To extend the package, you implement one of these abstract classes:
 
 | Class | To implement | Guide |
 |---|---|---|
-| [`Application`][access.profiling.application.Application] | `parallel_component`, `logs`, `experiment_name`, `config_changes` and `parse_layout`, and the `name` and `experiment_prefix` attributes | [Adding an application](adding-an-application.md) |
+| [`Application`][access.profiling.application.Application] | `parallel_component`, `logs`, `layout_key`, `config_changes` and `parse_layout`, and the `name` and `experiment_prefix` attributes | [Adding an application](adding-an-application.md) |
 | [`ProfilingParser`][access.profiling.parser.ProfilingParser] | `parse`, and the `_metrics` it reports | [Adding a parser](adding-a-parser.md) |
 | [`ProfilingManager`][access.profiling.manager.ProfilingManager] | `profiling_logs`, `parse_ncpus`, `parse_status`, `_create_experiments`, `run_experiments` and `_delete_experiments` | |
 | [`ControlSource`][access.profiling.control.ControlSource] | `origin` and `provenance`, and the `directory`, `label` and `start_point` attributes | |
@@ -169,7 +169,7 @@ sequenceDiagram
         Manager->>Search: iter_layouts(parallel_component, cores, allocations)
         Search-->>Manager: layouts
         loop every layout not yet held
-            Manager->>Application: experiment_name(layout)
+            Manager->>Application: layout_key(layout)
             Manager->>Application: config_changes(layout)
         end
     end
@@ -178,9 +178,20 @@ sequenceDiagram
 ```
 
 A plan has everything that is different from one experiment to the next: its name, its layout, the changes to
-the files of the control and its walltime. Note that the manager only registers the experiments once all of them
-have been created. If something fails on the way, nothing is registered, and you can simply call the method again
-to create what is missing.
+the files of the control and its walltime. The name is a number, `exp-0001` onwards. The manager tells whether it
+already holds an experiment for a layout from the key the application gives the layout, never from a name. Note that
+the manager only registers the experiments once all of them have been created. If something fails on the way,
+nothing is registered, and you can simply call the method again to create what is missing.
+
+The numbers of the new experiments are taken before `_create_experiments` is called, and they stay taken if it
+fails, because the engine may have created some of the experiments. A subclass can avoid this for what it is able
+to check beforehand. It overrides `_refuse_plans`, which the manager calls with the plans before it writes
+anything, and raises there. A call that is refused in this way takes no number. For example, this is where
+`PayuManager` refuses a manager that has no `lab_dir`. By default, `_refuse_plans` refuses nothing.
+
+Once the experiments are created, the manager writes a record for each of them, and adds the call to the study
+file. [Managing experiments](../user-guide/managing-experiments.md#what-the-manager-keeps-on-disk) describes both
+files.
 
 ## What comes from elsewhere
 

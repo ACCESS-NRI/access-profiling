@@ -29,7 +29,7 @@ from access.profiling.payu_manager import PayuManager
 # YATM on 1 core, MOM5 on its 16 x 15 process grid unmasked, CICE5 on 24: the release's layout, bar the mask.
 ONE_DEGREE_TOTAL_CORES = 265
 ONE_DEGREE_MOM5_GRID = (16, 15)
-ONE_DEGREE_BRANCH = "om2-layout_1deg_atm_1_mom_16x15_ice_24"
+ONE_DEGREE_KEY = "om2-layout_1deg_atm_1_mom_16x15_ice_24"
 
 
 def _pinned(mom5: int, cice5: int) -> RootAllocation:
@@ -74,7 +74,7 @@ def test_om2_1deg_reproduces_the_released_layout(one_degree_layout):
 
 
 def test_om2_1deg_experiment_name(one_degree_layout):
-    assert OM2_1DEG.experiment_name(one_degree_layout) == ONE_DEGREE_BRANCH
+    assert OM2_1DEG.layout_key(one_degree_layout) == ONE_DEGREE_KEY
 
 
 def test_om2_1deg_config_changes(one_degree_layout):
@@ -156,7 +156,7 @@ def test_om2_finer_resolutions_choose_the_sea_ice_rank_count_alone(
     assert changes["ice/cice_in.nml"] == {
         "domain_nml": {"nprocs": str(cice5), "nx_global": str(nx), "ny_global": str(ny), "max_blocks": "-1"}
     }
-    assert configuration.experiment_name(layout).endswith(f"_mom_{grid[0]}x{grid[1]}_ice_{cice5}")
+    assert configuration.layout_key(layout).endswith(f"_mom_{grid[0]}x{grid[1]}_ice_{cice5}")
 
 
 def test_om2_the_sea_ice_runs_on_the_ocean_grid():
@@ -207,12 +207,12 @@ def test_om2_parse_layout_reads_the_cores_of_every_submodel(tmp_path):
 
 
 @mock.patch("access.profiling.payu_manager.ExperimentGenerator")
-def test_om2_generate_scaling_experiments(mock_experiment_generator):
+def test_om2_generate_scaling_experiments(mock_experiment_generator, tmp_path):
     """Test that ACCESS-OM2 scaling experiments can be generated end to end."""
 
     manager = PayuManager(
-        Path("/fake/test_path"),
-        Path("/fake/archive_path"),
+        tmp_path / "test_path",
+        tmp_path / "archive_path",
         OM2_1DEG,
         GitControlSource("https://example.com/repo", "release-1deg_jra55_ryf-4.1"),
         lab_dir=Path("/fake/lab"),
@@ -223,7 +223,9 @@ def test_om2_generate_scaling_experiments(mock_experiment_generator):
 
     config = mock_experiment_generator.call_args[0][0]
     assert config["model_type"] == "access-om2"
-    assert ONE_DEGREE_BRANCH in manager.experiments
+    assert ONE_DEGREE_KEY in {
+        manager.application.layout_key(experiment.layout) for experiment in manager.experiments.values()
+    }
 
 
 RUNTIME_CICE_IN = """&domain_nml

@@ -66,8 +66,10 @@ narrow the search down. It sets how many cores each component may get, and can a
 limit on the number of cores left idle. The numbers of cores it sets can be given as fractions of the total, so the
 same strategy can be used for every size of a study.
 
-The layouts are returned sorted by the number of cores they leave idle. Each layout becomes one experiment, and the
-name of the experiment is built from the layout. This means that the same layout always gives the same experiment.
+The layouts are returned sorted by the number of cores they leave idle. Each layout becomes one experiment. The
+experiments are numbered, `exp-0001` onwards, so the name of an experiment says nothing about it. What an experiment
+is, is written in a record, a small file in its directory. This means that the same layout always gives the same
+experiment, and that a manager finds the experiments of a study again in a later session.
 
 When the results are plotted, there are two numbers of cores to keep in mind. The first is the number of cores the
 job occupied. This is what the scheduler charged for, and it can be larger than the number of cores the layout
@@ -89,6 +91,7 @@ stateDiagram-v2
     FAILED --> RUNNING: run_experiments(retry_failed=True)
     DONE --> ARCHIVED: archive_experiments
     [*] --> DONE: add_experiment_from_directory
+    [*] --> NEW: found in the working directory
     [*] --> ARCHIVED: found in the archive directory
 ```
 
@@ -96,8 +99,9 @@ The manager does not wait for the experiments to finish. Instead, it checks how 
 records that the workflow engine keeps. This happens whenever
 [`update_statuses`][access.profiling.manager.ProfilingManager.update_statuses] is called, and running, archiving
 and parsing experiments all call it first. Note that the statuses are only kept in memory. A manager created in a
-new session therefore only knows about the experiments it can find: the ones in its archive directory, which are
-ARCHIVED. [Managing experiments](managing-experiments.md) explains how to get the other experiments back.
+new session finds the experiments of its working directory and of its archive directory again. The archived ones
+are ARCHIVED, and the others are NEW until their status is updated.
+[Managing experiments](managing-experiments.md) explains what the manager keeps on disk to find them.
 
 ## Profiling data
 

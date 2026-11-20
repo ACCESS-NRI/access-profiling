@@ -11,9 +11,8 @@ some other way. In this tutorial we compare experiments of ACCESS-ESM1.6 and ACC
 
 - The experiments must all be runs of the same application, or of applications that write the same logs. This is
   because a manager works with one application.
-- The manager creates one experiment for each parallelisation layout, and names it after the layout. If you want to
-  compare experiments that have the same layout but a different build or configuration, register them yourself, each
-  with its own name.
+- The manager creates one experiment for each parallelisation layout. If you want to compare experiments that have
+  the same layout but a different build or configuration, register them yourself, each with its own name.
 - The runs should simulate the same period, with the same start and the same length. Otherwise their times cannot
   be compared.
 

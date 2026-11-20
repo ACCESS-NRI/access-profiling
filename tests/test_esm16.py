@@ -41,7 +41,7 @@ PI_CONTROL_UM7_GRID = (16, 16)
 PI_CONTROL_MOM5_GRID = (16, 15)
 PI_CONTROL_CICE5_RANKS = 12
 PI_CONTROL_IDLE_CORES = 12
-PI_CONTROL_BRANCH = "esm1p6-layout_piControl_atm_16x16_mom_16x15_ice_12"
+PI_CONTROL_KEY = "esm1p6-layout_piControl_atm_16x16_mom_16x15_ice_12"
 PI_CONTROL_ALLOCATIONS = RootAllocation(
     subcomponents={
         ESM16_UM7_NAME: FixedAllocation(256, local_constraints=(SubdomainAspectRatioConstraint(1.5),)),
@@ -58,10 +58,10 @@ def esm16():
 
 
 @pytest.fixture(scope="function")
-def manager(esm16):
+def manager(esm16, tmp_path):
     return PayuManager(
-        Path("/fake/test_path"),
-        Path("/fake/archive_path"),
+        tmp_path / "test_path",
+        tmp_path / "archive_path",
         esm16,
         GitControlSource("https://example.com/repo", "commit"),
         lab_dir=Path("/fake/lab"),
@@ -100,7 +100,7 @@ def test_esm16_pi_control_layout(pi_control_layout):
 def test_esm16_experiment_name(esm16, pi_control_layout):
     """The name an experiment holding the released layout is given."""
 
-    assert esm16.experiment_name(pi_control_layout) == PI_CONTROL_BRANCH
+    assert esm16.layout_key(pi_control_layout) == PI_CONTROL_KEY
 
 
 def test_esm16_config_changes(esm16, pi_control_layout):
@@ -156,7 +156,7 @@ def test_esm16_layout_requires_esm16_layout(esm16):
         ),
     )
     with pytest.raises(ValueError, match="runs 3"):
-        esm16.experiment_name(other_model)
+        esm16.layout_key(other_model)
     with pytest.raises(ValueError, match="runs 3"):
         esm16.config_changes(other_model)
 
@@ -262,10 +262,15 @@ def test_esm16_generate_scaling_experiments(mock_experiment_generator, manager):
     perturbations = config["Perturbation_Experiment"]
     assert list(perturbations) == [f"Experiment_{n}" for n in range(1, len(perturbations) + 1)]
 
-    released = [block for block in perturbations.values() if block["branches"] == [PI_CONTROL_BRANCH]]
+    # The experiments are numbered, so the released layout is found by its key rather than by a name.
+    released = [
+        name
+        for name, experiment in manager.experiments.items()
+        if manager.application.layout_key(experiment.layout) == PI_CONTROL_KEY
+    ]
     assert len(released) == 1, "The released PI control layout should generate exactly one experiment."
-    assert released[0]["config.yaml"]["walltime"] == "2:00:00"
-    assert PI_CONTROL_BRANCH in manager.experiments
+    (block,) = (block for block in perturbations.values() if block["branches"] == released)
+    assert block["config.yaml"]["walltime"] == "2:00:00"
 
 
 def _config_text(submodels: list[dict]) -> str:
@@ -463,8 +468,8 @@ class TestESM16AMIP:
     def test_its_experiments_are_not_the_coupled_ones(self, amip, pi_control_layout, esm16):
         """Which is the whole point of the configuration being in the name."""
 
-        assert amip.experiment_name(select_layouts(amip, 208, max_layouts=50)[0]).startswith("esm1p6-layout_amip_")
-        assert esm16.experiment_name(pi_control_layout).startswith("esm1p6-layout_piControl_")
+        assert amip.layout_key(select_layouts(amip, 208, max_layouts=50)[0]).startswith("esm1p6-layout_amip_")
+        assert esm16.layout_key(pi_control_layout).startswith("esm1p6-layout_piControl_")
 
 
 def test_two_configurations_with_the_same_layout_name_different_experiments(esm16, pi_control_layout):
@@ -477,8 +482,8 @@ def test_two_configurations_with_the_same_layout_name_different_experiments(esm1
     esm_historical = dataclasses.replace(esm16, name="esm-historical")
 
     assert esm_historical.parallel_component.subcomponents == esm16.parallel_component.subcomponents
-    assert esm_historical.experiment_name(pi_control_layout) != esm16.experiment_name(pi_control_layout)
-    assert esm_historical.experiment_name(pi_control_layout) == PI_CONTROL_BRANCH.replace("piControl", "esm-historical")
+    assert esm_historical.layout_key(pi_control_layout) != esm16.layout_key(pi_control_layout)
+    assert esm_historical.layout_key(pi_control_layout) == PI_CONTROL_KEY.replace("piControl", "esm-historical")
 
 
 def test_a_configuration_needs_a_name_and_a_component():
@@ -561,7 +566,7 @@ class TestESM16WithoutAnAtmosphere:
         assert changes["ocean/input.nml"] == {"ocean_model_nml": {"layout": "16, 15"}}
 
     def test_its_experiments_name_the_two_components_it_runs(self, ocean_ice, ocean_ice_layout):
-        assert ocean_ice.experiment_name(ocean_ice_layout) == "esm1p6-layout_ocean-ice_mom_16x15_ice_12"
+        assert ocean_ice.layout_key(ocean_ice_layout) == "esm1p6-layout_ocean-ice_mom_16x15_ice_12"
 
 
 class TestESM16SeaIceThatDecomposesNothing:
@@ -619,7 +624,7 @@ class TestESM16SeaIceThatDecomposesNothing:
         """One name per distinct layout is what lets a manager tell whether it already has an experiment, so a
         component with no process grid still has to put what it received into the name."""
 
-        assert roundrobin.experiment_name(roundrobin_layout) == "esm1p6-layout_piControl_atm_16x16_mom_16x15_ice_7"
+        assert roundrobin.layout_key(roundrobin_layout) == "esm1p6-layout_piControl_atm_16x16_mom_16x15_ice_7"
 
     def test_it_writes_its_ranks_and_its_grid_but_no_block_size(self, roundrobin, roundrobin_layout):
         """A block size left over from a decomposition this scheme never made is how a namelist and the layout

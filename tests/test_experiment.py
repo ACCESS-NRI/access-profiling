@@ -1,18 +1,29 @@
 # Copyright 2025 ACCESS-NRI and contributors. See the top-level COPYRIGHT file for details.
 # SPDX-License-Identifier: Apache-2.0
 
+import json
 import logging
+import tarfile
 import tempfile
 from pathlib import Path
 from unittest import mock
 
 import pytest
+from access.config.parallel_component import ComponentLayout, CoreSharing
+from access.config.parallel_domain import Domain, DomainDecompositionSpec
+from access.config.parallel_mpi_grid import MPICartesianGrid
 
 from access.profiling.experiment import (
+    RECORD_FILENAME,
+    RECORD_VERSION,
     ProfilingExperiment,
     ProfilingExperimentStatus,
     ProfilingLog,
+    _layout_from_record,
+    _layout_record,
     experiment_directory_walker,
+    read_archived_record,
+    read_versioned,
 )
 from access.profiling.metrics import tavg, tmax
 from access.profiling.parser import ProfilingParser
@@ -634,3 +645,252 @@ class TestWhatIsLeftOut:
 
         with experiment.directory() as (path, _):
             assert self.archived(path) == [Path("timings.txt")]
+
+
+def recorded_layout() -> ComponentLayout:
+    """A layout with everything a record has to keep: a process grid, a shared range, an offset and idle cores."""
+
+    atm = ComponentLayout(
+        name="atm",
+        n_cores=4,
+        n_ranks=4,
+        threads_per_rank=1,
+        decomposition=DomainDecompositionSpec(Domain(shape=(8, 6)), MPICartesianGrid(shape=(2, 2))),
+    )
+    cpl = ComponentLayout(name="cpl", n_cores=4, n_ranks=4, threads_per_rank=1, decomposition=None)
+    ice = ComponentLayout(name="ice", n_cores=2, n_ranks=2, threads_per_rank=1, decomposition=None, core_offset=2)
+    shared = ComponentLayout(
+        name="shared",
+        n_cores=4,
+        n_ranks=4,
+        threads_per_rank=None,
+        decomposition=None,
+        sub_layouts=(cpl, ice),
+        core_sharing=CoreSharing.SHARED,
+    )
+    return ComponentLayout(
+        name="model", n_cores=10, n_ranks=8, threads_per_rank=None, decomposition=None, sub_layouts=(atm, shared)
+    )
+
+
+class TestLayoutRecord:
+    """A layout written into a record, and built again from it."""
+
+    def test_it_comes_back_as_it_was_through_json(self):
+        layout = recorded_layout()
+
+        record = json.loads(json.dumps(_layout_record(layout)))
+
+        assert _layout_from_record(record) == layout
+
+    def test_one_stated_wrongly_is_refused(self):
+        """The layout is built again, so a record edited into something that is no layout does not get through."""
+        record = _layout_record(recorded_layout())
+        record["sub_layouts"][0]["n_ranks"] = 3
+
+        with pytest.raises(ValueError, match="n_ranks"):
+            _layout_from_record(record)
+
+
+class TestRecord:
+    """What an experiment writes down about itself, since its name says nothing."""
+
+    def test_it_holds_what_differs_from_one_experiment_to_the_next(self, tmp_path):
+        layout = recorded_layout()
+        experiment = ProfilingExperiment(
+            tmp_path / "exp-0001" / "config",
+            run_path=Path("/runs/exp-0001"),
+            layout=layout,
+            changes={"ice_in": {"domain_nml": {"block_size_x": "15"}}},
+            labels={"blocks per rank": "5-8"},
+        )
+        experiment.ncpus = 104
+
+        assert experiment.record(tmp_path) == {
+            "version": 1,
+            "path": "exp-0001/config",
+            "run_path": "/runs/exp-0001",
+            "complete": False,
+            "layout": _layout_record(layout),
+            "changes": {"ice_in": {"domain_nml": {"block_size_x": "15"}}},
+            "labels": {"blocks per rank": "5-8"},
+            "ncpus": 104,
+        }
+
+    @pytest.mark.parametrize(
+        "labels, message",
+        [
+            ({"where": Path("/some/input")}, "The labels of an experiment must be JSON values. Got"),
+            ({"grid": (4, 4)}, "The labels of an experiment must be JSON values, which .* is not what it was"),
+        ],
+    )
+    def test_labels_it_could_not_hold_are_refused(self, tmp_path, labels, message):
+        """Whatever gives an experiment its labels, they are what a later session reads back from the record."""
+        with pytest.raises(ValueError, match=message):
+            ProfilingExperiment(tmp_path / "release", labels=labels)
+
+    def test_what_is_unknown_is_null(self, tmp_path):
+        """As for an experiment added by hand, which was given no layout and whose changes nothing states."""
+        assert ProfilingExperiment(tmp_path / "release", complete=True).record(tmp_path) == {
+            "version": 1,
+            "path": "release",
+            "run_path": None,
+            "complete": True,
+            "layout": None,
+            "changes": None,
+            "labels": {},
+            "ncpus": None,
+        }
+
+    def test_a_path_outside_the_working_directory_is_kept_whole(self, tmp_path):
+        experiment = ProfilingExperiment(tmp_path / "elsewhere" / "expt")
+
+        assert experiment.record(tmp_path / "work")["path"] == str(tmp_path / "elsewhere" / "expt")
+
+    def test_a_layout_read_back_is_not_recorded(self, tmp_path):
+        """It is not what identifies the experiment, and says less than a layout the experiment was given."""
+        experiment = ProfilingExperiment(tmp_path / "expt")
+        experiment.layout = recorded_layout()  # as ProfilingManager._layout() keeps what it reads back
+
+        assert not experiment.layout_given
+        assert experiment.record(tmp_path)["layout"] is None
+
+    def test_the_labels_are_the_experiments_own(self, tmp_path):
+        labels = {"version": "1.0"}
+        experiment = ProfilingExperiment(tmp_path / "expt", labels=labels)
+
+        labels["version"] = "2.0"
+
+        assert experiment.labels == {"version": "1.0"}
+
+    def test_an_experiment_comes_back_from_its_record(self, tmp_path):
+        layout = recorded_layout()
+        original = ProfilingExperiment(
+            tmp_path / "expt", layout=layout, changes={"config.yaml": {"walltime": "1:00:00"}}, labels={"a": 1}
+        )
+        original.ncpus = 48
+        record = json.loads(json.dumps(original.record(tmp_path)))
+
+        experiment = ProfilingExperiment.from_record(record, tmp_path / "expt", run_path=tmp_path / "runs")
+
+        assert (experiment.path, experiment.run_path) == (tmp_path / "expt", tmp_path / "runs")
+        assert experiment.layout == layout and experiment.layout_given
+        assert experiment.changes == {"config.yaml": {"walltime": "1:00:00"}}
+        assert experiment.labels == {"a": 1}
+        assert experiment.ncpus == 48
+        assert experiment.status == ProfilingExperimentStatus.NEW
+
+    def test_one_added_as_complete_comes_back_done(self, tmp_path):
+        """No engine record says so, which is why the record does."""
+        record = ProfilingExperiment(tmp_path / "expt", complete=True).record(tmp_path)
+
+        assert ProfilingExperiment.from_record(record, tmp_path / "expt").status == ProfilingExperimentStatus.DONE
+
+    def test_an_archived_one_stays_archived(self, tmp_path):
+        record = ProfilingExperiment(tmp_path / "expt", complete=True).record(tmp_path)
+
+        experiment = ProfilingExperiment.from_record(record, tmp_path / "expt.tar.gz")
+
+        assert experiment.status == ProfilingExperimentStatus.ARCHIVED
+
+    def test_the_labels_are_shown(self, tmp_path):
+        experiment = ProfilingExperiment(tmp_path / "expt", labels={"distribution": "roundrobin"})
+
+        assert repr(experiment).endswith("status=NEW, labels={'distribution': 'roundrobin'})")
+
+
+class TestArchivedRecord:
+    """The record an archive holds, written first so that it is read without extracting the rest."""
+
+    @staticmethod
+    def archive(tmp_path: Path, record: dict | None) -> ProfilingExperiment:
+        path = tmp_path / "expt"
+        path.mkdir()
+        (path / "config.yaml").write_text("ncpus: 4\n")
+        experiment = ProfilingExperiment(path)
+        experiment.status = ProfilingExperimentStatus.DONE
+        (tmp_path / "archive").mkdir()
+        experiment.archive(tmp_path / "archive" / "expt", record=record)
+        return experiment
+
+    def test_it_is_the_first_member(self, tmp_path):
+        experiment = self.archive(tmp_path, {"version": 1, "labels": {"a": 1}})
+
+        with tarfile.open(experiment.path) as tar:
+            names = tar.getnames()
+        assert names[0] == RECORD_FILENAME
+        assert "experiment/config.yaml" in names
+
+    def test_it_is_read_back(self, tmp_path):
+        experiment = self.archive(tmp_path, {"version": 1, "labels": {"a": 1}})
+
+        assert read_archived_record(experiment.path) == {"version": 1, "labels": {"a": 1}}
+
+    def test_one_in_another_format_is_refused_with_the_archive_it_is_in(self, tmp_path):
+        """An archive is read years after it was made, so it may come from a later version of the package."""
+        experiment = self.archive(tmp_path, {"version": 2, "labels": {"a": 1}})
+
+        with pytest.raises(
+            ValueError, match=r"The record in the archive '.*expt\.tar\.gz' states the format version 2"
+        ):
+            read_archived_record(experiment.path)
+
+    def test_the_format_it_is_held_to_is_the_records(self, tmp_path):
+        experiment = self.archive(tmp_path, {"version": 1, "labels": {"a": 1}})
+
+        with (
+            mock.patch("access.profiling.experiment.RECORD_VERSION", 2),
+            pytest.raises(ValueError, match="states the format version 1, and .* reads version 2"),
+        ):
+            read_archived_record(experiment.path)
+
+    def test_the_experiment_is_still_extracted_beside_it(self, tmp_path):
+        experiment = self.archive(tmp_path, {"labels": {}})
+
+        with experiment.directory() as (path, run_path):
+            assert (path / "config.yaml").read_text() == "ncpus: 4\n"
+            assert run_path is None
+
+    def test_an_archive_given_none_holds_none(self, tmp_path):
+        """As the archives made before experiments had records."""
+        experiment = self.archive(tmp_path, None)
+
+        assert read_archived_record(experiment.path) is None
+
+    def test_an_empty_archive_holds_none(self, tmp_path):
+        tarfile.open(tmp_path / "empty.tar.gz", "w:gz").close()
+
+        assert read_archived_record(tmp_path / "empty.tar.gz") is None
+
+
+class TestReadVersioned:
+    """A file states the version of its own format, and one in another format is refused with its name."""
+
+    def test_a_file_in_the_format_that_is_read_is_returned_whole(self, tmp_path):
+        text = json.dumps({"version": 3, "labels": {"a": 1}})
+
+        assert read_versioned(text, tmp_path / "file.json", "record", 3) == {"version": 3, "labels": {"a": 1}}
+
+    def test_the_record_an_experiment_writes_is_in_the_format_that_is_read(self, tmp_path):
+        record = ProfilingExperiment(tmp_path / "expt").record(tmp_path)
+
+        assert read_versioned(json.dumps(record), tmp_path / "expt" / RECORD_FILENAME, "record", RECORD_VERSION)
+
+    def test_another_version_is_refused(self, tmp_path):
+        message = (
+            rf"The record '{tmp_path}/file\.json' states the format version 2, and this version of access-profiling "
+            r"reads version 1\. Update access-profiling"
+        )
+        with pytest.raises(ValueError, match=message):
+            read_versioned(json.dumps({"version": 2}), tmp_path / "file.json", "record", 1)
+
+    def test_a_file_stating_no_version_is_refused(self, tmp_path):
+        with pytest.raises(ValueError, match=r"The study file '.*file\.json' states no format version, and"):
+            read_versioned(json.dumps({"last_number": 3}), tmp_path / "file.json", "study file", 1)
+
+    def test_a_file_that_is_not_json_is_refused_with_its_name(self, tmp_path):
+        """As a file cut short when the disk filled up is, which the JSON error alone would not say which it is."""
+        with pytest.raises(
+            ValueError, match=r"The record '.*file\.json' cannot be read, since it is not JSON: Expecting"
+        ):
+            read_versioned('{"version": 1, "path"', tmp_path / "file.json", "record", 1)

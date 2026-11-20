@@ -153,7 +153,7 @@ def test_om3_experiment_name_records_cores_where_nothing_decomposes(om3):
     """The released configuration decomposes nothing, so every component is named by its cores."""
 
     layout = _om3_layout(om3, 2704, OM3_MC_25KM_CORES)
-    assert om3.experiment_name(layout) == "om3-layout_MC-25km_atm_275_cpl_275_ice_275_ocn_2429_rof_275"
+    assert om3.layout_key(layout) == "om3-layout_MC-25km_atm_275_cpl_275_ice_275_ocn_2429_rof_275"
 
 
 def test_om3_experiment_name_records_a_grid_where_there_is_one():
@@ -162,7 +162,7 @@ def test_om3_experiment_name_records_a_grid_where_there_is_one():
     layout = _om3_layout(OM3_MC_100KM_TILED, 240, TILED_CORES, ice=(24,))
 
     assert OM3_SEA_ICE_NAME in _om3_grids(layout), "the search chose a process grid for the sea ice"
-    assert OM3_MC_100KM_TILED.experiment_name(layout) == "om3-layout_MC-100km-tiled_atm_24_cpl_24_ice_24_ocn_216_rof_24"
+    assert OM3_MC_100KM_TILED.layout_key(layout) == "om3-layout_MC-100km-tiled_atm_24_cpl_24_ice_24_ocn_216_rof_24"
 
 
 def test_om3_shared_components_need_not_be_the_same_size(om3):
@@ -192,7 +192,7 @@ def test_om3_refuses_a_layout_of_another_model(om3):
         sub_layouts=(ComponentLayout(name="other", n_cores=4, n_ranks=4, threads_per_rank=1, decomposition=None),),
     )
     with pytest.raises(ValueError, match=r"configuration 'MC-25km' runs \['atm', 'cpl', 'ice', 'ocn', 'rof'\]"):
-        om3.experiment_name(other_model)
+        om3.layout_key(other_model)
     with pytest.raises(ValueError, match="has the components \\['other'\\]"):
         om3.config_changes(other_model)
 
@@ -360,7 +360,7 @@ def test_om3_leaves_the_ocean_to_decompose_itself():
     changes = OM3_MC_100KM.config_changes(layout)
     assert "MOM_input" not in changes, "MOM6 is left to decompose its own grid"
     assert changes["nuopc.runconfig"]["PELAYOUT_attributes"]["ocn_ntasks"] == 288
-    assert "ocn_288" in OM3_MC_100KM.experiment_name(layout), "so the name records its cores, not a grid"
+    assert "ocn_288" in OM3_MC_100KM.layout_key(layout), "so the name records its cores, not a grid"
 
 
 def test_om3_writes_the_chosen_decomposition():

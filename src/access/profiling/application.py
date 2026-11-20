@@ -105,11 +105,10 @@ class Application(ABC):
 
     Attributes:
         name (str): A short name for this setup, distinguishing it from others of the same application. It
-            appears in the name of every experiment generated for it, which is how two setups sharing a
-            domain and a component set stay apart on disk.
-        experiment_prefix (str): The prefix every experiment of this application is named with. Shared by
-            every setup of one application, so that a working directory holding several applications can
-            tell which experiments are whose.
+            is part of the key of every layout of it, and it is what the history of a study records the
+            application under.
+        experiment_prefix (str): The prefix of the key of every layout of this application. Shared by every
+            setup of one application.
 
     These two are declared as attributes rather than abstract properties so that a subclass can satisfy them
     with a plain dataclass field, which is what every one of them does. The cost is that nothing refuses a
@@ -141,17 +140,18 @@ class Application(ABC):
         """
 
     @abstractmethod
-    def experiment_name(self, layout: ComponentLayout) -> str:
-        """Returns the name identifying the experiment that runs a given layout.
+    def layout_key(self, layout: ComponentLayout) -> str:
+        """Returns the key identifying a given layout.
 
         Must be distinct for every distinct layout and the same every time for the same one: it is what tells
-        a manager whether it already holds an experiment, across sessions as well as within one.
+        a manager whether it already holds an experiment for a layout, across sessions as well as within one.
+        It is not the experiment's name, which is a number and says nothing.
 
         Args:
             layout (ComponentLayout): The layout, as returned by the layout search.
 
         Returns:
-            str: The name.
+            str: The key.
 
         Raises:
             ValueError: If the layout is not a layout of this application.

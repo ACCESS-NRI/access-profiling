@@ -3,7 +3,7 @@
 Do you want to profile an application that the package does not support? You can add it by writing a
 configuration class, which is a subclass of [`Application`][access.profiling.application.Application]. The class
 has to answer a few questions. What are the components of the application? Which logs does a run write? What is
-the name of the experiment that runs a given parallelisation layout? And how is a layout written into the files of the
+the key that identifies a given parallelisation layout? And how is a layout written into the files of the
 application, and read back from them? Some workflow engines need a little more. An application that is run with
 Payu, for example, is a subclass of
 [`PayuConfiguration`][access.profiling.payu_configuration.PayuConfiguration]. And if Payu couples its components
@@ -30,7 +30,7 @@ which is a
 A component is a frozen dataclass, and a subclass of
 [`PayuComponent`][access.profiling.payu_configuration.PayuComponent]. It has two names. The `name` is the name of
 the component in the component tree, and so the name you use for it in an allocation strategy or in a
-`RegionGroup`. The `token` is the short form that appears in the names of the experiments. The component then says
+`RegionGroup`. The `token` is the short form that appears in the keys of the layouts. The component then says
 which grid the search decomposes for it, which rules every layout of it has to follow, which logs it writes, and
 what its own files have to say for a given layout. Our atmosphere decomposes its grid over a process grid, which it
 reads from its namelist, and writes FMS timers into a log of its own:
@@ -131,9 +131,9 @@ class ToyConfiguration(SubmodelsConfiguration):
         )
 ```
 
-Every application has a `name` and an `experiment_prefix`, and both are used in the names of the experiments. The
-`name` is different for each configuration of the application. The `experiment_prefix` is the same for the whole
-application, so that you can tell its experiments from those of other applications in the same working directory.
+Every application has a `name` and an `experiment_prefix`, and both are used in the key of each layout. The manager
+uses this key to tell whether it already has an experiment for a layout. The `name` is different for each
+configuration of the application, and the `experiment_prefix` is the same for the whole application.
 `model_name` and `name` together give the name of the root of the component tree, here `Toy demo`. This is the
 component you name in a `RegionGroup` for the regions that are timed over the whole job. `model_type` is specific
 to Payu. It is the name that Payu gives to the model, and the experiment generator checks that Payu knows it.
@@ -147,7 +147,7 @@ every slot has to be there. [`ESM16Configuration`][access.profiling.models.esm16
 for OASIS.
 
 Everything else follows from the submodels. The component tree puts the components side by side. The logs are
-those of the components. The name of an experiment is made of the tokens of the components and of what each one
+those of the components. The key of a layout is made of the tokens of the components and of what each one
 received. The changes request the whole budget of the layout as `ncpureq`, give every submodel its cores, and add
 the changes to the files of each component. And the layout is read back from `config.yaml`.
 
@@ -182,12 +182,12 @@ half = FreeAllocation(
 )
 layouts = manager.select_layouts(96, allocations=RootAllocation(subcomponents={"atm": half, "MOM5": half}))
 print(len(layouts))
-print(TOY_DEMO.experiment_name(layouts[0]))
+print(TOY_DEMO.layout_key(layouts[0]))
 print(TOY_DEMO.config_changes(layouts[0]))
 ```
 
 Note that the strategy uses the names that the components give themselves, `atm` and `MOM5`. This prints the
-number of layouts found, the name of the first one, and the changes that run it:
+number of layouts found, the key of the first one, and the changes that run it:
 
 ```text
 7
@@ -221,7 +221,7 @@ The package ships the configuration classes of the ACCESS models. Each model has
    presets and their control sources are not exported: a study imports them from the module of the model.
 3. Write the tests, in `tests/test_<model>.py`, and those of a new component in `tests/test_components.py`. The
    package's tests cover every line. The tests of ACCESS-ESM1.6 and ACCESS-OM3 show what to check: that every
-   layout of the release can be found, that the names of the layouts are distinct, that `config_changes` writes
+   layout of the release can be found, that the keys of the layouts are distinct, that `config_changes` writes
    what the model reads, and that `parse_layout` reads it back.
 4. Add the module to the [Models](../api/models.md) page of the API reference, in
    `documentation/docs/pages/api/models.md`, and describe the model in

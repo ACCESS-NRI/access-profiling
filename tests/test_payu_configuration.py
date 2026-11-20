@@ -241,8 +241,8 @@ class TestSubmodelsConfiguration:
     def test_an_experiment_is_named_after_what_each_component_received(self):
         """A process grid where a component decomposes one, and a rank count otherwise."""
 
-        assert TOY.experiment_name(_toy_layout((2, 2))) == "toy-layout_demo_g_2x2_s_1"
-        assert TOY.experiment_name(_toy_layout((4, 1))) == "toy-layout_demo_g_4x1_s_1"
+        assert TOY.layout_key(_toy_layout((2, 2))) == "toy-layout_demo_g_2x2_s_1"
+        assert TOY.layout_key(_toy_layout((4, 1))) == "toy-layout_demo_g_4x1_s_1"
 
     def test_it_writes_a_slot_for_every_submodel_the_control_declares(self):
         """The coupler's slot is marked PRESERVE rather than left out, since the generator truncates."""
@@ -264,7 +264,7 @@ class TestSubmodelsConfiguration:
             sub_layouts=(_layout("other", 4, (2, 2)),),
         )
         with pytest.raises(ValueError, match="runs 2"):
-            TOY.experiment_name(other)
+            TOY.layout_key(other)
         with pytest.raises(ValueError, match="runs 2"):
             TOY.config_changes(other)
 

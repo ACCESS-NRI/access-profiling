@@ -32,7 +32,7 @@ class RoseSuiteConfiguration(Application):
             of names stating its two extents separately.
         parsers (Mapping[str, ProfilingParser]): The parsers this suite's task logs are read with, keyed by
             name.
-        experiment_prefix (str): Prefix for the names of experiments generated for this configuration.
+        experiment_prefix (str): Prefix of the key of every layout of this configuration.
         cpus_per_proc_variable (str | None): Name of the variable stating OpenMP threads per MPI process, if
             the suite has one.
         io_server_variable (str | None): Name of the variable stating the number of I/O server ranks, if the
@@ -88,7 +88,7 @@ class RoseSuiteConfiguration(Application):
         """
         raise NotImplementedError(self._unsupported)
 
-    def experiment_name(self, layout: ComponentLayout) -> str:
+    def layout_key(self, layout: ComponentLayout) -> str:
         """Not supported for Rose suites: the package does not generate their layouts.
 
         Raises:
