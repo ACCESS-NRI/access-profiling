@@ -53,8 +53,20 @@ class CylcRoseManager(ProfilingManager[RoseSuiteConfiguration]):
             a credentials prompt can be answered. None (the default) records nothing.
     """
 
+    def _refuse_plans(self, plans: list[ExperimentPlan], **runner_options) -> None:
+        """Refuses every plan, as `_create_experiments` does, before the study takes a number for it.
+
+        Args:
+            plans (list[ExperimentPlan]): Unused.
+            **runner_options: Ignored.
+
+        Raises:
+            NotImplementedError: Always.
+        """
+        self._create_experiments(plans, **runner_options)
+
     def _create_experiments(self, plans: list[ExperimentPlan], **runner_options) -> dict[str, ProfilingExperiment]:
-        """Raises NotImplementedError: layout experiments are not generated for Cylc Rose suites yet.
+        """Raises NotImplementedError: experiments are not generated for Cylc Rose suites yet.
 
         Args:
             plans (list[ExperimentPlan]): Unused.
@@ -62,12 +74,13 @@ class CylcRoseManager(ProfilingManager[RoseSuiteConfiguration]):
                 callers may pass options other runners take.
 
         Raises:
-            NotImplementedError: Always. Unreachable in practice, generate_scaling_experiments asking the
-                configuration for a layout search first and that raising the same way.
+            NotImplementedError: Always. generate_experiments gets here, through `_refuse_plans`, with choices
+                that have no layout. generate_scaling_experiments does not, the configuration refusing the
+                layout search first.
         """
         raise NotImplementedError(
-            "Layout generation is not supported for Cylc Rose configurations yet: a rose suite states its "
-            "parallelism in rose-suite.conf, and nothing here yet knows how to search over that."
+            "Generating experiments is not supported for Cylc Rose suites yet: nothing here writes a change into "
+            "a rose-suite.conf. Add the suites of a study with add_rose_experiment instead."
         )
 
     def parse_ncpus(self, path: Path, run_path: Path | None = None) -> int:

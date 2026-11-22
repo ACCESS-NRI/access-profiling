@@ -6,8 +6,8 @@
 A `ProfilingExperiment` is one experiment held by a manager: the directory it runs in, the status it has reached
 and, once they are known, the cores it occupied and the layout it ran. Once finished it can be archived to a
 tarball, and it is read from the tarball after that. A `ProfilingLog` pairs one log file with the parser that
-reads it, and an `ExperimentPlan` is an experiment a manager has decided to create, before any workflow engine
-has touched it.
+reads it. A `ConfigurationChoice` is one configuration a study asks an experiment for, and an `ExperimentPlan` is
+an experiment a manager has decided to create, before any workflow engine has touched it.
 
 An experiment's name says nothing about it, so what it is has to be written down. Each experiment has a record, a
 small JSON file named `RECORD_FILENAME`: in its directory under the working directory, and as the first member of
@@ -28,7 +28,7 @@ import tempfile
 import time
 from collections.abc import Iterable
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 
@@ -157,25 +157,66 @@ def _refuse_other_than_json(what: str, value: dict) -> None:
 
 
 @dataclass(frozen=True)
+class ConfigurationChoice:
+    """One configuration a study asks an experiment for: changes to the control's files, a layout, or both.
+
+    The changes are stated the way the workflow engine of the manager takes them, keyed by the path of each file
+    relative to the control directory, and are written as given. With a layout, they are merged over the changes
+    that realise the layout, and nothing checks the one against the other: the application works out what a layout
+    comes to from its own fields, not from what a choice changes.
+
+    The changes and the labels are kept in the experiment's record, which is how a study tells whether it already
+    has the experiment of a choice. They are therefore JSON values.
+
+    Args:
+        changes (dict): What the experiment changes in the control, keyed by file. Empty (the default) changes
+            nothing beyond the layout.
+        layout (ComponentLayout | None): The layout the experiment runs, for example one that
+            `ProfilingManager.select_layouts` returned. None (the default) keeps the layout of the control.
+        labels (dict): The study's own keys and values for the experiment, such as `{"distribution":
+            "roundrobin"}`. They say what the choice is to whoever reads the study, and are not part of what
+            identifies the experiment. Empty by default.
+
+    Raises:
+        ValueError: If the changes or the labels are not JSON values.
+    """
+
+    changes: dict = field(default_factory=dict)
+    layout: ComponentLayout | None = None
+    labels: dict = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        _refuse_other_than_json("changes of a configuration choice", self.changes)
+        _refuse_other_than_json("labels of a configuration choice", self.labels)
+
+
+@dataclass(frozen=True)
 class ExperimentPlan:
     """One experiment a manager has decided to create, before any engine has touched it.
 
     Args:
         name (str): The experiment's name. It is the key this manager holds it under, the branch or directory it
             lives in, and the name written into the experiment's own configuration.
-        layout (ComponentLayout): The layout the experiment runs.
-        changes (dict): The configuration file changes realising that layout, keyed by the path of each file
-            relative to the control directory.
-        walltime_hours (float): Walltime to request.
+        layout (ComponentLayout | None): The layout the experiment runs, or None for an experiment that keeps the
+            layout of the control.
+        changes (dict): Every configuration file change the engine is to make, keyed by the path of each file
+            relative to the control directory: those realising the layout, with the stated ones merged over them.
+        walltime_hours (float | None): Walltime to request, or None where the plan states none of its own: the
+            changes may state one, and otherwise the experiment keeps the control's.
         regenerating (bool): Whether this plan corrects an experiment the manager already holds, rather than
             describing a new one.
+        stated_changes (dict): What the study stated beyond the layout, which the experiment's record keeps as its
+            changes. Empty (the default) for an experiment that is its layout and nothing more.
+        labels (dict): The study's own keys and values for the experiment. Empty by default.
     """
 
     name: str
-    layout: ComponentLayout
+    layout: ComponentLayout | None
     changes: dict
-    walltime_hours: float
+    walltime_hours: float | None
     regenerating: bool = False
+    stated_changes: dict = field(default_factory=dict)
+    labels: dict = field(default_factory=dict)
 
 
 class ProfilingExperimentStatus(Enum):
@@ -449,11 +490,12 @@ class ProfilingExperiment:
     ProfilingManager._ncpus() rather than at construction.
 
     The layout is kept here for the same reason, and arrives one of two ways. An experiment generated
-    from a layout search is given the layout it was generated from, which is the whole of it, grids
-    included, and its record keeps it, so that the experiment has it again in a later session and once it
-    is archived. One that was given no layout - added from a directory, or archived before experiments had
-    records - is read back from its configuration on demand by ProfilingManager._layout(), which recovers
-    what each component was given rather than how it divided its domain.
+    from a layout search, or from a configuration choice that has a layout, is given the layout it was
+    generated from, which is the whole of it, grids included, and its record keeps it, so that the
+    experiment has it again in a later session and once it is archived. One that was given no layout -
+    generated from a choice without one, added from a directory, or archived before experiments had records -
+    is read back from its configuration on demand by ProfilingManager._layout(), which recovers what each
+    component was given rather than how it divided its domain.
 
     Args:
         path (Path): Path to the experiment directory.

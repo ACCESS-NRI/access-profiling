@@ -43,6 +43,7 @@ from access.profiling.application import Application
 from access.profiling.control import ControlSource
 from access.profiling.experiment import (
     RECORD_FILENAME,
+    ConfigurationChoice,
     ExperimentPlan,
     ProfilingExperiment,
     ProfilingExperimentStatus,
@@ -115,6 +116,40 @@ def _package_version() -> str:
         return "unknown"
 
 
+def _merge_changes(layout_changes: dict, stated: dict, above: tuple[str, ...] = ()) -> dict:
+    """Returns the changes that realise a layout with the changes a configuration choice states merged over them.
+
+    Mappings are merged key by key, and where the two disagree the choice wins, being what the study asked for.
+    Two lists are refused instead: the workflow engine merges a list into the control's position by position, by
+    rules of its own that are not reproduced here, so there is no saying what merging two of them would come to.
+
+    Args:
+        layout_changes (dict): The changes realising the layout, keyed by file. Left as they are.
+        stated (dict): The changes the choice states, keyed by file. Left as they are.
+        above (tuple[str, ...]): The keys leading to these mappings, for the message.
+
+    Returns:
+        dict: The merged changes.
+
+    Raises:
+        ValueError: If both give a list for the same key.
+    """
+    merged = dict(layout_changes)
+    for key, value in stated.items():
+        ours = merged.get(key)
+        if isinstance(ours, dict) and isinstance(value, dict):
+            merged[key] = _merge_changes(ours, value, (*above, key))
+        elif isinstance(ours, list) and isinstance(value, list):
+            raise ValueError(
+                f"Both the layout and the configuration choice give a list for {' > '.join((*above, key))}, and "
+                "two lists cannot be merged here. Leave the list out of the changes of the choice, and if every "
+                "experiment needs the change, make it in the control instead."
+            )
+        else:
+            merged[key] = value
+    return merged
+
+
 def find_component(layout: ComponentLayout, name: str) -> ComponentLayout | None:
     """Returns the part of a layout belonging to the named component, wherever it sits in it.
 
@@ -179,7 +214,8 @@ class ProfilingManager(ABC, Generic[AppT]):
     """Abstract base class to handle profiling data and workflows.
 
     This high-level class generates the experiments of a profiling study, one for each layout of every size the
-    study asks for, or takes in experiments that already exist. It finds the experiments of its working directory
+    study asks for or one for each configuration choice it states, or takes in experiments that already exist. It
+    finds the experiments of its working directory
     and of its archive directory again when it is built. It keeps track of the status they reach, archives
     them, and parses, selects and plots their profiling data: the best performing experiment for each number of
     CPUs, the best of several runs, how each region scales, and how experiments compare region by region. What
@@ -202,7 +238,7 @@ class ProfilingManager(ABC, Generic[AppT]):
             writes and how a layout is realised in its own input files.
         control (ControlSource | None): Where the control every experiment perturbs comes from.
             None (the default) is enough to read and plot experiments that already exist, and is rejected by
-            generate_scaling_experiments, which has nothing to perturb without it.
+            generate_scaling_experiments and generate_experiments, which have nothing to perturb without it.
 
     Raises:
         ValueError: If the study file records calls made with another application than this one, or if the record
@@ -841,11 +877,7 @@ class ProfilingManager(ABC, Generic[AppT]):
             Exception: Whatever the workflow engine raises, unchanged. No experiment is registered when it
                 does.
         """
-        if self.control is None:
-            raise ValueError(
-                "Cannot generate experiments without a control: every experiment is a perturbation of one, so "
-                "there is nothing to generate from. Pass a ControlSource to this manager."
-            )
+        self._refuse_no_control()
         self._validate_sizing(num_nodes_list, cores_per_node)
         if regenerate_failed:
             # Which runs failed is the engine's to say, and a status does not outlive the session: an experiment
@@ -854,7 +886,142 @@ class ProfilingManager(ABC, Generic[AppT]):
         plans = self._plan_experiments(
             num_nodes_list, cores_per_node, walltime, allocations, max_layouts, regenerate_failed
         )
+        self._generate("generate_scaling_experiments", plans, **runner_options)
 
+    def _plan_choices(self, choices: list[ConfigurationChoice]) -> list[ExperimentPlan]:
+        """Returns the experiments to create for a list of configuration choices, one per choice not held yet.
+
+        What generate_experiments decides, separated from what it then does with it: nothing here touches the
+        working directory.
+
+        Args:
+            choices (list[ConfigurationChoice]): The choices.
+
+        Returns:
+            list[ExperimentPlan]: What to create, in the order of the choices.
+
+        Raises:
+            ValueError: If two of the choices are the same configuration, or if a choice and its layout both
+                give a list for the same key.
+        """
+        plans: list[ExperimentPlan] = []
+        asked: set[tuple[str | None, str]] = set()
+        held = self._held_identities()
+        number = self._last_number()
+        for choice in choices:
+            key = None if choice.layout is None else self.application.layout_key(choice.layout)
+            identity = (key, json.dumps(choice.changes, sort_keys=True))
+            if identity in asked:
+                raise ValueError(
+                    f"Two of the configuration choices are the same configuration: the layout {key} with the "
+                    f"changes {choice.changes}. A study has one experiment for each configuration, so give it once."
+                )
+            asked.add(identity)
+
+            name = held.get(identity)
+            if name is not None:
+                logger.info(f"Experiment {name} already exists for this configuration choice. Skipping addition.")
+                labels = self.experiments[name].labels
+                if labels != choice.labels:
+                    logger.warning(
+                        f"Experiment {name} keeps the labels it has, {labels}, and not those of the configuration "
+                        f"choice it was found for, {choice.labels}."
+                    )
+                continue
+
+            # With a layout, the application says what the layout comes to and the choice has the last word.
+            # Without one, the layout is the control's, and the application has nothing to say.
+            changes = (
+                choice.changes
+                if choice.layout is None
+                else _merge_changes(self.application.config_changes(choice.layout), choice.changes)
+            )
+            number += 1
+            plans.append(
+                ExperimentPlan(
+                    name=f"exp-{number:04d}",
+                    layout=choice.layout,
+                    changes=changes,
+                    walltime_hours=None,
+                    stated_changes=choice.changes,
+                    labels=choice.labels,
+                )
+            )
+
+        return plans
+
+    def generate_experiments(self, choices: list[ConfigurationChoice], **runner_options) -> None:
+        """Generates one experiment for each configuration choice, whatever it is that the choices change.
+
+        Where generate_scaling_experiments searches for the layouts of a study, this method searches nothing: a
+        study states each configuration it wants an experiment of, as changes to the files of the control, and
+        this creates them all with one call to the workflow engine. A study of a setting on the layout of the
+        control gives changes alone, and one that varies the layout as well gives each choice a layout, for
+        example one that select_layouts returned.
+
+        What an experiment changes is worked out from its choice:
+
+        - without a layout, the changes are the choice's own, and the application is not consulted;
+        - with a layout, they are the changes realising the layout, as the application states them, with the
+          choice's merged over them. Mappings are merged key by key and the choice wins. Where both give a list
+          for the same key, the call is refused, since lists are the workflow engine's to merge.
+
+        Nothing checks the changes of a choice against its layout. The application works out what a layout
+        comes to from its own fields, so a choice that changes a setting those depend on does not change them.
+        Nothing here states a walltime either: it is one of the changes, in the file the engine reads it from.
+
+        The experiments are numbered on from those the study already has, and calls accumulate: the
+        experiments of a study need not come from one call, nor from one of the two generating methods. A
+        choice the study already has an experiment for is skipped. That is told from the experiments' records,
+        by the layout and the changes, so that calling this method again in a later session generates nothing
+        twice, and an experiment of a scaling study is the experiment of its layout with no changes. The
+        labels are not part of it: an experiment found this way keeps the labels it has, with a warning where
+        the choice gives others.
+
+        There is no regenerating a failed experiment here. A corrected change is another configuration, and so
+        another experiment, and the failed one is deleted with delete_experiments.
+
+        As with generate_scaling_experiments, the experiments become known to this manager only once the
+        engine has created them, and a generation that fails registers nothing.
+
+        Args:
+            choices (list[ConfigurationChoice]): The configurations to create an experiment for.
+            **runner_options (Any): Further options for the workflow engine, passed through to
+                _create_experiments.
+
+        Raises:
+            ValueError: If this manager has no control, if two of the choices are the same configuration, or if
+                a choice and its layout both give a list for the same key.
+            Exception: Whatever the workflow engine raises, unchanged. No experiment is registered when it
+                does.
+        """
+        self._refuse_no_control()
+        self._generate("generate_experiments", self._plan_choices(choices), **runner_options)
+
+    def _refuse_no_control(self) -> None:
+        """Refuses to generate experiments for a manager that was given no control.
+
+        Raises:
+            ValueError: If this manager has no control.
+        """
+        if self.control is None:
+            raise ValueError(
+                "Cannot generate experiments without a control: every experiment is a perturbation of one, so "
+                "there is nothing to generate from. Pass a ControlSource to this manager."
+            )
+
+    def _generate(self, call: str, plans: list[ExperimentPlan], **runner_options) -> None:
+        """Creates the planned experiments and starts holding them: what follows planning, whatever planned them.
+
+        Args:
+            call (str): The method that planned them, for the history of the study.
+            plans (list[ExperimentPlan]): What to create.
+            **runner_options: The options the call was given for the engine.
+
+        Raises:
+            Exception: Whatever the workflow engine raises, unchanged. No experiment is registered when it
+                does.
+        """
         if not plans:
             logger.warning("No new experiments to generate. Will skip generation.")
             return
@@ -893,11 +1060,14 @@ class ProfilingManager(ABC, Generic[AppT]):
                 )
             raise
 
+        # What the study stated goes into each record, since it is what tells the experiment from the others.
+        planned = {plan.name: plan for plan in plans}
         for name, experiment in created.items():
-            experiment.changes = {}
+            experiment.changes = planned[name].stated_changes
+            experiment.labels = dict(planned[name].labels)
             self.experiments[name] = experiment
             self._write_record(name)
-        self._log("generate_scaling_experiments", [plan.name for plan in plans], generated=True, **runner_options)
+        self._log(call, [plan.name for plan in plans], generated=True, **runner_options)
 
     def _refuse_plans(self, plans: list[ExperimentPlan], **runner_options) -> None:
         """Refuses the planned experiments that this manager's workflow engine can tell it could not create.
@@ -919,20 +1089,22 @@ class ProfilingManager(ABC, Generic[AppT]):
     def _create_experiments(self, plans: list[ExperimentPlan], **runner_options) -> dict[str, ProfilingExperiment]:
         """Creates the planned experiments with this manager's workflow engine.
 
-        Called once with everything generate_scaling_experiments decided to create, so that an engine which
-        sets up many experiments in one invocation is invoked once, and only with what `_refuse_plans` let
-        through.
+        Called once with everything generate_scaling_experiments or generate_experiments decided to create, so
+        that an engine which sets up many experiments in one invocation is invoked once, and only with what
+        `_refuse_plans` let through.
         Raising abandons the whole call and registers nothing.
 
         Args:
             plans (list[ExperimentPlan]): What to create. A plan marked as regenerating corrects an experiment
                 this manager already holds, so the engine is to apply its changes to what is already there
-                rather than start it over.
-            **runner_options: Whatever generate_scaling_experiments was passed for this engine.
+                rather than start it over. A plan without a layout keeps the layout of the control, and one
+                without a walltime states none beyond what its changes say.
+            **runner_options: Whatever the generating method was passed for this engine.
 
         Returns:
-            dict[str, ProfilingExperiment]: The experiments this manager is to start holding, keyed by name.
-                The ones being regenerated are left out, being held already.
+            dict[str, ProfilingExperiment]: The experiments this manager is to start holding, keyed by name,
+                each with the layout of its plan. The ones being regenerated are left out, being held already.
+                The stated changes and the labels of each plan are put on its experiment by the caller.
         """
 
     @abstractmethod

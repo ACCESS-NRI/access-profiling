@@ -3,6 +3,7 @@
 
 import dataclasses
 from pathlib import Path
+from unittest import mock
 
 import pytest
 from access.config.parallel_allocation_strategies import FixedAllocation, FreeAllocation, RootAllocation
@@ -12,7 +13,9 @@ from access.config.parallel_domain import Domain
 from conftest import component_of, layout_of, select_layouts
 
 from access.profiling.cice5_parser import CICE5ProfilingParser
+from access.profiling.control import GitControlSource
 from access.profiling.esmf_parser import ESMFSummaryProfilingParser
+from access.profiling.experiment import ConfigurationChoice
 from access.profiling.fms_parser import FMSProfilingParser
 from access.profiling.models.cice import CICEPartitioning
 from access.profiling.models.om3 import (
@@ -39,6 +42,7 @@ from access.profiling.models.om3 import (
     OM3_WAVE_NAME,
     OM3Configuration,
 )
+from access.profiling.payu_manager import PayuManager
 
 # A configuration whose sea ice leaves the search a process grid to choose, which no preset does: the 100 km
 # scheme, cartesian with one block row, with no block size chosen from the rank count, so the search splits the x
@@ -805,3 +809,136 @@ def test_om3_ships_a_control_for_every_configuration():
     }
     assert all(sources[name].start_point.startswith("dev-") for name in set(sources) - released)
     assert om3.OM3_MC_PANAN4KM_JRA_RYF_ISF_SOURCE.start_point == "dev-MC_panan4km_jra_ryf+isf"
+
+
+class TestOM3ConfigurationChoices:
+    """A study of how CICE6 distributes its blocks, on one layout and with one manager, end to end."""
+
+    @mock.patch("access.profiling.payu_manager.ExperimentGenerator")
+    def test_each_distribution_is_an_experiment_of_the_released_layout(self, mock_experiment_generator, tmp_path):
+        manager = PayuManager(
+            tmp_path / "work",
+            tmp_path / "archive",
+            OM3_MC_100KM,
+            GitControlSource("https://example.com/repo", "commit"),
+            lab_dir=Path("/fake/lab"),
+        )
+        layout = _om3_layout(OM3_MC_100KM, 312, OM3_MC_100KM_CORES)
+        distributions = {"exp-0001": "cartesian", "exp-0002": "roundrobin"}
+
+        manager.generate_experiments(
+            [
+                ConfigurationChoice(
+                    {
+                        "config.yaml": {"walltime": "2:00:00"},
+                        "ice_in": {"domain_nml": {"distribution_type": f"'{distribution}'"}},
+                    },
+                    layout=layout,
+                    labels={"distribution": distribution},
+                )
+                for distribution in distributions.values()
+            ],
+            control_options={},
+        )
+
+        mock_experiment_generator.assert_called_once()
+        perturbations = mock_experiment_generator.call_args[0][0]["Perturbation_Experiment"]
+        blocks = {block["branches"][0]: block for block in perturbations.values()}
+        assert list(blocks) == list(distributions)
+        for name, distribution in distributions.items():
+            # The blocks the layout comes to and the distribution the choice states, in the one namelist group.
+            assert blocks[name]["ice_in"] == {
+                "domain_nml": {
+                    "block_size_x": "15",
+                    "block_size_y": "54",
+                    "max_blocks": "-1",
+                    "nx_global": "360",
+                    "ny_global": "324",
+                    "distribution_type": f"'{distribution}'",
+                }
+            }
+            assert blocks[name]["config.yaml"] == {"ncpus": 312, "walltime": "2:00:00", "experiment": name}
+            assert blocks[name]["nuopc.runconfig"]["PELAYOUT_attributes"]["ocn_ntasks"] == 288
+            assert manager.experiments[name].labels == {"distribution": distribution}
+            assert manager.layout_key(name) == "om3-layout_MC-100km_atm_24_cpl_24_ice_24_ocn_288_rof_24"
+
+    @mock.patch("access.profiling.payu_manager.ExperimentGenerator")
+    def test_a_manager_of_another_configuration_is_refused(self, mock_experiment_generator, tmp_path):
+        """A study has one application, which its study file records, so a manager built with another one over the
+        same directories is refused, with both named, rather than with the components alone."""
+        control = GitControlSource("https://example.com/repo", "commit")
+        study = PayuManager(tmp_path / "work", tmp_path / "archive", OM3_MC_100KM, control, lab_dir=Path("/fake/lab"))
+        layout = _om3_layout(OM3_MC_100KM, 312, OM3_MC_100KM_CORES)
+        study.generate_experiments([ConfigurationChoice(layout=layout)], control_options={})
+        mock_experiment_generator.reset_mock()
+
+        message = (
+            r"was made with OM3Configuration 'MC-100km', as its study file records, but this manager's application "
+            r"is OM3Configuration 'MCW-100km'"
+        )
+        with pytest.raises(ValueError, match=message):
+            PayuManager(tmp_path / "work", tmp_path / "archive", OM3_MCW_100KM, control, lab_dir=Path("/fake/lab"))
+        mock_experiment_generator.assert_not_called()
+
+
+class TestBlockSizeChoices:
+    """A study of CICE6's block size states one choice for each range of blocks per rank and each layout."""
+
+    @pytest.fixture(scope="class")
+    def layouts(self):
+        """The layout of the control, with 24 cores for the sea ice, and the same with 20."""
+        return [
+            _om3_layout(OM3_MC_100KM, 312, OM3_MC_100KM_CORES),
+            _om3_layout(OM3_MC_100KM, 312, {**OM3_MC_100KM_CORES, OM3_SEA_ICE_NAME: 20}),
+        ]
+
+    def test_each_range_is_a_choice_on_each_layout(self, layouts):
+        choices = OM3_MC_100KM.block_size_choices(
+            layouts, {"1": (1, 1), "5-8": (5, 8)}, changes={"config.yaml": {"walltime": "6:00:00"}}
+        )
+
+        assert [(choice.labels, choice.layout) for choice in choices] == [
+            ({"blocks per rank": "1"}, layouts[0]),
+            ({"blocks per rank": "1"}, layouts[1]),
+            ({"blocks per rank": "5-8"}, layouts[0]),
+            ({"blocks per rank": "5-8"}, layouts[1]),
+        ]
+        # One block per rank is one column of blocks per rank, as wide as the grid divided by the ranks.
+        assert choices[1].changes == {
+            "config.yaml": {"walltime": "6:00:00"},
+            "ice_in": {
+                "domain_nml": {
+                    "block_size_x": "18",
+                    "block_size_y": "324",
+                    "max_blocks": "-1",
+                    "nx_global": "360",
+                    "ny_global": "324",
+                }
+            },
+        }
+        # The range of the configuration itself states the block size the configuration would have chosen.
+        assert choices[2].changes["ice_in"] == OM3_MC_100KM.config_changes(layouts[0])["ice_in"]
+
+    def test_a_layout_with_no_block_size_for_a_range_is_left_out_of_it(self, layouts, caplog):
+        with caplog.at_level("INFO"):
+            choices = OM3_MC_100KM.block_size_choices(layouts, {"many": (10**5, 10**5)})
+
+        assert choices == []
+        assert "No block size gives each of the 24 ranks of the sea ice 100000 to 100000 blocks" in caplog.text
+
+    def test_the_label_and_the_rest_of_the_namelist_are_the_studys(self, layouts):
+        """Other groups of the namelist are changed alongside the block size, and the label has the key asked for."""
+        (choice,) = OM3_MC_100KM.block_size_choices(
+            layouts[:1], {"one": (1, 1)}, changes={"ice_in": {"dynamics_nml": {"ndte": "240"}}}, label="blocks"
+        )
+
+        assert choice.labels == {"blocks": "one"}
+        assert choice.changes["ice_in"]["dynamics_nml"] == {"ndte": "240"}
+        assert choice.changes["ice_in"]["domain_nml"]["block_size_x"] == "15"
+
+    def test_changes_stating_the_blocks_themselves_are_refused(self, layouts):
+        """Every choice states the namelist group of the blocks, so changes to it would be silently replaced."""
+        with pytest.raises(ValueError, match="The changes set the domain_nml group of ice_in"):
+            OM3_MC_100KM.block_size_choices(
+                layouts, {"1": (1, 1)}, changes={"ice_in": {"domain_nml": {"distribution_type": "'roundrobin'"}}}
+            )

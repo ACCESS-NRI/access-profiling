@@ -76,6 +76,8 @@ The package can be used for different kinds of profiling study. Each kind has a 
 
 - [Comparing experiments](user-guide/comparing-experiments.md): put experiments that differ in build,
   configuration or parallelisation layout side by side, region by region.
+- [Configuration choices](user-guide/configuration-choices.md): create one experiment for each setting of the
+  application that you want to compare.
 - [Run-to-run variability](user-guide/run-to-run-variability.md): run the same experiment several times, and see
   how much its timings vary.
 - [Best layout for a budget](user-guide/best-layout.md): run every layout of one number of cores, and pick the

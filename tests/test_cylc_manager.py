@@ -14,7 +14,13 @@ import pytest
 from access.profiling.control import ExistingDirectoryControlSource
 from access.profiling.cylc_manager import CylcRoseManager
 from access.profiling.cylc_parser import CylcDBReader, CylcProfilingParser
-from access.profiling.experiment import RECORD_FILENAME, ExperimentPlan, ProfilingExperiment, ProfilingExperimentStatus
+from access.profiling.experiment import (
+    RECORD_FILENAME,
+    ConfigurationChoice,
+    ExperimentPlan,
+    ProfilingExperiment,
+    ProfilingExperimentStatus,
+)
 from access.profiling.manager import STUDY_FILENAME, ProfilingManager
 from access.profiling.rose_configuration import RoseSuiteConfiguration
 
@@ -641,11 +647,11 @@ def test_archive_experiments_defaults(mock_archive, manager):
 
 
 class TestLayoutGenerationHook:
-    """The creation hook the base class calls once a scaling study has decided what to generate.
+    """The creation hook the base class calls once a study has decided what to generate.
 
-    Nothing here yet knows how to search over a rose-suite.conf, so the hook declines rather than quietly
-    creating experiments that run the control's own layout - a study of identical suites would look like a
-    flat scaling curve rather than like the missing feature it is.
+    Nothing here yet knows how to search over a rose-suite.conf, nor how to write a change into one, so the hook
+    declines rather than quietly creating experiments that run the control's own layout - a study of identical
+    suites would look like a flat scaling curve rather than like the missing feature it is.
     """
 
     def test_creating_planned_experiments_is_refused(self, manager):
@@ -677,6 +683,28 @@ class TestLayoutGenerationHook:
             manager.generate_scaling_experiments([1.0], cores_per_node=48, walltime=2.0)
 
         mock_create.assert_not_called()
+        assert manager.experiments == {}
+
+    def test_configuration_choices_reach_the_hook_and_are_refused(self, tmp_path, caplog):
+        """A choice without a layout asks the configuration nothing, so it is the hook that says no.
+
+        It says so before the study takes a number for the choice: nothing was started, so nothing is written and
+        nothing is said to exist.
+        """
+
+        manager = CylcRoseManager(
+            tmp_path / "work",
+            tmp_path / "archive",
+            mock_configuration(),
+            control=ExistingDirectoryControlSource(tmp_path / "control"),
+        )
+
+        with pytest.raises(NotImplementedError, match="Generating experiments is not supported for Cylc Rose suites"):
+            manager.generate_experiments([ConfigurationChoice({"rose-suite.conf": {"NPROC": 4}})])
+
+        assert not (manager.work_dir / STUDY_FILENAME).exists()
+        assert "Some may already exist" not in caplog.text
+
         assert manager.experiments == {}
 
 

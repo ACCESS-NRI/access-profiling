@@ -16,6 +16,7 @@ from access.config.parallel_mpi_grid import MPICartesianGrid
 
 from access.profiling.experiment import (
     RECORD_FILENAME,
+    ConfigurationChoice,
     ProfilingExperiment,
     ProfilingExperimentStatus,
     ProfilingLog,
@@ -986,3 +987,48 @@ class TestReadVersioned:
             ValueError, match=r"The record '.*file\.json' cannot be read, since it is not JSON: Expecting"
         ):
             read_versioned('{"version": 1, "path"', tmp_path / "file.json", "record", 1, [])
+
+
+class TestConfigurationChoice:
+    """A configuration choice states what an experiment's record can hold and give back as it was."""
+
+    def test_it_changes_nothing_and_keeps_the_layout_of_the_control_by_default(self):
+        choice = ConfigurationChoice()
+
+        assert choice.changes == {} and choice.layout is None and choice.labels == {}
+
+    def test_it_holds_what_it_is_given(self):
+        layout = recorded_layout()
+        choice = ConfigurationChoice({"ice_in": {"domain_nml": {"block_size_x": 30}}}, layout, {"blocks": "30x54"})
+
+        assert choice.changes == {"ice_in": {"domain_nml": {"block_size_x": 30}}}
+        assert choice.layout is layout
+        assert choice.labels == {"blocks": "30x54"}
+
+    @pytest.mark.parametrize("changes", [{"config.yaml": {"input": Path("/some/input")}}, {"config.yaml": {1, 2}}])
+    def test_changes_that_are_not_json_values_are_refused(self, changes):
+        with pytest.raises(
+            ValueError, match="The changes of a configuration choice must be JSON values: strings, .* Got"
+        ):
+            ConfigurationChoice(changes)
+
+    @pytest.mark.parametrize("changes", [{"config.yaml": {"input": ("a", "b")}}, {"config.yaml": {1: "a"}}])
+    def test_changes_a_record_would_not_give_back_are_refused(self, changes):
+        """A tuple is read back as a list and a number as a string, so the experiment would not be recognised."""
+        with pytest.raises(ValueError, match="changes of a configuration choice .* is not what it was"):
+            ConfigurationChoice(changes)
+
+    @pytest.mark.parametrize("labels", [{"where": Path("/some/input")}, {"blocks": (30, 54)}])
+    def test_labels_are_held_to_the_same(self, labels):
+        with pytest.raises(ValueError, match="The labels of a configuration choice must be JSON values"):
+            ConfigurationChoice(labels=labels)
+
+    def test_a_string_of_another_kind_is_kept_as_it_is(self):
+        """A YAML library's quoted string is a string, and the quotes are in its type: it must not be rebuilt."""
+
+        class Quoted(str):
+            pass
+
+        choice = ConfigurationChoice({"config.yaml": {"env": {"ESMF_RUNTIME_PROFILE": Quoted("on")}}})
+
+        assert type(choice.changes["config.yaml"]["env"]["ESMF_RUNTIME_PROFILE"]) is Quoted

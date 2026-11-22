@@ -8,7 +8,7 @@ organised: the general modules first, and then those implementing them for the A
 | [Managers](managers.md) | `manager` | Generating, running, archiving and analysing experiments, whatever the workflow engine |
 | [Applications](applications.md) | `application` | What a study profiles, and the logs it writes |
 | [Control sources](control.md) | `control` | Where the control configuration comes from |
-| [Experiments](experiments.md) | `experiment` | Experiments, their statuses and their logs |
+| [Experiments](experiments.md) | `experiment` | Experiments, their statuses and their logs, and configuration choices |
 | [Parsers](parsers.md) | `parser` | Reading profiling logs |
 | [Metrics](metrics.md) | `metrics` | The quantities parsed for each region |
 | [Scaling and plotting](plotting.md) | `scaling`, `plotting_utils` | Speedup, efficiency and the plots |
@@ -38,9 +38,10 @@ The presets of the ACCESS models and their control sources are imported from the
 `access.profiling.models.esm16` and so on, which the [Models](models.md) page lists.
 
 The package also exports the other types a study or an application is written with. From the general layer,
-these are the base class of the managers, `ProfilingManager`, the experiments and their statuses,
-`ProfilingExperiment` and `ProfilingExperimentStatus`, and the logs and how an application declares them,
-`ProfilingLog`, `LogSpec` and `log_at`. It also exports the application types, the control sources,
+these are the base class of the managers, `ProfilingManager`, and the experiments and their statuses,
+`ProfilingExperiment` and `ProfilingExperimentStatus`. They also include the configurations a study asks
+experiments for, `ConfigurationChoice`, and the logs and how an application declares them, `ProfilingLog`, `LogSpec`
+and `log_at`. It also exports the application types, the control sources,
 `ProfilingMetric` and the parsers, and, for the ACCESS models, the configuration types, the component types and the
 CICE partitioning types.
 

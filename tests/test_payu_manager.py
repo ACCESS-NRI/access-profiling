@@ -17,7 +17,7 @@ from access.config.parallel_domain import Domain
 from conftest import grid_of
 
 from access.profiling.control import GitControlSource
-from access.profiling.experiment import RECORD_FILENAME, ProfilingLog
+from access.profiling.experiment import RECORD_FILENAME, ConfigurationChoice, ProfilingLog
 from access.profiling.manager import STUDY_FILENAME, ProfilingManager
 from access.profiling.payu_configuration import PayuConfiguration
 from access.profiling.payu_manager import (
@@ -2083,3 +2083,216 @@ class TestNumberedExperiments:
         (entry,) = manager._read_study()["history"]
         assert manager.control is not None and manager.laboratory is not None
         assert (entry["control"], entry["engine"]) == (None, {})
+
+
+class TestConfigurationChoices:
+    """Experiments of configuration choices, as the experiment generator is asked for them."""
+
+    WALLTIME = {"config.yaml": {"walltime": "2:00:00"}}
+    ROUNDROBIN = {"ice_in": {"domain_nml": {"distribution_type": "'roundrobin'"}}}
+
+    @staticmethod
+    def blocks(mock_experiment_generator) -> dict[str, dict]:
+        """The perturbation blocks of the last call to the generator, keyed by their one branch."""
+        perturbations = mock_experiment_generator.call_args[0][0]["Perturbation_Experiment"]
+        assert all(len(block["branches"]) == 1 for block in perturbations.values())
+        return {block["branches"][0]: block for block in perturbations.values()}
+
+    @staticmethod
+    def layouts(manager) -> list:
+        """The four layouts of the mock model on 4 cores, as a study would find them."""
+        return manager.select_layouts(4, allocations=MOCK_ALLOCATIONS)
+
+    @mock.patch("access.profiling.payu_manager.ExperimentGenerator")
+    def test_a_choice_without_a_layout_writes_what_it_states(self, mock_experiment_generator, manager):
+        manager.generate_experiments(
+            [ConfigurationChoice(self.WALLTIME), ConfigurationChoice({**self.WALLTIME, **self.ROUNDROBIN})],
+            control_options={"some": "option"},
+        )
+
+        mock_experiment_generator.assert_called_once()
+        config = mock_experiment_generator.call_args[0][0]
+        assert config["Control_Experiment"] == {
+            "some": "option",
+            "config.yaml": {"laboratory": str(manager.laboratory)},
+        }
+        assert self.blocks(mock_experiment_generator) == {
+            "exp-0001": {"branches": ["exp-0001"], "config.yaml": {"walltime": "2:00:00", "experiment": "exp-0001"}},
+            "exp-0002": {
+                "branches": ["exp-0002"],
+                "config.yaml": {"walltime": "2:00:00", "experiment": "exp-0002"},
+                **self.ROUNDROBIN,
+            },
+        }
+        assert manager.experiments["exp-0002"].path == manager.work_dir / "exp-0002" / "config"
+        assert manager.experiments["exp-0002"].layout is None
+
+    @mock.patch("access.profiling.payu_manager.ExperimentGenerator")
+    def test_a_choice_stating_no_walltime_keeps_that_of_the_control(self, mock_experiment_generator, manager):
+        manager.generate_experiments([ConfigurationChoice(self.ROUNDROBIN)], control_options={})
+
+        assert self.blocks(mock_experiment_generator)["exp-0001"]["config.yaml"] == {"experiment": "exp-0001"}
+
+    @mock.patch("access.profiling.payu_manager.ExperimentGenerator")
+    def test_the_changes_of_a_choice_are_left_as_they_were(self, mock_experiment_generator, manager):
+        """The name Payu needs is added to what the generator is given, not to what the study stated."""
+        changes = {"config.yaml": {"walltime": "2:00:00"}}
+
+        manager.generate_experiments([ConfigurationChoice(changes)], control_options={})
+
+        assert changes == {"config.yaml": {"walltime": "2:00:00"}}
+        assert manager.experiments["exp-0001"].changes == {"config.yaml": {"walltime": "2:00:00"}}
+
+    @mock.patch("access.profiling.payu_manager.ExperimentGenerator")
+    def test_a_choice_with_a_layout_is_merged_over_what_the_layout_comes_to(self, mock_experiment_generator, manager):
+        layout = self.layouts(manager)[0]
+
+        manager.generate_experiments(
+            [ConfigurationChoice({**self.WALLTIME, **self.ROUNDROBIN}, layout=layout)], control_options={}
+        )
+
+        assert self.blocks(mock_experiment_generator)["exp-0001"] == {
+            "branches": ["exp-0001"],
+            "config.yaml": {
+                "submodels": [[{"ncpus": 2}, {"ncpus": 2}]],
+                "walltime": "2:00:00",
+                "experiment": "exp-0001",
+            },
+            **self.ROUNDROBIN,
+        }
+
+    @mock.patch("access.profiling.payu_manager.ExperimentGenerator")
+    def test_the_choice_has_the_last_word_and_the_layout_keeps_the_rest(self, mock_experiment_generator, manager):
+        """Mappings are merged key by key at every depth, and a value both give is the choice's."""
+        layout = self.layouts(manager)[0]
+        of_the_layout = {
+            "config.yaml": {"ncpus": 4},
+            "ice_in": {"domain_nml": {"nprocs": 2, "distribution_type": "'cartesian'"}, "grid_nml": {"ncat": 5}},
+        }
+
+        with mock.patch.object(manager.application, "config_changes", return_value=of_the_layout):
+            manager.generate_experiments([ConfigurationChoice(self.ROUNDROBIN, layout=layout)], control_options={})
+
+        block = self.blocks(mock_experiment_generator)["exp-0001"]
+        assert block["ice_in"] == {
+            "domain_nml": {"nprocs": 2, "distribution_type": "'roundrobin'"},
+            "grid_nml": {"ncat": 5},
+        }
+        assert block["config.yaml"] == {"ncpus": 4, "experiment": "exp-0001"}
+        # What the application returned may be something it holds, so it is not written into.
+        assert of_the_layout["ice_in"]["domain_nml"]["distribution_type"] == "'cartesian'"
+        assert "experiment" not in of_the_layout["config.yaml"]
+
+    @mock.patch("access.profiling.payu_manager.ExperimentGenerator")
+    def test_a_value_of_another_kind_replaces_what_the_layout_gives(self, mock_experiment_generator, manager):
+        """Only two lists are refused: a list may replace a number, and a number a mapping."""
+        layout = self.layouts(manager)[0]
+        of_the_layout = {"ice_in": {"domain_nml": {"nprocs": 2}, "grid_nml": {"ncat": 5}}}
+
+        with mock.patch.object(manager.application, "config_changes", return_value=of_the_layout):
+            manager.generate_experiments(
+                [ConfigurationChoice({"ice_in": {"domain_nml": {"nprocs": [[1, 2]]}, "grid_nml": 7}}, layout=layout)],
+                control_options={},
+            )
+
+        assert self.blocks(mock_experiment_generator)["exp-0001"]["ice_in"] == {
+            "domain_nml": {"nprocs": [[1, 2]]},
+            "grid_nml": 7,
+        }
+
+    @mock.patch("access.profiling.payu_manager.ExperimentGenerator")
+    def test_a_list_given_by_both_is_refused(self, mock_experiment_generator, manager):
+        """The generator merges a list position by position, which is not for this package to reproduce."""
+        layout = self.layouts(manager)[0]
+        choice = ConfigurationChoice({"config.yaml": {"submodels": [["PRESERVE", {"input": ["forcing"]}]]}}, layout)
+
+        with pytest.raises(ValueError, match="give a list for config.yaml > submodels, and two lists cannot be merged"):
+            manager.generate_experiments([choice], control_options={})
+
+        mock_experiment_generator.assert_not_called()
+        assert manager.experiments == {}
+        assert not (manager.work_dir / STUDY_FILENAME).exists(), "so no number was taken"
+
+    @mock.patch("access.profiling.payu_manager.ExperimentGenerator")
+    def test_the_record_keeps_the_layout_and_only_what_the_choice_states(self, mock_experiment_generator, manager):
+        layout = self.layouts(manager)[0]
+
+        manager.generate_experiments(
+            [ConfigurationChoice(self.ROUNDROBIN, layout=layout, labels={"distribution": "roundrobin"})],
+            control_options={},
+        )
+
+        record = json.loads((manager.work_dir / "exp-0001" / RECORD_FILENAME).read_text())
+        assert record["changes"] == self.ROUNDROBIN, "and not what the layout comes to as well"
+        assert record["labels"] == {"distribution": "roundrobin"}
+        assert record["layout"]["n_cores"] == 4
+        assert manager.layout_key("exp-0001") == manager.application.layout_key(layout)
+
+    @mock.patch("access.profiling.payu_manager.ExperimentGenerator")
+    def test_one_layout_with_other_changes_is_another_experiment(self, mock_experiment_generator, manager):
+        layout = self.layouts(manager)[0]
+
+        manager.generate_experiments(
+            [ConfigurationChoice(layout=layout), ConfigurationChoice(self.ROUNDROBIN, layout=layout)],
+            control_options={},
+        )
+
+        assert list(manager.experiments) == ["exp-0001", "exp-0002"]
+        assert manager.layout_key("exp-0001") == manager.layout_key("exp-0002")
+
+    @mock.patch("access.profiling.payu_manager.ExperimentGenerator")
+    def test_the_same_changes_on_another_layout_are_another_experiment(self, mock_experiment_generator, manager):
+        first, second, *_ = self.layouts(manager)
+
+        manager.generate_experiments(
+            [ConfigurationChoice(self.ROUNDROBIN, layout=first), ConfigurationChoice(self.ROUNDROBIN, layout=second)],
+            control_options={},
+        )
+        mock_experiment_generator.reset_mock()
+        manager.generate_experiments(
+            [ConfigurationChoice(self.ROUNDROBIN, layout=second), ConfigurationChoice(self.ROUNDROBIN)],
+            control_options={},
+        )
+
+        assert list(self.blocks(mock_experiment_generator)) == ["exp-0003"], "the choice with no layout"
+
+    @mock.patch("access.profiling.payu_manager.ExperimentGenerator")
+    def test_an_experiment_of_a_scaling_study_is_its_layout_with_no_changes(self, mock_experiment_generator, manager):
+        """The two generating methods add to one study, and neither creates what the other has."""
+        first, second, *_ = self.layouts(manager)
+        manager.generate_experiments([ConfigurationChoice(layout=first)], control_options={})
+
+        manager.generate_scaling_experiments(
+            num_nodes_list=[1.0], control_options={}, cores_per_node=4, walltime=2.0, allocations=MOCK_ALLOCATIONS
+        )
+        assert list(manager.experiments) == ["exp-0001", "exp-0002", "exp-0003", "exp-0004"]
+        mock_experiment_generator.reset_mock()
+
+        manager.generate_experiments([ConfigurationChoice(layout=second)], control_options={})
+        mock_experiment_generator.assert_not_called()
+
+    @pytest.mark.parametrize("key", ["laboratory", "experiment"])
+    @mock.patch("access.profiling.payu_manager.ExperimentGenerator")
+    def test_a_choice_naming_what_the_manager_sets_is_refused(self, mock_experiment_generator, manager, key):
+        choice = ConfigurationChoice({"config.yaml": {"walltime": "2:00:00", key: "mine"}})
+
+        with pytest.raises(ValueError, match=rf"set \['{key}'\] in config.yaml, which the manager sets itself"):
+            manager.generate_experiments([choice], control_options={})
+
+        mock_experiment_generator.assert_not_called()
+        assert manager.experiments == {}
+        assert not (manager.work_dir / STUDY_FILENAME).exists(), "nor is a number taken"
+
+    @mock.patch("access.profiling.payu_manager.ExperimentGenerator")
+    def test_the_same_key_in_another_file_is_none_of_payus(self, mock_experiment_generator, manager):
+        manager.generate_experiments([ConfigurationChoice({"ice_in": {"experiment": "mine"}})], control_options={})
+
+        assert self.blocks(mock_experiment_generator)["exp-0001"]["ice_in"] == {"experiment": "mine"}
+
+    @mock.patch("access.profiling.payu_manager.ExperimentGenerator")
+    def test_the_engine_options_are_in_the_history(self, mock_experiment_generator, manager):
+        manager.generate_experiments([ConfigurationChoice(self.WALLTIME)], control_options={"some": "option"})
+
+        (entry,) = manager._read_study()["history"]
+        assert entry["call"] == "generate_experiments"
+        assert entry["engine"] == {"laboratory": str(manager.laboratory), "control_options": {"some": "option"}}
