@@ -28,12 +28,14 @@ import shutil
 import tarfile
 import textwrap
 from abc import ABC, abstractmethod
-from collections.abc import Callable
+from collections.abc import Callable, Hashable, Sequence
 from datetime import UTC, datetime
 from importlib.metadata import PackageNotFoundError, version
+from numbers import Real
 from pathlib import Path
 from typing import Generic, TypeVar
 
+import pandas as pd
 import xarray as xr
 from access.config.parallel_allocation_strategies import RootAllocation
 from access.config.parallel_component import ComponentLayout, ParallelComponent
@@ -45,6 +47,7 @@ from access.profiling.control import ControlSource
 from access.profiling.experiment import (
     RECORD_FILENAME,
     ConfigurationChoice,
+    ExperimentCoordinate,
     ExperimentPlan,
     ProfilingExperiment,
     ProfilingExperimentStatus,
@@ -54,7 +57,7 @@ from access.profiling.experiment import (
     read_versioned,
 )
 from access.profiling.metrics import ProfilingMetric
-from access.profiling.plotting_utils import RegionGroup, plot_bar_metrics
+from access.profiling.plotting_utils import RegionGroup, plot_bar_metrics, plot_line_metrics
 from access.profiling.scaling import plot_component_scaling, plot_scaling_metrics
 
 logger = logging.getLogger(__name__)
@@ -83,6 +86,22 @@ _RUN_DIM_ERROR = (
     "Profiling data still has a 'run' dimension. Use select_best_run() to keep the best run of each experiment, "
     "or aggregate_runs() to reduce over runs."
 )
+
+# The statistics the runs of an experiment can be reduced with, named as the methods of a dataset computing them.
+_RUN_STATISTICS = ("min", "max", "mean", "median")
+
+
+def _check_run_statistic(how: str) -> None:
+    """Refuses a statistic the runs of an experiment cannot be reduced with.
+
+    Args:
+        how (str): Name of the statistic.
+
+    Raises:
+        ValueError: If how is not one of "min", "max", "mean" or "median".
+    """
+    if how not in _RUN_STATISTICS:
+        raise ValueError(f"Unknown reduction '{how}'. Use 'min', 'max', 'mean' or 'median'.")
 
 
 def _write_whole(path: Path, text: str) -> None:
@@ -174,6 +193,35 @@ def find_component(layout: ComponentLayout, name: str) -> ComponentLayout | None
     return None
 
 
+def component_cores(name: str) -> ExperimentCoordinate:
+    """Returns the coordinate that is the number of cores a layout gives the named component.
+
+    The component is looked for at any depth of the layout, as `find_component` looks for it, and the coordinate is
+    named `"<name> cores"`.
+
+    Args:
+        name (str): Name of the component, as the layout names it.
+
+    Returns:
+        ExperimentCoordinate: The coordinate. Its value raises `ValueError` for a layout that holds no such
+            component.
+    """
+
+    def cores(layout: ComponentLayout) -> int:
+        found = find_component(layout, name)
+        if found is None:
+            raise ValueError(f"The layout holds no component '{name}'. It holds {sorted(_component_names(layout))}.")
+        return found.n_cores
+
+    return ExperimentCoordinate(f"{name} cores", cores)
+
+
+def _coordinate_name(coordinate: ExperimentCoordinate | str) -> str:
+    """Returns what a coordinate is called: its name, or the key of the label it is."""
+
+    return coordinate if isinstance(coordinate, str) else coordinate.name
+
+
 def _note_shared_core_counts(component: str, cores: dict[str, int]) -> None:
     """Says which experiments measured a component on the same number of cores as another.
 
@@ -219,9 +267,9 @@ class ProfilingManager(ABC, Generic[AppT]):
     finds the experiments of its working directory
     and of its archive directory again when it is built. It keeps track of the status they reach, archives
     them, and parses, selects and plots their profiling data: the best performing experiment for each number of
-    CPUs, the best of several runs, how each region scales, and how experiments compare region by region. What
-    depends on the workflow engine - creating, running and deleting the experiments, and reading what the engine
-    recorded about them - is left to each subclass.
+    CPUs, the best of several runs, how each region scales, how experiments compare region by region, and how a
+    region changes with whatever the study varied. What depends on the workflow engine - creating, running and
+    deleting the experiments, and reading what the engine recorded about them - is left to each subclass.
 
     A manager is the workflow engine, and nothing about any one application: what is being profiled arrives
     as an Application and what it is profiled against as a ControlSource. So a subclass is written once
@@ -1531,20 +1579,21 @@ class ProfilingManager(ABC, Generic[AppT]):
 
         Note that each region and each metric is reduced independently, so unlike select_best_run() the result does
         not correspond to any run that actually took place: with how="min", different regions can come from
-        different runs. Use "min" to estimate the best achievable timings and "mean" or "median" to describe the
-        typical ones. Integer metrics, such as call counts, become floats.
+        different runs. Use "min" to estimate the best achievable timings, "max" the worst, and "mean" or "median"
+        to describe the typical ones. Integer metrics, such as call counts, become floats.
 
         Datasets without a 'run' dimension are left untouched, so this is safe to call on any manager. The reduction
-        is destructive: call parse_profiling_data() again to recover the individual runs.
+        is destructive: call parse_profiling_data() again to recover the individual runs. To reduce the runs only
+        for what gather() returns, leaving the parsed data as it is, pass it `runs` instead.
 
         Args:
-            how (str): Statistic to compute over the runs. One of "min", "mean" or "median". Defaults to "min".
+            how (str): Statistic to compute over the runs. One of "min", "max", "mean" or "median". Defaults to
+                "min".
 
         Raises:
             ValueError: If how is not one of the supported statistics.
         """
-        if how not in ("min", "mean", "median"):
-            raise ValueError(f"Unknown reduction '{how}'. Use 'min', 'mean' or 'median'.")
+        _check_run_statistic(how)
         for exp_name, components in self.data.items():
             self.data[exp_name] = {
                 name: getattr(ds, how)("run") if "run" in ds.dims else ds for name, ds in components.items()
@@ -1608,6 +1657,51 @@ class ProfilingManager(ABC, Generic[AppT]):
 
         return plot_scaling_metrics(scaling_data, metric, xlabel=xlabel, show=show)
 
+    def _coordinate_value(self, exp_name: str, coordinate: ExperimentCoordinate | str) -> Hashable:
+        """Returns the value one coordinate has for one experiment.
+
+        A string is the key of one of the experiment's labels. Anything else is read from the layout the
+        experiment runs.
+
+        Args:
+            exp_name (str): Name of the experiment.
+            coordinate (ExperimentCoordinate | str): The coordinate, or the key of a label.
+
+        Returns:
+            Hashable: The value.
+
+        Raises:
+            ValueError: If the experiment has no such label, if the label is a list or a mapping, if the
+                experiment's layout cannot be told, or if the layout does not have the quantity.
+            NotImplementedError: If this manager's applications have no layout to read.
+        """
+        if isinstance(coordinate, str):
+            labels = self.experiments[exp_name].labels
+            if coordinate not in labels:
+                raise ValueError(
+                    f"Experiment '{exp_name}' has no label '{coordinate}'. Its labels are {sorted(labels)}."
+                )
+            value = labels[coordinate]
+            # Every other JSON value is one experiments can be told apart and grouped by.
+            if isinstance(value, list | dict):
+                raise ValueError(
+                    f"The label '{coordinate}' of experiment '{exp_name}' is {value!r}. A list or a mapping "
+                    "cannot be a coordinate, so give the label a string or a number."
+                )
+            return value
+
+        layout = self._layout(exp_name)
+        if layout is None:
+            raise ValueError(
+                f"The layout of experiment '{exp_name}' could not be read, so there is nothing to read "
+                f"'{coordinate.name}' from."
+            )
+        try:
+            return coordinate.value(layout)
+        except ValueError as error:
+            # The coordinate is handed a layout and nothing else, so only here can the experiment be named.
+            raise ValueError(f"Experiment '{exp_name}' has no '{coordinate.name}'. {error}") from error
+
     def _component_cores(self, exp_name: str, component: str) -> int:
         """Returns the cores an experiment gave one of its components.
 
@@ -1624,20 +1718,7 @@ class ProfilingManager(ABC, Generic[AppT]):
             ValueError: If the experiment's layout cannot be told, or names no such component.
             NotImplementedError: If this manager's applications have no layout to read.
         """
-        layout = self._layout(exp_name)
-        if layout is None:
-            raise ValueError(
-                f"The layout of experiment '{exp_name}' could not be read, so there is nothing to say how "
-                f"many cores it gave '{component}'."
-            )
-
-        found = find_component(layout, component)
-        if found is None:
-            raise ValueError(
-                f"The layout of experiment '{exp_name}' holds no component '{component}'. It holds "
-                f"{sorted(_component_names(layout))}."
-            )
-        return found.n_cores
+        return self._coordinate_value(exp_name, component_cores(component))
 
     def _group_component(self, group: RegionGroup) -> str:
         """Returns the component a group of regions is to be read against.
@@ -1655,26 +1736,28 @@ class ProfilingManager(ABC, Generic[AppT]):
         # its own name, and a caller naming regions says which component each group is.
         return self.application.component_for_log(group.log) or group.log
 
-    def _selected_experiments(self, experiments: list[str] | None) -> list[str]:
-        """Returns the experiments a plot is to read, having checked there is something to read.
+    def _selected_experiments(self, experiments: list[str] | None, allow_runs: bool = False) -> list[str]:
+        """Returns the experiments a plot or a table is to read, having checked there is something to read.
 
-        Held here rather than written out per plot: the three ask the same three questions, and the one
+        Held here rather than written out per plot: they all ask the same three questions, and the one
         that did not ask them failed obscurely instead - a bare KeyError for an unknown name, and a
         division by zero inside the bar plotter for an empty selection.
 
         Args:
             experiments (list[str] | None): Experiments asked for, or None for every one with parsed data.
+            allow_runs (bool): Whether data with a 'run' dimension is accepted, for a caller that reduces it
+                itself. False (the default) refuses it.
 
         Returns:
             list[str]: Their names.
 
         Raises:
             ValueError: If none are selected, if one of them has no parsed profiling data, or if that data
-                still has a 'run' dimension.
+                still has a 'run' dimension and allow_runs is False.
         """
         exp_names = experiments if experiments is not None else list(self.data.keys())
         if not exp_names:
-            raise ValueError("No experiments selected for plotting.")
+            raise ValueError("No experiments selected.")
 
         missing_experiments = [exp_name for exp_name in exp_names if exp_name not in self.data]
         if missing_experiments:
@@ -1683,7 +1766,7 @@ class ProfilingManager(ABC, Generic[AppT]):
                 f"Available experiments: {list(self.data.keys())}."
             )
 
-        if any("run" in ds.dims for exp_name in exp_names for ds in self.data[exp_name].values()):
+        if not allow_runs and any("run" in ds.dims for exp_name in exp_names for ds in self.data[exp_name].values()):
             raise ValueError(_RUN_DIM_ERROR)
 
         return exp_names
@@ -1723,6 +1806,189 @@ class ProfilingManager(ABC, Generic[AppT]):
             ds = ds.assign_coords(region=[group.label(region) for region in ds.region.values])
             selected[exp_name] = ds
         return selected
+
+    def gather(
+        self,
+        group: RegionGroup,
+        coords: Sequence[ExperimentCoordinate | str] = (),
+        experiments: list[str] | None = None,
+        runs: str | None = None,
+    ) -> xr.Dataset:
+        """Collects the regions of a group for several experiments into one dataset.
+
+        The experiments are put along a new `experiment` dimension, whose coordinate is their names. A name
+        says nothing about its experiment, so what tells the experiments apart is added as further coordinates
+        along that dimension, one for each entry of `coords`. A string is the key of a label, and the coordinate
+        holds the label of each experiment. An `ExperimentCoordinate` is read from the layout of each experiment,
+        and the coordinate has its name.
+
+        The dataset is the one a table is made from. Its `region` coordinate holds the labels of the group, as
+        the plots show them, and its variables are the metrics of the log, with their units.
+
+        Experiments that ran several times are refused, as the plots refuse them, unless `runs` says how to
+        reduce their runs. The runs are then reduced for the dataset returned only, each region and each metric
+        on its own as aggregate_runs() reduces them, and the parsed data keeps them. Taking both the fastest and
+        the slowest of the runs is how their spread is measured.
+
+        Args:
+            group (RegionGroup): Regions to collect, and the log they come from. Its `component` is ignored.
+            coords (Sequence[ExperimentCoordinate | str]): What to tell the experiments apart by: keys of
+                labels, and quantities of the layouts. Empty by default.
+            experiments (list[str] | None): Optional list of experiment names to include, in the order they are
+                given. If None, all experiments with parsed profiling data are included.
+            runs (str | None): Statistic to reduce the runs of each experiment with: "min", "max", "mean" or
+                "median". None (the default) refuses data that still has a 'run' dimension.
+
+        Returns:
+            xr.Dataset: The regions of the group for every experiment, along `experiment` and `region`.
+
+        Raises:
+            ValueError: If runs is not one of the statistics, if no experiments are selected, if a selected
+                experiment has no parsed profiling data, if no profiling data is found for the group's log, if a
+                requested region is missing, if the profiling data still has a 'run' dimension and runs is None,
+                if two coordinates have the same name or one is named as a coordinate the data has of its own, if
+                an experiment has no such label or the label is a list or a mapping, or if an experiment's layout
+                cannot be told or does not have the quantity.
+            NotImplementedError: If a quantity of the layout is asked for and the application being profiled
+                states no layout.
+        """
+        if runs is not None:
+            _check_run_statistic(runs)
+        exp_names = self._selected_experiments(experiments, allow_runs=runs is not None)
+        selected = self._group_data(group, exp_names)
+        if runs is not None:
+            selected = {name: getattr(ds, runs)("run") if "run" in ds.dims else ds for name, ds in selected.items()}
+        gathered = xr.concat(
+            [ds.expand_dims({"experiment": [exp_name]}) for exp_name, ds in selected.items()],
+            dim="experiment",
+            join="outer",
+        )
+
+        names = [_coordinate_name(coordinate) for coordinate in coords]
+        taken = sorted({name for name in names if names.count(name) > 1 or name in gathered.coords})
+        if taken:
+            raise ValueError(
+                f"The coordinates {taken} are each named more than once, counting the coordinates the data has "
+                f"of its own, {sorted(gathered.coords)}. Give each coordinate a name of its own."
+            )
+
+        # One value at a time, and put together by xarray: a value that is itself a sequence, such as a process
+        # grid, stays one value, and values of different kinds are kept as they are instead of becoming strings.
+        return gathered.assign_coords(
+            {
+                name: xr.Variable.concat(
+                    [xr.Variable((), self._coordinate_value(exp_name, coordinate)) for exp_name in exp_names],
+                    dim="experiment",
+                )
+                for name, coordinate in zip(names, coords, strict=True)
+            }
+        )
+
+    def table(
+        self,
+        group: RegionGroup,
+        metric: ProfilingMetric,
+        index: ExperimentCoordinate | str,
+        columns: ExperimentCoordinate | str | None = None,
+        experiments: list[str] | None = None,
+        runs: str | None = None,
+    ) -> pd.DataFrame:
+        """Returns a metric of the regions of a group as a table, arranged by what tells the experiments apart.
+
+        This is what gather() collects, with the experiments found again by the values of their coordinates
+        instead of by their names. There is a row for each value of `index`, sorted, as plot_metric() sorts its
+        x-axis. There is a column for each region of the group, in the order of the group and under its labels,
+        and with `columns`, one for each value of that coordinate within each region, in the order the
+        experiments give the values, as plot_metric() orders its series. A cell no experiment has values for is
+        left empty.
+
+        A table holds numbers rather than quantities, so the values are in the units of the metric, which the
+        table states in its `attrs`, under "units".
+
+        Args:
+            group (RegionGroup): Regions to tabulate, and the log they come from. Its `component` is ignored.
+            metric (ProfilingMetric): The metric to tabulate.
+            index (ExperimentCoordinate | str): What the rows are: the key of a label, or a quantity of the layout.
+            columns (ExperimentCoordinate | str | None): What the columns of each region are, in the same way.
+                None (the default) gives each region a single column.
+            experiments (list[str] | None): Experiments to tabulate. None (the default) tabulates all of those
+                with parsed profiling data.
+            runs (str | None): Statistic to reduce the runs of each experiment with, as for gather(). None (the
+                default) refuses data that still has a 'run' dimension.
+
+        Returns:
+            pd.DataFrame: The table.
+
+        Raises:
+            ValueError: If two experiments have the same values of `index` and `columns`, since a cell holds one
+                value, if the metric has more than one value for each experiment and region, or for any of the
+                reasons gather() raises.
+            NotImplementedError: If a quantity of the layout is asked for and the application being profiled
+                states no layout.
+        """
+        coords = [index] if columns is None else [index, columns]
+        names = [_coordinate_name(coordinate) for coordinate in coords]
+        gathered = self.gather(group, coords, experiments, runs=runs)
+        values = gathered[metric].pint.dequantify()
+
+        extra = sorted(set(values.dims) - {"experiment", "region"})
+        if extra:
+            raise ValueError(
+                f"The metric '{metric.name}' has the dimensions {extra} besides the experiments and the regions, so "
+                "it has more values than a table has cells. Choose a metric with one value for each region."
+            )
+
+        frame = values.to_dataframe(name="value").reset_index()
+        shared = frame[frame.duplicated([*names, "region"], keep=False)].groupby(names, sort=False)["experiment"]
+        if len(shared):
+            groups = [sorted(set(experiments)) for _, experiments in shared]
+            raise ValueError(
+                f"The experiments {' and '.join(str(group) for group in groups)} share their values of {names}, so a "
+                "table cannot tell them apart. Select experiments that differ in them."
+            )
+
+        # A pivot sorts its columns, so they are put back in the order of the group and of the experiments.
+        regions = list(gathered["region"].values)
+        if columns is None:
+            table = frame.pivot(index=names[0], columns="region", values="value")
+            table = table.reindex(columns=pd.Index(regions, name="region"))
+        else:
+            table = frame.pivot(index=names[0], columns=["region", names[1]], values="value")
+            column_values = list(dict.fromkeys(gathered[names[1]].values.tolist()))
+            table = table.reindex(
+                columns=pd.MultiIndex.from_product([regions, column_values], names=["region", names[1]])
+            )
+        table.attrs["units"] = str(metric.units)
+        return table
+
+    def select_experiments(
+        self,
+        coordinate: ExperimentCoordinate | str,
+        value: Hashable,
+        experiments: list[str] | None = None,
+    ) -> list[str]:
+        """Returns the experiments with a given value of a coordinate.
+
+        The names of the experiments say nothing about them, so this is how the experiments of one setting or of
+        one layout are picked out for a plot or a table: by the key of a label, or by a quantity of the layout.
+
+        Args:
+            coordinate (ExperimentCoordinate | str): The key of a label, or a quantity of the layout.
+            value (Hashable): The value the experiments are to have.
+            experiments (list[str] | None): Experiments to select from. None (the default) selects from all of
+                those with parsed profiling data, which are the ones a plot or a table can read.
+
+        Returns:
+            list[str]: The experiments with that value, in the order they were given. Empty if none has it.
+
+        Raises:
+            ValueError: If an experiment has no such label or the label is a list or a mapping, or if an
+                experiment's layout cannot be told or does not have the quantity.
+            NotImplementedError: If a quantity of the layout is asked for and the application being profiled
+                states no layout.
+        """
+        exp_names = experiments if experiments is not None else list(self.data)
+        return [exp_name for exp_name in exp_names if self._coordinate_value(exp_name, coordinate) == value]
 
     def plot_component_scaling_data(
         self,
@@ -1810,12 +2076,17 @@ class ProfilingManager(ABC, Generic[AppT]):
         experiment_relabel_map: dict | None = None,
         experiments: list[str] | None = None,
         show: bool = True,
+        label: ExperimentCoordinate | str | None = None,
     ) -> Figure:
         """Plots a bar chart of a profiling metric over regions, grouped by experiment.
 
         Regions are placed along the x-axis, in the order the groups give them, with one bar per
         experiment within each. No cores appear on either axis, so each group's `component` is ignored
         here, as it is by plot_scaling_data.
+
+        The bars of an experiment are named after it, unless `experiment_relabel_map` names them otherwise or
+        `label` names them by a coordinate. A coordinate names them as `"<name> <value>"`, as plot_metric() names
+        its series, and so needs a value of its own for every experiment plotted.
 
         Args:
             groups (list[RegionGroup]): Regions to plot, and the logs they come from. Each region becomes
@@ -1827,16 +2098,38 @@ class ProfilingManager(ABC, Generic[AppT]):
             experiments (list[str] | None): Optional list of experiment names to include. If None, all
                 experiments are included.
             show (bool): Whether to show the generated plot. Default: True.
+            label (ExperimentCoordinate | str | None): What to name the bars of each experiment by: the key of a
+                label, or a quantity of the layout. None (the default) names them after the experiment, or as
+                experiment_relabel_map says.
 
         Returns:
             Figure: The Matplotlib figure containing the bar chart.
 
         Raises:
-            ValueError: If no experiments are selected, if a selected experiment has no parsed profiling
-                data, if no profiling data is found for a group's log, if a requested region is missing, or
-                if the profiling data still has a 'run' dimension.
+            ValueError: If both experiment_relabel_map and label are given, if no experiments are selected, if a
+                selected experiment has no parsed profiling data, if no profiling data is found for a group's
+                log, if a requested region is missing, if the profiling data still has a 'run' dimension, if two
+                experiments have the same value of label, or if label cannot be read for an experiment.
+            NotImplementedError: If label is a quantity of the layout and the application being profiled states
+                no layout.
         """
+        if label is not None and experiment_relabel_map is not None:
+            raise ValueError("Give experiment_relabel_map or label, not both: both say what the bars are named.")
         exp_names = self._selected_experiments(experiments)
+
+        if label is not None:
+            name = _coordinate_name(label)
+            named: dict[str, list[str]] = {}
+            for exp_name in exp_names:
+                named.setdefault(f"{name} {self._coordinate_value(exp_name, label)}", []).append(exp_name)
+            shared = {bars: names for bars, names in named.items() if len(names) > 1}
+            if shared:
+                clashes = "; ".join(f"{names} would all be '{bars}'" for bars, names in shared.items())
+                raise ValueError(
+                    f"The bars of each experiment need a name of their own, but the experiments {clashes}. Select "
+                    f"experiments that differ in '{name}'."
+                )
+            experiment_relabel_map = {exp_name: bars for bars, names in named.items() for exp_name in names}
 
         region_labels: list[str] = []
         bar_data: dict[str, list[float]] = {exp_name: [] for exp_name in exp_names}
@@ -1851,3 +2144,124 @@ class ProfilingManager(ABC, Generic[AppT]):
         relabelled_bar_data = {exp_relabel.get(k, k): v for k, v in bar_data.items()}
 
         return plot_bar_metrics(relabelled_bar_data, region_labels, metric, show=show)
+
+    def _points(
+        self, exp_names: list[str], x: ExperimentCoordinate | str, series: ExperimentCoordinate | str | None
+    ) -> dict[Hashable, dict[Real, list[str]]]:
+        """Returns which experiments are at each point of a plot of a metric against a coordinate.
+
+        Says, at INFO, which experiments share a point: the fastest of them is what gets plotted, and a reader
+        of the figure should be told that the point is the best of several.
+
+        Args:
+            exp_names (list[str]): Experiments to place.
+            x (ExperimentCoordinate | str): What the experiments are placed along the x-axis by.
+            series (ExperimentCoordinate | str | None): What the experiments are divided into lines by, if
+                anything.
+
+        Returns:
+            dict[Hashable, dict[Real, list[str]]]: The experiments at each point, keyed by the value of the
+                series, in the order the experiments give them, and then by the value of x. Without a series,
+                the one key is None.
+
+        Raises:
+            ValueError: If a coordinate cannot be read for an experiment, or if a value of x is not a number.
+        """
+        points: dict[Hashable, dict[Real, list[str]]] = {}
+        for exp_name in exp_names:
+            x_value = self._coordinate_value(exp_name, x)
+            if not isinstance(x_value, Real):
+                raise ValueError(
+                    f"Experiment '{exp_name}' has the value {x_value!r} for '{_coordinate_name(x)}', which is not "
+                    "a number, so it has no place along an x-axis. Use the coordinate as the series instead, or "
+                    "compare the experiments with plot_bar_chart."
+                )
+            series_value = None if series is None else self._coordinate_value(exp_name, series)
+            points.setdefault(series_value, {}).setdefault(x_value, []).append(exp_name)
+
+        for series_value, along_x in points.items():
+            for x_value, names in sorted(along_x.items()):
+                if len(names) > 1:
+                    where = f"'{_coordinate_name(x)}' {x_value}"
+                    if series is not None:
+                        where += f" and '{_coordinate_name(series)}' {series_value}"
+                    logger.info(
+                        f"Experiments {sorted(names)} all have {where}. Plotting the fastest of them at that point."
+                    )
+        return points
+
+    def plot_metric(
+        self,
+        groups: list[RegionGroup],
+        metric: ProfilingMetric,
+        x: ExperimentCoordinate | str,
+        series: ExperimentCoordinate | str | None = None,
+        experiments: list[str] | None = None,
+        xlabel: str | None = None,
+        ylabel: str | None = None,
+        show: bool = True,
+    ) -> Figure:
+        """Plots a metric for the given regions against a coordinate of the experiments.
+
+        Where plot_component_scaling_data puts the cores of a component along the x-axis, this puts whatever
+        the study varied: one of the labels of the experiments, named by its key, or a quantity of their
+        layouts, given as an `ExperimentCoordinate`. Its values must be numbers. The axes are linear and no
+        ideal line is drawn, since the coordinate need not be a number of cores.
+
+        Each region is one line. With `series`, the experiments are first divided by the value of another
+        coordinate, and each region has one line for each value, in the order the experiments give the values.
+        A line is labelled with its region, followed by the name and the value of the series.
+
+        Where several experiments share both the value of `x` and the value of `series`, the fastest of them is
+        what is plotted, and they are reported at INFO. The fastest is taken region by region, as
+        plot_component_scaling_data takes it. Each group's `component` is ignored here.
+
+        Args:
+            groups (list[RegionGroup]): Regions to plot, and the logs they come from.
+            metric (ProfilingMetric): The metric to plot.
+            x (ExperimentCoordinate | str): What goes along the x-axis: the key of a label, or a quantity of
+                the layout.
+            series (ExperimentCoordinate | str | None): What the experiments are divided into lines by: the key
+                of a label, or a quantity of the layout. None (the default) draws one line for each region.
+            experiments (list[str] | None): Experiments to plot. None (the default) plots all of those
+                with parsed profiling data.
+            xlabel (str | None): Optional label for the x-axis. If None, the name of `x` is used.
+            ylabel (str | None): Optional label for the y-axis. If None, the metric names it.
+            show (bool): Whether to show the generated plot. Default: True.
+
+        Returns:
+            Figure: The Matplotlib figure the lines are plotted on.
+
+        Raises:
+            ValueError: If no experiments are selected, if a selected experiment has no parsed profiling
+                data, if no profiling data is found for a group's log, if a requested region is missing, if
+                the profiling data still has a 'run' dimension, if an experiment has no such label or the label
+                is a list or a mapping, if an experiment's layout cannot be told or does not have the quantity,
+                or if a value of `x` is not a number.
+            NotImplementedError: If a quantity of the layout is asked for and the application being profiled
+                states no layout.
+        """
+        exp_names = self._selected_experiments(experiments)
+        # What was asked for is settled first, as plot_component_scaling_data settles it.
+        selected = [self._group_data(group, exp_names) for group in groups]
+        points = self._points(exp_names, x, series)
+
+        lines = []
+        for group, group_data in zip(groups, selected, strict=True):
+            # By position rather than by label, as plot_bar_chart reads the regions.
+            for index, region in enumerate(group.regions):
+                values = {
+                    exp_name: float(ds[metric].isel(region=index).pint.dequantify())
+                    for exp_name, ds in group_data.items()
+                }
+                for series_value, along_x in points.items():
+                    label = group.label(region)
+                    if series is not None:
+                        label += f", {_coordinate_name(series)} {series_value}"
+                    x_values = sorted(along_x)
+                    fastest = [min(values[exp_name] for exp_name in along_x[x_value]) for x_value in x_values]
+                    lines.append((label, x_values, fastest))
+
+        return plot_line_metrics(
+            lines, metric, xlabel=xlabel if xlabel is not None else _coordinate_name(x), ylabel=ylabel, show=show
+        )

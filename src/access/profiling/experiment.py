@@ -7,7 +7,8 @@ A `ProfilingExperiment` is one experiment held by a manager: the directory it ru
 and, once they are known, the cores it occupied and the layout it ran. Once finished it can be archived to a
 tarball, and it is read from the tarball after that. A `ProfilingLog` pairs one log file with the parser that
 reads it. A `ConfigurationChoice` is one configuration a study asks an experiment for, and an `ExperimentPlan` is
-an experiment a manager has decided to create, before any workflow engine has touched it.
+an experiment a manager has decided to create, before any workflow engine has touched it. An `ExperimentCoordinate`
+is a quantity of an experiment's layout that a table or a plot puts the experiments side by side by.
 
 An experiment's name says nothing about it, so what it is has to be written down. Each experiment has a record, a
 small JSON file named `RECORD_FILENAME`: in its directory under the working directory, and as the first member of
@@ -27,7 +28,7 @@ import os
 import tarfile
 import tempfile
 import time
-from collections.abc import Iterable
+from collections.abc import Callable, Hashable, Iterable
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from enum import Enum
@@ -224,6 +225,26 @@ class ExperimentPlan:
     regenerating: bool = False
     stated_changes: dict = field(default_factory=dict)
     labels: dict = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class ExperimentCoordinate:
+    """A quantity of the layout an experiment runs, which a table or a plot puts the experiments side by side by.
+
+    The experiments of a study differ in two kinds of things. What the study says about an experiment is in its
+    labels, and a label is named by its key, as a plain string. What the layout of an experiment says is read with
+    a coordinate: a name and a function that works the quantity out from a layout, such as the number of cores the
+    layout gives one component. Nothing is read out of the name of an experiment.
+
+    Args:
+        name (str): What the quantity is called. It names the coordinate in the data
+            `ProfilingManager.gather` returns, and is the default label of an axis.
+        value (Callable[[ComponentLayout], Hashable]): Returns the quantity for a layout. It raises `ValueError`
+            for a layout that does not have the quantity.
+    """
+
+    name: str
+    value: Callable[[ComponentLayout], Hashable]
 
 
 class ProfilingExperimentStatus(Enum):

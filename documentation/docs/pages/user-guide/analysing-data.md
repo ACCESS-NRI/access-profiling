@@ -92,7 +92,7 @@ second case the regions are plotted against the cores of the whole job.
 
 ## The plots
 
-The manager can make three kinds of plot. Each of them takes the groups, a metric and, optionally, the
+The manager can make four kinds of plot. Each of them takes the groups, a metric and, optionally, the
 experiments to include, and returns the Matplotlib figure:
 
 | Method | What it plots | What it needs | Shown in |
@@ -100,6 +100,7 @@ experiments to include, and returns the Matplotlib figure:
 | [`plot_scaling_data`][access.profiling.manager.ProfilingManager.plot_scaling_data] | The speedup and parallel efficiency of every region, against the cores the whole job occupied | A single experiment for every number of CPUs | [Scaling studies](scaling-studies.md) |
 | [`plot_component_scaling_data`][access.profiling.manager.ProfilingManager.plot_component_scaling_data] | Every region against the cores of its own component | The layout of every experiment | [Scaling studies](scaling-studies.md) |
 | [`plot_bar_chart`][access.profiling.manager.ProfilingManager.plot_bar_chart] | The regions side by side, with one bar per experiment | | [Best layout for a budget](best-layout.md), [Comparing experiments](comparing-experiments.md) |
+| [`plot_metric`][access.profiling.manager.ProfilingManager.plot_metric] | Every region against a coordinate of the experiments: one of their labels, or a quantity of their layouts | A number for every experiment, in its labels or its layout | [Configuration choices](configuration-choices.md#plotting-against-a-setting) |
 
 Note that none of them accepts data that still has a `run` dimension.
 
@@ -138,6 +139,25 @@ from access.profiling.metrics import tavg, tmax
 mom5 = manager.data[name]["MOM5"]
 imbalance = (mom5[tmax] - mom5[tavg]) / mom5[tavg]
 ```
+
+To work with several experiments at once, use [`gather`][access.profiling.manager.ProfilingManager.gather]. It
+collects the regions of one group, for every experiment, into a single dataset. Here we also ask for the number of
+cores that each experiment gives MOM5, as a coordinate:
+
+```python
+from access.profiling import RegionGroup
+from access.profiling.manager import component_cores
+
+ocean = RegionGroup("MOM5", ["Total runtime"], relabel={"Total runtime": "MOM5"})
+gathered = manager.gather(ocean, [component_cores("MOM5")])
+print(gathered["MOM5 cores"].values)
+print(gathered[tmax].sel(region="MOM5").pint.dequantify().values)
+```
+
+This prints the cores of MOM5 in every experiment, and then the time that MOM5 took in each of them. The
+experiments are along a dimension named `experiment`.
+[Configuration choices](configuration-choices.md#putting-the-experiments-in-a-table) shows the coordinates in more
+detail.
 
 The functions that the scaling plots use are also available, in `access.profiling.scaling`. See
 [Scaling studies](scaling-studies.md#computing-speedup-and-efficiency) for an example.

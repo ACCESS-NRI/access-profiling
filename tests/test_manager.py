@@ -3,6 +3,7 @@
 
 import json
 import logging
+import math
 import re
 import shutil
 import tarfile
@@ -18,7 +19,7 @@ from conftest import component_of, layout_of
 
 from access.profiling.application import Application, LogSpec
 from access.profiling.control import GitControlSource
-from access.profiling.experiment import RECORD_FILENAME, ConfigurationChoice
+from access.profiling.experiment import RECORD_FILENAME, ConfigurationChoice, ExperimentCoordinate
 from access.profiling.manager import (
     STUDY_FILENAME,
     ProfilingExperiment,
@@ -26,6 +27,7 @@ from access.profiling.manager import (
     ProfilingLog,
     ProfilingManager,
     _package_version,
+    component_cores,
     find_component,
 )
 from access.profiling.metrics import count, tavg
@@ -774,7 +776,7 @@ def test_scaling_data_no_selected_experiments_raises_value_error(scaling_data):
     paths, ncpus, datasets = scaling_data
     manager = MockProfilingManager(paths, ncpus, datasets)
 
-    with pytest.raises(ValueError, match="No experiments selected for plotting"):
+    with pytest.raises(ValueError, match="No experiments selected"):
         manager.plot_scaling_data(
             [RegionGroup("component", ["Region 1"])],
             metric=tavg,
@@ -1199,6 +1201,16 @@ def test_aggregate_runs_median(run_data):
     assert run_data.data["exp1"]["component"][tavg].sel(region="Region 1").pint.dequantify().item() == 400.0
 
 
+def test_aggregate_runs_max(run_data):
+    """aggregate_runs computes the maximum over the runs, region by region."""
+
+    run_data.aggregate_runs(how="max")
+
+    ds = run_data.data["exp1"]["component"]
+    assert ds[tavg].sel(region="Region 1").pint.dequantify().item() == 600.0  # From run 3
+    assert ds[tavg].sel(region="Region 2").pint.dequantify().item() == 9.0  # From run 7
+
+
 def test_aggregate_runs_invalid_how(run_data):
     """An unsupported statistic is rejected."""
 
@@ -1292,6 +1304,27 @@ class TestFindComponent:
 
     def test_a_component_that_is_not_there(self):
         assert find_component(_layout(ocn=240), "atm") is None
+
+
+class TestComponentCores:
+    """The cores a layout gives one component, as a coordinate of the experiments."""
+
+    def test_it_is_named_after_the_component(self):
+        assert component_cores("ice").name == "ice cores"
+
+    def test_its_value_is_the_cores_the_layout_gives_the_component(self):
+        assert component_cores("ice").value(_layout(ocn=240, ice=120)) == 120
+
+    def test_cores_are_not_ranks(self):
+        """A component with two threads on each rank occupies twice as many cores as it has ranks."""
+
+        threaded = ComponentLayout(name="atm", n_cores=96, n_ranks=48, threads_per_rank=2, decomposition=None)
+
+        assert component_cores("atm").value(threaded) == 96
+
+    def test_a_layout_without_the_component(self):
+        with pytest.raises(ValueError, match="The layout holds no component 'atm'. It holds \\['model', 'ocn'\\]"):
+            component_cores("atm").value(_layout(ocn=240))
 
 
 @pytest.fixture()
@@ -1535,17 +1568,20 @@ class TestPlotComponentScalingData:
 
 
 class TestOneListDrivesEveryPlot:
-    """The point of the type: a study is described once and handed to all three plotting methods."""
+    """The point of the type: a study is described once and handed to all four plotting methods."""
 
     @staticmethod
     def _groups() -> list[RegionGroup]:
         return [RegionGroup("component", ["Region 1", "Region 2"], component="component", relabel={"Region 1": "Dyn"})]
 
+    @mock.patch("access.profiling.manager.plot_line_metrics")
     @mock.patch("access.profiling.manager.plot_bar_metrics")
     @mock.patch("access.profiling.manager.plot_component_scaling")
     @mock.patch("access.profiling.manager.plot_scaling_metrics")
-    def test_the_same_groups_label_every_figure_alike(self, mock_scaling, mock_component, mock_bar, scaling_data):
-        """A reader moving between the three figures reads one set of names."""
+    def test_the_same_groups_label_every_figure_alike(
+        self, mock_scaling, mock_component, mock_bar, mock_line, scaling_data
+    ):
+        """A reader moving between the four figures reads one set of names."""
 
         paths, ncpus, datasets = scaling_data
         manager = MockProfilingManager(paths, ncpus, datasets)
@@ -1556,11 +1592,13 @@ class TestOneListDrivesEveryPlot:
         manager.plot_scaling_data(groups, tavg)
         manager.plot_component_scaling_data(groups, tavg)
         manager.plot_bar_chart(groups, tavg)
+        manager.plot_metric(groups, tavg, component_cores("component"))
 
         expected = ["Dyn", "component: Region 2"]
         assert list(mock_scaling.call_args.args[0][0]["region"].values) == expected
         assert list(mock_component.call_args.args[0][0]["region"].values) == expected
         assert mock_bar.call_args.args[1] == expected
+        assert [label for label, _, _ in mock_line.call_args.args[0]] == expected
 
     @mock.patch("access.profiling.manager.plot_scaling_metrics")
     def test_the_component_is_ignored_where_it_cannot_be_honoured(self, mock_plot, scaling_data):
@@ -1572,6 +1610,559 @@ class TestOneListDrivesEveryPlot:
         manager.plot_scaling_data([RegionGroup("component", ["Region 1"], component="no such component")], tavg)
 
         assert list(mock_plot.call_args.args[0][0]["ncpus"].values) == sorted(ncpus)
+
+
+BLOCK_STUDY_GROUP = RegionGroup("component", ["Region 1", "Region 2"], relabel={"Region 1": "Dynamics"})
+
+
+@pytest.fixture()
+def block_study():
+    """Parsed data for four experiments that differ in the cores of a component and in a label.
+
+    | Experiment | `component` cores | `other` cores | `blocks` | Region 1 | Region 2 |
+    |---|---|---|---|---|---|
+    | exp-0001 | 120 | 60 | 4 | 50 s | 9 s |
+    | exp-0002 | 60 | 30 | 4 | 100 s | 10 s |
+    | exp-0003 | 120 | 60 | 8 | 40 s | 11 s |
+    | exp-0004 | 60 | 30 | 8 | 80 s | 12 s |
+
+    The cores are out of order, so that a plot has to sort them. Of two experiments on the same cores, neither is
+    the faster on both regions.
+    """
+    cores = [120, 60, 120, 60]
+    blocks = [4, 4, 8, 8]
+    times = [[50.0, 9.0], [100.0, 10.0], [40.0, 11.0], [80.0, 12.0]]
+    paths = [Path(f"exp-000{number}") for number in (1, 2, 3, 4)]
+    manager = MockProfilingManager(
+        paths, ncpus=[2 * n for n in cores], datasets=[make_component_dataset(values) for values in times]
+    )
+    for path, n, size in zip(paths, cores, blocks, strict=True):
+        manager.experiments[path.name].layout = _layout(component=n, other=n // 2)
+        manager.experiments[path.name].labels = {"blocks": size}
+    return manager
+
+
+class TestGather:
+    """One dataset for several experiments, with what tells them apart as coordinates."""
+
+    def test_the_experiments_are_put_along_a_dimension_of_their_names(self, block_study):
+        gathered = block_study.gather(BLOCK_STUDY_GROUP)
+
+        assert dict(gathered.sizes) == {"experiment": 4, "region": 2}
+        assert list(gathered["experiment"].values) == ["exp-0001", "exp-0002", "exp-0003", "exp-0004"]
+        assert set(gathered.coords) == {"experiment", "region"}, "nothing more unless it is asked for"
+
+    def test_the_regions_carry_the_labels_of_the_group(self, block_study):
+        gathered = block_study.gather(BLOCK_STUDY_GROUP)
+
+        assert list(gathered["region"].values) == ["Dynamics", "component: Region 2"]
+
+    def test_the_metrics_keep_their_values_and_their_units(self, block_study):
+        gathered = block_study.gather(BLOCK_STUDY_GROUP)
+
+        times = gathered[tavg].sel(region="Dynamics")
+        assert times.pint.units == tavg.units
+        assert times.pint.dequantify().values.tolist() == [50.0, 100.0, 40.0, 80.0]
+        assert gathered[count].sel(experiment="exp-0003").pint.dequantify().values.tolist() == [1, 2]
+
+    def test_a_label_is_a_coordinate_named_by_its_key(self, block_study):
+        gathered = block_study.gather(BLOCK_STUDY_GROUP, ["blocks"])
+
+        assert gathered["blocks"].dims == ("experiment",)
+        assert gathered["blocks"].values.tolist() == [4, 4, 8, 8]
+
+    def test_a_quantity_of_the_layout_is_a_coordinate_with_its_own_name(self, block_study):
+        gathered = block_study.gather(BLOCK_STUDY_GROUP, [component_cores("other"), "blocks"])
+
+        assert gathered["other cores"].dims == ("experiment",)
+        assert gathered["other cores"].values.tolist() == [60, 30, 60, 30]
+        assert gathered["blocks"].values.tolist() == [4, 4, 8, 8]
+
+    def test_the_experiments_can_be_looked_up_by_a_coordinate(self, block_study):
+        """Which is what the coordinates are for: the names say nothing."""
+
+        gathered = block_study.gather(BLOCK_STUDY_GROUP, [component_cores("component"), "blocks"])
+
+        wide = gathered.where((gathered["component cores"] == 120) & (gathered["blocks"] == 8), drop=True)
+        assert list(wide["experiment"].values) == ["exp-0003"]
+
+    def test_only_the_experiments_asked_for_in_the_order_they_are_given(self, block_study):
+        gathered = block_study.gather(BLOCK_STUDY_GROUP, ["blocks"], experiments=["exp-0004", "exp-0001"])
+
+        assert list(gathered["experiment"].values) == ["exp-0004", "exp-0001"]
+        assert gathered["blocks"].values.tolist() == [8, 4]
+        assert gathered[tavg].sel(region="Dynamics").pint.dequantify().values.tolist() == [80.0, 50.0]
+
+    def test_a_value_that_is_a_sequence_stays_one_value(self, block_study):
+        """A process grid is one value of an experiment, not a row of a table of its own."""
+
+        shape = ExperimentCoordinate("shape", lambda layout: (layout.n_cores, 1))
+        gathered = block_study.gather(BLOCK_STUDY_GROUP, [shape])
+
+        assert gathered["shape"].dims == ("experiment",)
+        assert gathered["shape"].values.tolist() == [(180, 1), (90, 1), (180, 1), (90, 1)]
+
+    def test_values_of_different_kinds_are_kept_as_they_are(self, block_study):
+        """Not all turned into strings, which is what putting them in one array does by default."""
+
+        block_study.experiments["exp-0001"].labels = {"blocks": "5-8"}
+        gathered = block_study.gather(BLOCK_STUDY_GROUP, ["blocks"])
+
+        assert gathered["blocks"].values.tolist() == ["5-8", 4, 8, 8]
+
+    def test_the_component_of_the_group_is_ignored(self, block_study):
+        group = RegionGroup("component", ["Region 1"], component="no such component")
+
+        assert dict(block_study.gather(group).sizes) == {"experiment": 4, "region": 1}
+
+    def test_experiments_of_different_sizes_keep_all_their_pes(self, block_study):
+        """Data for each PE has as many PEs as the experiment has ranks, and none of them is dropped."""
+
+        for name, n_pes in (("exp-0001", 3), ("exp-0002", 2)):
+            per_pe = xr.DataArray([[1.0] * n_pes], dims=["region", "pe"]).pint.quantify(tavg.units)
+            block_study.data[name]["per_pe"] = xr.Dataset(
+                data_vars={tavg: per_pe}, coords={"region": ["Region 1"], "pe": list(range(n_pes))}
+            )
+
+        gathered = block_study.gather(RegionGroup("per_pe", ["Region 1"]), experiments=["exp-0001", "exp-0002"])
+
+        assert dict(gathered.sizes) == {"experiment": 2, "region": 1, "pe": 3}
+        missing = gathered[tavg].pint.dequantify().isnull()
+        assert missing.sel(region="per_pe: Region 1").values.tolist() == [[False, False, False], [False, False, True]]
+
+    def test_an_experiment_without_the_label(self, block_study):
+        block_study.experiments["exp-0002"].labels = {"distribution": "roundrobin"}
+
+        with pytest.raises(
+            ValueError, match="Experiment 'exp-0002' has no label 'blocks'. Its labels are \\['distribution'\\]"
+        ):
+            block_study.gather(BLOCK_STUDY_GROUP, ["blocks"])
+
+    @pytest.mark.parametrize("value", [[5, 8], {"from": 5, "to": 8}])
+    def test_a_label_that_is_a_list_or_a_mapping(self, block_study, value):
+        """Experiments are grouped by the values of a coordinate, and neither of these can be grouped by."""
+
+        block_study.experiments["exp-0003"].labels = {"blocks": value}
+
+        with pytest.raises(ValueError, match="The label 'blocks' of experiment 'exp-0003' is .* cannot be a coord"):
+            block_study.gather(BLOCK_STUDY_GROUP, ["blocks"])
+
+    def test_an_experiment_whose_layout_cannot_be_told(self, block_study):
+        block_study.experiments["exp-0003"].layout = None
+
+        with pytest.raises(
+            ValueError, match="layout of experiment 'exp-0003' could not be read, .* read 'component cores' from"
+        ):
+            block_study.gather(BLOCK_STUDY_GROUP, [component_cores("component")])
+
+    def test_a_layout_without_the_quantity_names_the_experiment(self, block_study):
+        """The coordinate is handed a layout and nothing else, so the manager says whose layout it was."""
+
+        with pytest.raises(
+            ValueError, match="Experiment 'exp-0001' has no 'absent cores'. The layout holds no component 'absent'"
+        ):
+            block_study.gather(BLOCK_STUDY_GROUP, [component_cores("absent")])
+
+    def test_two_coordinates_with_the_same_name(self, block_study):
+        again = ExperimentCoordinate("blocks", lambda layout: layout.n_cores)
+
+        with pytest.raises(ValueError, match="The coordinates \\['blocks'\\] are each named more than once"):
+            block_study.gather(BLOCK_STUDY_GROUP, ["blocks", again])
+
+    @pytest.mark.parametrize("name", ["experiment", "region"])
+    def test_a_coordinate_named_as_one_the_data_has_of_its_own(self, block_study, name):
+        with pytest.raises(ValueError, match=f"The coordinates \\['{name}'\\] are each named more than once"):
+            block_study.gather(BLOCK_STUDY_GROUP, [ExperimentCoordinate(name, lambda layout: layout.n_cores)])
+
+    def test_no_experiments_selected(self, block_study):
+        with pytest.raises(ValueError, match="No experiments selected"):
+            block_study.gather(BLOCK_STUDY_GROUP, experiments=[])
+
+    def test_a_region_that_is_not_there(self, block_study):
+        with pytest.raises(ValueError, match="Regions \\['Region 3'\\] not found"):
+            block_study.gather(RegionGroup("component", ["Region 3"]))
+
+    def test_data_still_holding_several_runs(self, block_study):
+        data = block_study.data["exp-0001"]
+        data["component"] = data["component"].expand_dims({"run": [1]})
+
+        with pytest.raises(ValueError, match="'run' dimension"):
+            block_study.gather(BLOCK_STUDY_GROUP)
+
+
+class TestGatherReducingRuns:
+    """The runs of an experiment reduced for one dataset, with the parsed data left holding all of them."""
+
+    def test_each_region_is_reduced_on_its_own(self, run_data):
+        gathered = run_data.gather(RegionGroup("component", ["Region 1", "Region 2"]), runs="max")
+
+        assert "run" not in gathered.dims
+        # The slowest run differs between the regions: run 3 for the first, run 7 for the second.
+        assert gathered[tavg].sel(experiment="exp1").pint.dequantify().values.tolist() == [600.0, 9.0]
+
+    def test_the_parsed_data_keeps_its_runs(self, run_data):
+        """So the fastest and the slowest of the runs can both be had, which is what a spread is measured from."""
+
+        group = RegionGroup("component", ["Region 1"])
+        fastest = run_data.gather(group, runs="min")[tavg].pint.dequantify()
+        slowest = run_data.gather(group, runs="max")[tavg].pint.dequantify()
+
+        assert run_data.data["exp1"]["component"].sizes["run"] == 3
+        assert (slowest / fastest).values.tolist() == [[3.0]]
+
+    def test_an_experiment_that_ran_once_is_taken_as_it_is(self, block_study):
+        reduced = block_study.gather(BLOCK_STUDY_GROUP, ["blocks"], runs="mean")
+
+        xr.testing.assert_identical(reduced, block_study.gather(BLOCK_STUDY_GROUP, ["blocks"]))
+
+    def test_an_unknown_statistic(self, run_data):
+        with pytest.raises(ValueError, match="Unknown reduction 'sum'. Use 'min', 'max', 'mean' or 'median'."):
+            run_data.gather(RegionGroup("component", ["Region 1"]), runs="sum")
+
+
+class TestTable:
+    """A metric of the experiments as a table, with a row for each value of one coordinate and a column for each
+    value of another."""
+
+    # The regions of BLOCK_STUDY_GROUP the other way round, so that their labels are not in sorted order.
+    REVERSED_GROUP = RegionGroup("component", ["Region 2", "Region 1"], relabel={"Region 1": "Dynamics"})
+
+    def test_the_rows_are_sorted_and_the_columns_follow_the_regions(self, block_study):
+        table = block_study.table(self.REVERSED_GROUP, tavg, component_cores("component"), "blocks")
+
+        # The experiments give 120 cores first, but the rows are sorted, as plot_metric sorts its x-axis.
+        assert table.index.tolist() == [60, 120]
+        assert table.index.name == "component cores"
+        # The regions are in the order of the group, which is not the order of their labels.
+        assert table.columns.tolist() == [
+            ("component: Region 2", 4),
+            ("component: Region 2", 8),
+            ("Dynamics", 4),
+            ("Dynamics", 8),
+        ]
+        assert table.columns.names == ["region", "blocks"]
+        assert table["Dynamics"].values.tolist() == [[100.0, 80.0], [50.0, 40.0]]
+
+    def test_the_values_of_the_columns_are_in_the_order_the_experiments_give_them(self, block_study):
+        """As plot_metric orders its series: sorting would put a label such as "17" before "9-16"."""
+
+        for name, label in (("exp-0001", "9-16"), ("exp-0002", "9-16"), ("exp-0003", "17"), ("exp-0004", "17")):
+            block_study.experiments[name].labels = {"blocks": label}
+
+        table = block_study.table(BLOCK_STUDY_GROUP, tavg, component_cores("component"), "blocks")
+
+        assert table["Dynamics"].columns.tolist() == ["9-16", "17"]
+
+    def test_without_a_second_coordinate_the_columns_are_the_regions(self, block_study):
+        table = block_study.table(
+            self.REVERSED_GROUP, tavg, component_cores("component"), experiments=["exp-0001", "exp-0002"]
+        )
+
+        assert table.columns.tolist() == ["component: Region 2", "Dynamics"]
+        assert table.columns.name == "region"
+        assert table.values.tolist() == [[10.0, 100.0], [9.0, 50.0]]
+
+    def test_the_values_are_in_the_units_of_the_metric(self, block_study):
+        """A table holds numbers, not quantities, so it says what the numbers are in."""
+
+        table = block_study.table(BLOCK_STUDY_GROUP, tavg, component_cores("component"), "blocks")
+
+        assert table.attrs["units"] == str(tavg.units)
+
+    def test_a_pair_of_values_no_experiment_has_is_left_empty(self, block_study):
+        table = block_study.table(
+            BLOCK_STUDY_GROUP,
+            tavg,
+            component_cores("component"),
+            "blocks",
+            experiments=["exp-0001", "exp-0002", "exp-0003"],
+        )
+
+        assert math.isnan(table.loc[60, ("Dynamics", 8)])
+        assert table.loc[120, ("Dynamics", 8)] == 40.0
+
+    def test_the_runs_are_reduced_as_gather_reduces_them(self, run_data):
+        run_data.experiments["exp1"].labels = {"blocks": 4}
+
+        table = run_data.table(RegionGroup("component", ["Region 1"]), tavg, "blocks", runs="max")
+
+        assert table.values.tolist() == [[600.0]]
+        assert run_data.data["exp1"]["component"].sizes["run"] == 3
+
+    def test_experiments_sharing_the_values_of_both_coordinates(self, block_study):
+        """Two experiments in one cell of the table: rather than pick one, the table names them."""
+
+        with pytest.raises(
+            ValueError, match="The experiments \\['exp-0001', 'exp-0002'\\] and \\['exp-0003', 'exp-0004'\\] share"
+        ):
+            block_study.table(BLOCK_STUDY_GROUP, tavg, "blocks")
+
+    def test_a_metric_with_more_than_one_value_for_each_region(self, block_study):
+        for name, n_pes in (("exp-0001", 3), ("exp-0002", 2)):
+            per_pe = xr.DataArray([[1.0] * n_pes], dims=["region", "pe"]).pint.quantify(tavg.units)
+            block_study.data[name]["per_pe"] = xr.Dataset(
+                data_vars={tavg: per_pe}, coords={"region": ["Region 1"], "pe": list(range(n_pes))}
+            )
+
+        with pytest.raises(ValueError, match="has the dimensions \\['pe'\\] besides the experiments and the regions"):
+            block_study.table(
+                RegionGroup("per_pe", ["Region 1"]),
+                tavg,
+                component_cores("component"),
+                experiments=["exp-0001", "exp-0002"],
+            )
+
+
+class TestSelectExperiments:
+    """The experiments with one value of a coordinate, picked out by it rather than by their names."""
+
+    def test_by_a_label(self, block_study):
+        assert block_study.select_experiments("blocks", 8) == ["exp-0003", "exp-0004"]
+
+    def test_by_a_quantity_of_the_layout(self, block_study):
+        assert block_study.select_experiments(component_cores("component"), 60) == ["exp-0002", "exp-0004"]
+
+    def test_among_the_experiments_given_in_their_order(self, block_study):
+        selected = block_study.select_experiments("blocks", 4, experiments=["exp-0004", "exp-0002", "exp-0001"])
+
+        assert selected == ["exp-0002", "exp-0001"]
+
+    def test_only_the_experiments_a_plot_can_read_by_default(self, block_study):
+        """An experiment with no parsed data has its labels all the same, but nothing a plot or a table can read."""
+
+        del block_study.data["exp-0001"]
+
+        assert block_study.select_experiments("blocks", 4) == ["exp-0002"]
+
+    def test_a_value_no_experiment_has(self, block_study):
+        assert block_study.select_experiments("blocks", 16) == []
+
+
+class TestBarChartNamedByACoordinate:
+    """The bars of each experiment named by a coordinate, as plot_metric names its series."""
+
+    @mock.patch("access.profiling.manager.plot_bar_metrics")
+    def test_each_experiment_is_named_by_its_value(self, mock_plot, block_study):
+        experiments = block_study.select_experiments(component_cores("component"), 120)
+
+        block_study.plot_bar_chart([BLOCK_STUDY_GROUP], tavg, experiments=experiments, label="blocks", show=False)
+
+        assert mock_plot.call_args.args[0] == {"blocks 4": [50.0, 9.0], "blocks 8": [40.0, 11.0]}
+
+    def test_two_experiments_with_the_same_value(self, block_study):
+        """Their bars would have one name, and one experiment would replace the other in the chart."""
+
+        with pytest.raises(
+            ValueError,
+            match="the experiments \\['exp-0001', 'exp-0003'\\] would all be 'component cores 120'; "
+            "\\['exp-0002', 'exp-0004'\\] would all be 'component cores 60'",
+        ):
+            block_study.plot_bar_chart([BLOCK_STUDY_GROUP], tavg, label=component_cores("component"), show=False)
+
+    def test_a_relabel_map_as_well(self, block_study):
+        with pytest.raises(ValueError, match="Give experiment_relabel_map or label, not both"):
+            block_study.plot_bar_chart(
+                [BLOCK_STUDY_GROUP], tavg, experiment_relabel_map={"exp-0001": "one"}, label="blocks", show=False
+            )
+
+
+class TestPlotMetric:
+    """Plotting a metric against whatever the study varied, one line for each region and each series."""
+
+    @staticmethod
+    def _lines(mock_plot) -> list[tuple]:
+        """The lines handed to the plot: the label, the values along x and the values of the metric of each."""
+
+        return [tuple(line) for line in mock_plot.call_args.args[0]]
+
+    @mock.patch("access.profiling.manager.plot_line_metrics")
+    def test_each_region_is_a_line_against_the_coordinate(self, mock_plot, block_study):
+        """In the order of the coordinate, whatever the order of the experiments."""
+
+        block_study.plot_metric(
+            [BLOCK_STUDY_GROUP], tavg, component_cores("component"), experiments=["exp-0001", "exp-0002"]
+        )
+
+        assert self._lines(mock_plot) == [
+            ("Dynamics", [60, 120], [100.0, 50.0]),
+            ("component: Region 2", [60, 120], [10.0, 9.0]),
+        ]
+
+    @mock.patch("access.profiling.manager.plot_line_metrics")
+    def test_a_label_can_go_along_the_x_axis(self, mock_plot, block_study):
+        block_study.plot_metric(
+            [RegionGroup("component", ["Region 1"])], tavg, "blocks", experiments=["exp-0004", "exp-0002"]
+        )
+
+        assert self._lines(mock_plot) == [("component: Region 1", [4, 8], [100.0, 80.0])]
+
+    @mock.patch("access.profiling.manager.plot_line_metrics")
+    def test_every_group_is_plotted(self, mock_plot, block_study):
+        groups = [RegionGroup("component", ["Region 2"]), RegionGroup("component", ["Region 1"])]
+        block_study.plot_metric(groups, tavg, "blocks", experiments=["exp-0002", "exp-0004"])
+
+        assert self._lines(mock_plot) == [
+            ("component: Region 2", [4, 8], [10.0, 12.0]),
+            ("component: Region 1", [4, 8], [100.0, 80.0]),
+        ]
+
+    @mock.patch("access.profiling.manager.plot_line_metrics")
+    def test_a_series_divides_each_region_into_lines(self, mock_plot, block_study):
+        block_study.plot_metric([BLOCK_STUDY_GROUP], tavg, component_cores("component"), series="blocks")
+
+        assert self._lines(mock_plot) == [
+            ("Dynamics, blocks 4", [60, 120], [100.0, 50.0]),
+            ("Dynamics, blocks 8", [60, 120], [80.0, 40.0]),
+            ("component: Region 2, blocks 4", [60, 120], [10.0, 9.0]),
+            ("component: Region 2, blocks 8", [60, 120], [12.0, 11.0]),
+        ]
+
+    @mock.patch("access.profiling.manager.plot_line_metrics")
+    def test_the_series_come_in_the_order_the_experiments_give_them(self, mock_plot, block_study):
+        block_study.plot_metric(
+            [RegionGroup("component", ["Region 1"], relabel={"Region 1": "Dynamics"})],
+            tavg,
+            component_cores("component"),
+            series="blocks",
+            experiments=["exp-0003", "exp-0001", "exp-0002", "exp-0004"],
+        )
+
+        assert [label for label, _, _ in self._lines(mock_plot)] == ["Dynamics, blocks 8", "Dynamics, blocks 4"]
+
+    @mock.patch("access.profiling.manager.plot_line_metrics")
+    def test_a_quantity_of_the_layout_can_be_the_series(self, mock_plot, block_study):
+        block_study.plot_metric(
+            [RegionGroup("component", ["Region 1"])], tavg, "blocks", series=component_cores("component")
+        )
+
+        assert self._lines(mock_plot) == [
+            ("component: Region 1, component cores 120", [4, 8], [50.0, 40.0]),
+            ("component: Region 1, component cores 60", [4, 8], [100.0, 80.0]),
+        ]
+
+    @mock.patch("access.profiling.manager.plot_line_metrics")
+    def test_experiments_sharing_a_point_become_the_fastest_of_them_region_by_region(self, mock_plot, block_study):
+        """Without a series, two experiments are on each number of cores, and neither wins both regions."""
+
+        block_study.plot_metric([BLOCK_STUDY_GROUP], tavg, component_cores("component"))
+
+        assert self._lines(mock_plot) == [
+            ("Dynamics", [60, 120], [80.0, 40.0]),
+            ("component: Region 2", [60, 120], [10.0, 9.0]),
+        ]
+
+    def test_the_experiments_sharing_a_point_are_reported(self, block_study, caplog):
+        """A point that is the best of several is not the only measurement there was, and says so."""
+
+        with caplog.at_level(logging.INFO):
+            block_study.plot_metric([BLOCK_STUDY_GROUP], tavg, component_cores("component"), show=False)
+
+        assert "Experiments ['exp-0002', 'exp-0004'] all have 'component cores' 60. Plotting the fastest" in caplog.text
+        assert "Experiments ['exp-0001', 'exp-0003'] all have 'component cores' 120. Plotting" in caplog.text
+
+    def test_with_a_series_the_report_says_which_line_the_point_is_on(self, block_study, caplog):
+        block_study.experiments["exp-0003"].labels = {"blocks": 4}
+
+        with caplog.at_level(logging.INFO):
+            block_study.plot_metric(
+                [BLOCK_STUDY_GROUP], tavg, component_cores("component"), series="blocks", show=False
+            )
+
+        assert "Experiments ['exp-0001', 'exp-0003'] all have 'component cores' 120 and 'blocks' 4." in caplog.text
+        assert caplog.text.count("Plotting the fastest of them") == 1, "no other point is shared"
+
+    def test_nothing_is_reported_where_no_point_is_shared(self, block_study, caplog):
+        with caplog.at_level(logging.INFO):
+            block_study.plot_metric(
+                [BLOCK_STUDY_GROUP], tavg, component_cores("component"), series="blocks", show=False
+            )
+
+        assert "Plotting the fastest of them" not in caplog.text
+
+    @mock.patch("access.profiling.manager.plot_line_metrics")
+    def test_the_x_axis_is_labelled_with_the_name_of_the_coordinate(self, mock_plot, block_study):
+        block_study.plot_metric([BLOCK_STUDY_GROUP], tavg, component_cores("component"), series="blocks")
+        assert mock_plot.call_args.kwargs["xlabel"] == "component cores"
+        assert mock_plot.call_args.kwargs["ylabel"] is None
+
+        block_study.plot_metric([BLOCK_STUDY_GROUP], tavg, "blocks", series=component_cores("component"))
+        assert mock_plot.call_args.kwargs["xlabel"] == "blocks"
+
+    @mock.patch("access.profiling.manager.plot_line_metrics")
+    def test_the_axis_labels_the_metric_and_show_are_passed_on(self, mock_plot, block_study):
+        block_study.plot_metric(
+            [BLOCK_STUDY_GROUP], tavg, "blocks", xlabel="Blocks per rank", ylabel="Walltime (s)", show=False
+        )
+
+        assert mock_plot.call_args.args[1] is tavg
+        assert mock_plot.call_args.kwargs == {"xlabel": "Blocks per rank", "ylabel": "Walltime (s)", "show": False}
+
+    @mock.patch("access.profiling.manager.plot_line_metrics")
+    def test_it_is_shown_by_default(self, mock_plot, block_study):
+        block_study.plot_metric([BLOCK_STUDY_GROUP], tavg, "blocks")
+
+        assert mock_plot.call_args.kwargs["show"] is True
+
+    def test_it_returns_the_figure_it_drew(self, block_study):
+        fig = block_study.plot_metric(
+            [BLOCK_STUDY_GROUP], tavg, component_cores("component"), series="blocks", show=False
+        )
+
+        (ax,) = fig.axes
+        assert len(ax.lines) == 4
+        assert ax.get_xlabel() == "component cores"
+
+    @mock.patch("access.profiling.manager.plot_line_metrics")
+    def test_the_component_of_a_group_is_ignored(self, mock_plot, block_study):
+        group = RegionGroup("component", ["Region 1"], component="no such component")
+        block_study.plot_metric([group], tavg, "blocks", experiments=["exp-0001"])
+
+        assert self._lines(mock_plot) == [("component: Region 1", [4], [50.0])]
+
+    def test_a_value_of_x_that_is_not_a_number(self, block_study):
+        """Lines join points in the order of their numbers, and a string has no place among them."""
+
+        block_study.experiments["exp-0002"].labels = {"blocks": "5-8"}
+
+        with pytest.raises(
+            ValueError, match="Experiment 'exp-0002' has the value '5-8' for 'blocks', which is not a number"
+        ):
+            block_study.plot_metric([BLOCK_STUDY_GROUP], tavg, "blocks")
+
+    @mock.patch("access.profiling.manager.plot_line_metrics")
+    def test_a_series_need_not_be_a_number(self, mock_plot, block_study):
+        for experiment in block_study.experiments.values():
+            experiment.labels = {"distribution": "roundrobin"}
+        block_study.plot_metric(
+            [RegionGroup("component", ["Region 1"])],
+            tavg,
+            component_cores("component"),
+            series="distribution",
+            experiments=["exp-0001", "exp-0002"],
+        )
+
+        assert self._lines(mock_plot) == [("component: Region 1, distribution roundrobin", [60, 120], [100.0, 50.0])]
+
+    def test_an_experiment_without_the_label_of_the_series(self, block_study):
+        block_study.experiments["exp-0004"].labels = {}
+
+        with pytest.raises(ValueError, match="Experiment 'exp-0004' has no label 'blocks'"):
+            block_study.plot_metric([BLOCK_STUDY_GROUP], tavg, component_cores("component"), series="blocks")
+
+    def test_a_log_with_no_parsed_data_is_said_before_anything_about_the_coordinates(self, block_study):
+        with pytest.raises(ValueError, match="No profiling data found for 'absent'"):
+            block_study.plot_metric([RegionGroup("absent", ["Region 1"])], tavg, "no such label")
+
+    def test_no_experiments_selected(self, block_study):
+        with pytest.raises(ValueError, match="No experiments selected"):
+            block_study.plot_metric([BLOCK_STUDY_GROUP], tavg, "blocks", experiments=[])
+
+    def test_data_still_holding_several_runs(self, block_study):
+        data = block_study.data["exp-0001"]
+        data["component"] = data["component"].expand_dims({"run": [1]})
+
+        with pytest.raises(ValueError, match="'run' dimension"):
+            block_study.plot_metric([BLOCK_STUDY_GROUP], tavg, "blocks")
 
 
 class TestLayoutIsReadBackOnce:

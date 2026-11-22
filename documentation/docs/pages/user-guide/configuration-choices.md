@@ -3,7 +3,8 @@
 Does another setting of the sea ice make the model faster? Which value of a setting suits a parallelisation layout
 best? Studies like these compare configurations of the application that differ in a setting, and not only in their
 layout. In this tutorial we create one experiment for each configuration that we want to compare, all with a single
-manager. Our example is ACCESS-OM3 at 100 km, run with Payu, and two settings of its sea ice model, CICE6.
+manager, and then compare them in charts and tables. Our example is ACCESS-OM3 at 100 km, run with Payu, and two
+settings of its sea ice model, CICE6. The figure is drawn from synthetic data.
 
 ## Creating the manager
 
@@ -278,26 +279,149 @@ manager.run_experiments()
 ```
 
 [Managing experiments](managing-experiments.md) shows how to follow them, and how to archive them once they have
-finished. To compare them, we draw a bar chart, as in [Comparing experiments](comparing-experiments.md). We select
-the experiments by their labels, and use the labels to name the bars:
+finished. We then read the logs and choose the regions to look at, as in
+[Analysing profiling data](analysing-data.md):
 
 ```python
 from access.profiling import RegionGroup
 from access.profiling.metrics import tmax
 
-groups = [
-    RegionGroup("ESMF", ["[ensemble] RunPhase1"], relabel={"[ensemble] RunPhase1": "Whole model"}),
-    RegionGroup("ESMF", ["[ICE] RunPhase1"], relabel={"[ICE] RunPhase1": "CICE6"}),
-]
-names = [name for name, experiment in manager.experiments.items() if "distribution" in experiment.labels]
-
 manager.parse_profiling_data()
-fig = manager.plot_bar_chart(
-    groups,
-    tmax,
-    experiments=names,
-    experiment_relabel_map={name: manager.experiments[name].labels["distribution"] for name in names},
-)
+
+whole = RegionGroup("ESMF", ["[ensemble] RunPhase1"], relabel={"[ensemble] RunPhase1": "Whole model"})
+cice6 = RegionGroup("ESMF", ["[ICE] RunPhase1"], relabel={"[ICE] RunPhase1": "CICE6"})
 ```
 
-This draws one group of bars for the whole model and one for CICE6, with a bar for each distribution.
+Both regions come from the ESMF profiling summary. The first one times the whole model, and the second one the
+sea ice.
+
+To compare the three distributions, we draw a bar chart, as in [Comparing experiments](comparing-experiments.md).
+We select the experiments by their labels, and use the labels to name the bars:
+
+```python
+distributed = [name for name, experiment in manager.experiments.items() if "distribution" in experiment.labels]
+
+fig = manager.plot_bar_chart([whole, cice6], tmax, experiments=distributed, label="distribution")
+```
+
+This draws one group of bars for the whole model and one for CICE6, with a bar for each distribution. With
+`label`, the bars of each experiment are named by the value of a coordinate, such as `distribution roundrobin`. Each
+experiment must therefore have a value of its own. Otherwise the method raises a `ValueError` that names the
+experiments. To give the bars names of your own instead, use `experiment_relabel_map`, but not together with
+`label`.
+
+## Putting the experiments in a table
+
+The block sizes are numbers, so we can do more with them than name bars.
+[`gather`][access.profiling.manager.ProfilingManager.gather] collects the regions of a group, for several
+experiments, into one dataset. The names of the experiments say nothing about them, so we also ask for what tells
+the experiments apart:
+
+```python
+from access.profiling.manager import component_cores
+
+sized = [name for name, experiment in manager.experiments.items() if "blocks per rank" in experiment.labels]
+gathered = manager.gather(cice6, ["blocks per rank", component_cores("ice")], experiments=sized)
+```
+
+What tells the experiments apart is given as a list of coordinates. A coordinate is one of two things:
+
+- A string is the key of a label. Here `"blocks per rank"` gives the label of each experiment.
+- An [`ExperimentCoordinate`][access.profiling.experiment.ExperimentCoordinate] is a quantity of the layout of each
+  experiment. Here [`component_cores`][access.profiling.manager.component_cores] gives the number of cores of the
+  sea ice, under the name `ice cores`.
+
+The dataset has the experiments along a dimension named `experiment`, and the regions along `region`, under the
+labels of the group. Each coordinate has one value for each experiment. We print them next to the times:
+
+```python
+times = gathered[tmax].sel(region="CICE6").pint.dequantify()
+for blocks, cores, seconds in zip(times["blocks per rank"].values, times["ice cores"].values, times.values):
+    print(f"{blocks:2d} blocks per rank on {cores} cores: {seconds:7.1f} s")
+```
+
+This prints one line for each experiment, with its blocks per rank, the cores of its sea ice and the time that
+CICE6 took.
+
+A table is often easier to read. [`table`][access.profiling.manager.ProfilingManager.table] collects a metric in
+the same way, and puts it in a pandas `DataFrame`, with a row for each value of one coordinate and a column for
+each value of another:
+
+```python
+table = manager.table(cice6, tmax, component_cores("ice"), "blocks per rank", experiments=sized)
+print(table)
+```
+
+This prints the time of CICE6 with a row for each number of cores of the sea ice, here only 24, and a column for
+each number of blocks per rank. There are a few things to know about the table:
+
+- The rows are sorted by their value. The columns are in the order in which the experiments give their values.
+- The columns are grouped by region, under the labels of the group. Without the second coordinate, there is one
+  column for each region.
+- The numbers are in the units of the metric. The table names these units in `table.attrs["units"]`.
+- An empty cell means that no experiment has that pair of values. If two experiments have the same pair, the
+  method raises a `ValueError` that names them, since a cell holds one value.
+- Like `gather`, the method takes `runs`, to reduce the runs of each experiment without replacing the parsed data.
+  [Run-to-run variability](run-to-run-variability.md#reducing-the-runs-without-replacing-them) explains this.
+
+To look at only some of the experiments, pick them out by a value of a coordinate with
+[`select_experiments`][access.profiling.manager.ProfilingManager.select_experiments]. For example, these are the
+experiments that give the sea ice 24 cores:
+
+```python
+on_24_cores = manager.select_experiments(component_cores("ice"), 24)
+```
+
+The method returns the names of the experiments, which you can give to a table or a plot as `experiments`. It
+selects from the experiments with parsed data, because those are the ones a table or a plot can read. To select
+from a list of your own instead, give it as `experiments`.
+
+You can also define a coordinate of your own. It needs a name, and a function that works the quantity out from a
+layout. For example, this one is the number of cores of the whole layout:
+
+```python
+from access.profiling import ExperimentCoordinate
+
+layout_cores = ExperimentCoordinate("layout cores", lambda layout: layout.n_cores)
+```
+
+A layout may not have the quantity that a coordinate reads, such as the cores of a component that the layout does
+not hold. The function then has to raise a `ValueError`, and the manager says which experiment the layout belongs
+to.
+
+## Plotting against a setting
+
+[`plot_metric`][access.profiling.manager.ProfilingManager.plot_metric] draws a metric against a coordinate. We plot
+the time of CICE6 against the number of blocks of each rank:
+
+```python
+fig = manager.plot_metric([cice6], tmax, "blocks per rank", experiments=sized, xlabel="Blocks per rank")
+```
+
+<figure markdown="span">
+  ![Line plot of the time of CICE6 against the number of blocks per rank](../../assets/figures/line-plot.png)
+  <figcaption>The time of CICE6 for four block sizes on the same layout. Synthetic data.</figcaption>
+</figure>
+
+Each region is one line, and each experiment is placed along the x-axis by its value of the coordinate. In the
+example, the sea ice is fastest with 4 to 6 blocks on each rank. Both axes are linear, and there is no line of
+ideal scaling, because the coordinate does not have to be a number of cores.
+
+There are a few things to know about this plot:
+
+- The values of the coordinate must be numbers. If a label holds a string, the method raises a `ValueError`. Use
+  a bar chart for such a label.
+- If several experiments have the same value of the coordinate, the fastest of them is plotted. The manager
+  names these experiments in an INFO message.
+- With `series`, the experiments are first divided by a second coordinate. Each region then has one line for
+  each value of that coordinate.
+
+For example, a study may run these block sizes on several layouts. This call then draws one line for each number
+of cores of the sea ice:
+
+```python
+fig = manager.plot_metric([cice6], tmax, "blocks per rank", series=component_cores("ice"), experiments=sized)
+```
+
+Each line is labelled with its region and its value of the series, such as `CICE6, ice cores 24`. The series can
+also be a label, and its values do not have to be numbers.

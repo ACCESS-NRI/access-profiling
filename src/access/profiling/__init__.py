@@ -26,6 +26,7 @@ from access.profiling.cylc_parser import CylcDBReader, CylcProfilingParser
 from access.profiling.esmf_parser import ESMFSummaryProfilingParser
 from access.profiling.experiment import (
     ConfigurationChoice,
+    ExperimentCoordinate,
     ProfilingExperiment,
     ProfilingExperimentStatus,
     ProfilingLog,
@@ -69,6 +70,7 @@ __all__ = [
     "ESM16Configuration",
     "ESMFSummaryProfilingParser",
     "ExistingDirectoryControlSource",
+    "ExperimentCoordinate",
     "FixedRanksConstraint",
     "FMSProfilingParser",
     "GitControlSource",

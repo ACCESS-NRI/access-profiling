@@ -14,7 +14,8 @@ in the working directory, run them, read their logs, plot and compare them, and 
 things are not possible. The manager cannot create experiments, because the package cannot search for layouts in
 a `rose-suite.conf`, or write changes into one. Both `generate_scaling_experiments` and `generate_experiments`
 therefore raise a `NotImplementedError`. It also cannot make the component scaling plot, which needs the layout of
-every experiment.
+every experiment. For the same reason, tables and plots cannot use a quantity of the layout as a coordinate. They
+can use the labels that you give the suites.
 
 The manager works with Cylc 7 suites that are run with `rose suite-run`. It expects to find a `cylc-suite.db`
 database, the suite log in `log/suite/log`, and the job logs of every task in
@@ -108,9 +109,14 @@ the directory of the suite in the working directory, and the directory where Cyl
 not have to exist yet:
 
 ```python
-for suite in ["am3-n96e-12x12", "am3-n96e-16x16", "am3-n96e-24x24"]:
-    manager.add_rose_experiment(suite, run_path=Path.home() / "cylc-run" / suite)
+for nx, ny in [(12, 12), (16, 16), (24, 24)]:
+    suite = f"am3-n96e-{nx}x{ny}"
+    manager.add_rose_experiment(suite, run_path=Path.home() / "cylc-run" / suite, labels={"ranks": nx * ny})
 ```
+
+The `labels` are optional. They are keys and values of your own, which say what each suite is. They must be JSON
+values, such as strings, numbers and lists, since they are kept in the record of the suite. Here we record the
+number of ranks of the atmosphere, which we plot against later.
 
 The status of each suite is read from its run directory. A suite is DONE if all its tasks succeeded, FAILED if
 one of them failed, RUNNING if some tasks are still going, and NEW if it has not run. Note that if you register a
@@ -181,6 +187,17 @@ If several suites use the same number of CPUs, select the best one first with
 You can also compare suites that differ in something other than their layout, such as their OpenMP threads or
 their I/O server. Register them in the same way and compare them region by region, as in
 [Comparing experiments](../user-guide/comparing-experiments.md).
+
+The manager cannot read the layout of a suite, but it knows the labels of each suite. To plot the time against
+the ranks of the atmosphere, we pass the key of the label to
+[`plot_metric`][access.profiling.manager.ProfilingManager.plot_metric]:
+
+```python
+fig = manager.plot_metric(groups, tmax, "ranks", xlabel="Ranks of the atmosphere")
+```
+
+[Configuration choices](../user-guide/configuration-choices.md#plotting-against-a-setting) describes this plot, and
+the tables that [`gather`][access.profiling.manager.ProfilingManager.gather] makes from the same labels.
 
 ## Archiving
 

@@ -29,6 +29,7 @@ ACCESS-OM3, ACCESS-AM3, ACCESS-rAM3 and ACCESS-CM3.
 - Parsers that read every profiling log into an xarray dataset, with the timings of each region and their units.
 - Running every experiment several times, to see how much the timings vary.
 - Bar charts that compare experiments region by region, and plots of parallel speedup and efficiency.
+- Tables and line plots of the experiments against whatever a study varied, such as a setting of the application.
 - Selecting the fastest experiment for each number of cores.
 - Support for new applications, log formats and workflow engines.
 

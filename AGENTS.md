@@ -56,13 +56,14 @@ src/access/profiling/
   application.py        Application (the ABC), LogSpec, log_at
   control.py            ControlSource, GitControlSource, ExistingDirectoryControlSource: where a control is
   experiment.py         ProfilingLog (one log -> one xr.Dataset), ConfigurationChoice (one configuration a study
-                        asks an experiment for), ExperimentPlan, ProfilingExperimentStatus,
+                        asks an experiment for), ExperimentPlan, ExperimentCoordinate (a quantity of a layout that
+                        tables and plots are arranged by), ProfilingExperimentStatus,
                         ProfilingExperiment (its record, and its archive to and from a tarball)
   manager.py            ProfilingManager[AppT]: generation, records and the study file, statuses, parsing,
-                        selection and plotting
+                        selection, tables and plotting; find_component, component_cores
   parser.py             ProfilingParser (the ABC), flatten_hierarchical, aggregate_pe_data
   metrics.py            ProfilingMetric and the predefined metrics (tmin, tmax, tavg, count, ...)
-  plotting_utils.py     RegionGroup, plot_bar_metrics
+  plotting_utils.py     RegionGroup, plot_bar_metrics, plot_line_metrics
   scaling.py            parallel_speedup, parallel_efficiency, plot_scaling_metrics, plot_component_scaling
 
   ── the log parsers, one per format ──
@@ -144,10 +145,32 @@ blocks, one page per concept. A new module needs a block on the right page and a
 
 - **A `run` dimension appears only where it is needed.** `parse_profiling_data` gives a log one only when more than
   one run produced it, and selection and plotting refuse it (`_RUN_DIM_ERROR`) until `select_best_run` or
-  `aggregate_runs` has removed it.
+  `aggregate_runs` has removed it. `gather` given `runs` reduces it for the dataset it returns only, and leaves the
+  parsed data holding every run.
 - **`select_best_run` keeps a run that took place; `aggregate_runs` does not.** The first picks one run by one metric
   and keeps it in every log; the second reduces each region and metric on its own, so its minimum can mix runs.
   They answer different questions, so don't substitute one for the other.
+
+### Coordinates
+
+- **A table or a plot is arranged by coordinates, never by names.** A coordinate is the key of a label, as a plain
+  string, or an `ExperimentCoordinate`, which reads a quantity from the layout the experiment runs.
+  `_coordinate_value` is the one place that reads either, and the one place that can name the experiment in an
+  error, since a coordinate is handed a layout and nothing else.
+- **`gather` puts a coordinate together one value at a time**, with `xr.Variable.concat` over 0-d variables. This
+  keeps a value that is a sequence, such as a process grid, as one value, and keeps values of different kinds as
+  they are. One array made from the list would spread the first and turn the second into strings.
+- **`plot_metric` takes numbers along x, and anything hashable as a series.** Where several experiments share a
+  point, it keeps the fastest of them, region by region, and reports them at INFO, as
+  `plot_component_scaling_data` does. It has linear axes and no ideal line, since x need not be a number of cores.
+- **`table` pivots what `gather` collects, and never picks between experiments.** Its rows are sorted, as
+  `plot_metric` sorts x, and its columns keep the order of the group and of the experiments, as `plot_metric` orders
+  its series. Two experiments in one cell raise, naming them, rather than one being kept. A table holds numbers, not
+  quantities, so it names the units of the metric in `attrs["units"]`.
+- **Experiments are picked out and named by coordinates too.** `select_experiments` returns, of the experiments
+  with parsed data, those with one value of a coordinate. `plot_bar_chart(label=...)` names each experiment's bars
+  `<name> <value>`, as `plot_metric` names its series, and refuses two experiments with the same value, whose bars
+  would otherwise replace one another.
 
 ### Experiments
 

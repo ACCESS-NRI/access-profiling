@@ -262,6 +262,8 @@ and what they mean:
 | `Experiment '<name>' is not completed (status: RUNNING). Skipping parsing profiling data.` | Only finished experiments are parsed. Wait for the run to finish. |
 | `Profiling data still has a 'run' dimension. ...` | The experiments ran several times. See [Reducing the runs](run-to-run-variability.md#reducing-the-runs). |
 | `Several selected experiments use the same number of CPUs ...` | See [Selecting the best layouts](scaling-studies.md#selecting-the-best-layouts). |
+| `Experiment '<name>' has no label '<key>'. ...` | A table or a plot was asked for a label that one of its experiments does not have. Restrict the selection with `experiments=[...]`. |
+| `Experiment '<name>' has the value <value> for '<coordinate>', which is not a number, ...` | `plot_metric` places the experiments along the x-axis by a number. Use the coordinate as the `series`, or draw a bar chart. |
 
 Some messages are specific to one workflow engine. You can find them on its page, such as
 [Experiments with Payu](../access/payu.md#troubleshooting).
