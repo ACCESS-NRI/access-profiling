@@ -212,6 +212,27 @@ the ranks so many blocks is left out of that range, with an INFO message. Note t
 `domain_nml` group of `ice_in` themselves, since every choice states it. Make such changes in the control options
 instead.
 
+Before running a block size, it is worth checking how CICE6 will arrange its ranks. The blocks of the sea ice
+settings say it as `process_grid`, the number of ranks along x and along y. We compare 24 and 36 ranks:
+
+```python
+for ranks in (24, 36):
+    blocks = replace(sea_ice, blocks_per_rank_range=(5, 8)).blocks(ranks)
+    print(ranks, blocks.block_shape, blocks.process_grid)
+```
+
+This prints the block size and the grid of ranks for each number of ranks:
+
+```text
+24 (15, 54) (24, 1)
+36 (45, 9) (1, 36)
+```
+
+The processor shape of this configuration, `slenderX1`, puts the ranks in a single row. CICE6 keeps to it only as
+far as the blocks allow. On 36 ranks, no blocks in a single row give each rank 5 to 8 of them, so CICE6 stacks the
+ranks in a column instead. Each rank then holds a band of latitudes, and some of these bands may be all land. This
+means that the experiment measures another arrangement of the ranks as well as another block size.
+
 Finally we create the experiments, with the same call as before:
 
 ```python

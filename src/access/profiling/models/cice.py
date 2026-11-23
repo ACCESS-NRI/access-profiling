@@ -86,11 +86,17 @@ class CICEBlocks:
         block_counts (tuple[int, int]): How many blocks cover the grid along x and along y, the last of them
             padded where the size does not divide the extent.
         blocks_per_rank (int): The most blocks any rank holds, before CICE drops the blocks that are all land.
+        process_grid (tuple[int, int] | None): The ranks along x and along y that CICE arranges itself in, under
+            the distributions that form a process grid, `cartesian` and `rake`, and None under every other one. It
+            is CICE's own choice, which follows the processor shape only as far as the blocks allow. For example,
+            under `slenderX1` a grid other than one row of ranks means that CICE stacked them instead, each rank
+            then holding a band of latitudes, some of which may be all land.
     """
 
     block_shape: tuple[int, int]
     block_counts: tuple[int, int]
     blocks_per_rank: int
+    process_grid: tuple[int, int] | None
 
 
 @dataclass(frozen=True)
@@ -573,6 +579,7 @@ def _choose_blocks(partitioning: CICEPartitioning, n_ranks: int) -> CICEBlocks |
     for n_blocks_x, size_x in x_sizes.items():
         for n_blocks_y, size_y in y_sizes.items():
             n_blocks = n_blocks_x * n_blocks_y
+            process_grid: tuple[int, int] | None = None
             if forms_grid:
                 ranks_x, ranks_y = _cice_process_grid(n_ranks, n_blocks_x, n_blocks_y, partitioning.processor_shape)
                 if n_blocks_x % ranks_x or n_blocks_y % ranks_y:
@@ -580,6 +587,7 @@ def _choose_blocks(partitioning: CICEPartitioning, n_ranks: int) -> CICEBlocks |
                 per_rank = (n_blocks_x // ranks_x) * (n_blocks_y // ranks_y)
                 if not fewest <= per_rank <= most:
                     continue
+                process_grid = (ranks_x, ranks_y)
             else:
                 if not fewest * n_ranks <= n_blocks <= most * n_ranks:
                     continue
@@ -591,5 +599,5 @@ def _choose_blocks(partitioning: CICEPartitioning, n_ranks: int) -> CICEBlocks |
                 -size_x,
             )
             if best is None or key < best[0]:
-                best = (key, CICEBlocks((size_x, size_y), (n_blocks_x, n_blocks_y), per_rank))
+                best = (key, CICEBlocks((size_x, size_y), (n_blocks_x, n_blocks_y), per_rank, process_grid))
     return None if best is None else best[1]
