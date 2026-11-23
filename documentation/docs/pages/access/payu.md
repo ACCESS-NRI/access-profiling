@@ -230,6 +230,27 @@ on.
     to set `repeat` the first time you create the study. Payu also refuses to start a repeat run if there are
     archived restart files, so keep `startfrom_restart` at its default value, `"cold"`.
 
+The first run of a model is often not like the ones that follow. For example, a model that starts without sea ice
+does less work in the sea ice in its first year. To time a later part of the simulation instead, run the control
+once to spin the model up, and start every repeat from the restart files of that run. This is the `restart`
+setting of `config.yaml`, which names a directory of restart files outside the archive of the experiment:
+
+```python
+control_options["config.yaml"]["repeat"] = True
+control_options["config.yaml"]["restart"] = "/scratch/tm70/spinup/archive/restart000"
+```
+
+The path is only an example, so adapt it to the restart files of your own spin-up run. Every run of every experiment
+then starts from these restart files, so all the runs time the same period of the same simulation. There are a few
+things to keep in mind:
+
+- The spin-up run must have finished before the experiments run, since Payu reads the restart files at the start of
+  every run.
+- Every experiment reads the same restart files, whatever its layout. The model must therefore be able to read
+  them with every layout of the study.
+- The spin-up run is not part of the study. Run it with a manager of its own, so that it is not parsed or plotted
+  with the experiments.
+
 See [Run-to-run variability](../user-guide/run-to-run-variability.md) to find out how much the timings of the
 runs vary, and how to get one value per experiment.
 
