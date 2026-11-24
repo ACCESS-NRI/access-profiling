@@ -103,8 +103,12 @@ Note that neither file holds a status. The status of an experiment changes, so t
 workflow engine.
 
 Each file states the version of its own format, because a record can be read from an archive long after it was
-written. The manager checks the version when it reads a file. If the file is in another format, or is not JSON, the
-manager raises a `ValueError` that names the file.
+written. The manager checks the version when it reads a file. If the file is in another format, is not a JSON
+object or lacks one of its entries, the manager raises a `ValueError` that names the file.
+
+The manager writes both files whole. It writes the new content to a temporary file beside the old one, and then puts
+it in its place. This means that a session stopped part way through a write, for example because the disk is full,
+leaves the file as it was.
 
 ## Picking a study up in a later session
 
@@ -117,6 +121,11 @@ which `run_experiments` and `parse_profiling_data` also call first.
 You can also call `generate_scaling_experiments` again with the same arguments. Do not worry, nothing is created or
 submitted twice. The manager recognises the layouts that already have an experiment from the records, not from the
 names of the experiments.
+
+Note that a study has one application. The study file records the application of every call, so the manager
+refuses, with a `ValueError`, a study made with another one. Two configurations of a model can run the same
+components on the same grids, as the pre-industrial and historical configurations of ACCESS-ESM1.5 do. Without this
+check, a manager of one would take the experiments of the other for its own.
 
 It is also possible to add an existing experiment that was created in some other way, with
 [`add_experiment_from_directory`][access.profiling.manager.ProfilingManager.add_experiment_from_directory]. The
@@ -133,8 +142,9 @@ manager.add_experiment_from_directory(
 )
 ```
 
-Adapt the name and the path to your own experiment. The experiment keeps the name you give it. The name can be
-anything except a name of the form `exp-<digits>`, which is how the manager names the experiments it creates. The
+Adapt the name and the path to your own experiment. The experiment keeps the name you give it. The name is also the
+name of a directory, so it cannot contain a `/`. It can be anything else except a name of the form `exp-<digits>`,
+which is how the manager names the experiments it creates. The
 `labels` are optional. They must be JSON values, such as strings, numbers and lists, since they are kept in the
 record. The manager writes a record for the experiment, in `<work_dir>/<name>`, so you only add it once. You can
 then compare these experiments with each other, and with the ones the manager created, as shown in
@@ -162,11 +172,12 @@ manager.generate_scaling_experiments(
 manager.run_experiments(retry_failed=True)
 ```
 
-With `regenerate_failed=True`, the failed experiments are updated using the new arguments. The experiments that
-are running or that have finished are not touched. Note that an updated experiment keeps the status FAILED until
-it runs again. `run_experiments(retry_failed=True)` then submits the failed experiments, together with any new
-ones. See [Experiments with Payu](../access/payu.md#running-failed-experiments-again) to find out where Payu
-leaves the outputs of a failed run, and how it cleans up before running again.
+With `regenerate_failed=True`, the failed experiments are updated using the new arguments. The manager first asks the
+workflow engine how each run went, so this also finds the experiments that failed in an earlier session. The experiments
+that are running or that have finished are not touched. Note that an updated experiment keeps the status FAILED until it
+runs again. `run_experiments(retry_failed=True)` then submits the failed experiments, together with any new ones. See
+[Experiments with Payu](../access/payu.md#running-failed-experiments-again) to find out where Payu leaves the outputs of
+a failed run, and how it cleans up before running again.
 
 If the failure had nothing to do with the experiment itself, such as a node failure, there is nothing to fix. In
 that case you only need `run_experiments(retry_failed=True)`.
@@ -180,8 +191,13 @@ experiment to a `<experiment>.tar.gz` file in the archive directory and marks it
 manager reads the experiment from its archive. Note that the directory of the experiment is not deleted.
 
 The archive starts with the record of the experiment, now with its number of CPUs, so the manager reads both
-without extracting the archive. The study file is copied into the archive directory as well. This means that the
-history of a study is still there once its working directory is gone.
+without extracting the archive. If the number of CPUs cannot be read, the record leaves it `null`, with a warning,
+and the experiment is archived all the same. The study file is copied into the archive directory as well. This
+means that the history of a study is still there once its working directory is gone.
+
+An archive is written whole, to a temporary file that takes the name of the archive only once it is complete. If
+archiving stops part way, no archive is left, and you can simply archive the experiment again. An archive that
+cannot be read at all, such as an empty file, is skipped with a warning when the manager is created.
 
 You can choose what goes into the archive. `exclude_dirs` and `exclude_files` leave out the directories and files
 inside the experiment that match the given patterns. `follow_symlinks` decides what happens with symlinks. A
@@ -195,8 +211,10 @@ manager has its own defaults, which you can find on its page: [Payu](../access/p
 
 There are two ways of removing experiments.
 [`delete_experiment`][access.profiling.manager.ProfilingManager.delete_experiment] only makes the manager forget
-an experiment. It removes the record of the experiment, and nothing else on disk. Note that the archive of an
-archived experiment therefore stays, and a manager that you create later finds the experiment again from it.
+an experiment. It removes the record of the experiment and adds the call to the study file, but deletes none of
+the files of the experiment. Note that the archive of an archived experiment therefore stays, and a manager that you
+create later finds the experiment again from it. On a study that you cannot write to, such as a colleague's, the
+manager forgets the experiment in this session only, with a warning.
 [`delete_experiments`][access.profiling.manager.ProfilingManager.delete_experiments] really deletes the
 experiments, including what their workflow engine keeps for them. Since this cannot be undone, we recommend trying
 it first with `dry_run=True`, which only shows what would be deleted:
@@ -221,10 +239,15 @@ and what they mean:
 | `No layouts found for N nodes (C cores). Check the bounds and the constraints of the allocation strategy.` | The strategy admits no parallelisation layout at that size. Loosen its bounds or constraints, which [Counting the layouts](experiments.md#counting-the-layouts) shows how to check. |
 | `More than M layouts found for C cores. Only the first M enumerated will be used, ...` | `max_layouts` truncated the search, keeping the first layouts found rather than the best ones. Tighten the strategy instead. |
 | `Experiment <name> already exists for layout <key>. Skipping addition.` | Generation found a layout the manager already has an experiment for. Expected when generating a study again. |
-| `The labels of an experiment must be JSON values. ...` | The labels of an experiment that you are adding hold something a record cannot, such as a tuple or a path. Use lists, strings and numbers. The experiment is not added. |
-| `Experiment '<name>' was given a layout that is not a layout of '<application>', ...` | The manager was created with another application than the one its experiments were generated with. Printing it shows `Layout: not a layout of <application>` for them. Create the manager with their application, or give it directories of its own. |
+| `The labels of an experiment must be JSON values...` | The labels of an experiment that you are adding hold something a record cannot, such as a tuple, a path or NaN. Use lists, strings and finite numbers. The experiment is not added. |
+| `The study of the working directory '<work_dir>' and the archive directory '<archive_dir>' was made with <class> '<name>', ...` | The manager was created with another application than the one the study was made with. Create the manager with that application, or give it directories of its own. |
+| `Experiment '<name>' was given a layout that is not a layout of '<application>', ...` | The manager was created with another application than the one its experiments were generated with, and the study file does not say so, for example because it is missing. Printing the manager shows `Layout: not a layout of <application>` for them. Create the manager with their application, or give it directories of its own. |
 | `The record '<file>' states the format version <N>, and this version of access-profiling reads version <M>. ...` | A record or the study file was written in a format that the installed version of the package does not read. Update the package if a later version of it wrote the file. |
-| `The record '<file>' cannot be read, since it is not JSON: ...` | A record or the study file is damaged, for example because it was cut short when the disk was full. Restore the file, or remove it. Without its record, an experiment is no longer known to the manager, so it has to be added or generated again. |
+| `The record '<file>' cannot be read, since ...` | A record or the study file is damaged, or was not written by the package. Restore the file. Without its record, an experiment is no longer known to the manager, so it has to be added or generated again. Do not remove the study file: the highest number it records is what keeps the numbers of deleted experiments from being given again. |
+| `Skipping the archive '<file>', which cannot be read: ...` | An archive is damaged, for example because an archiving with an earlier version of the package stopped part way. Archive the experiment again with `overwrite=True`, or remove the file. |
+| `The number of CPUs of experiment '<name>' could not be read (...), ...` | The experiment was archived without its number of CPUs. The manager reads it from the archive when a selection or a plot needs it, and raises an error if it cannot. |
+| `Could not update the working directory '<work_dir>' (...), so experiment '<name>' is forgotten in this session only, ...` | `delete_experiment` could not remove the record, for example because you cannot write to the study. A manager created later finds the experiment again. |
+| `Experiment name '<name>' is not the name of a single directory, ...` | An experiment was added under a name with a `/`, or under `.` or `..`. Its record is kept in a directory of that name in the working directory, so add it under a name without a `/`. |
 | `Experiment name '<name>' is of the form this manager gives the experiments it generates. ...` | An experiment was added under a name such as `exp-0003`. Add it under another name. |
 | `No new experiments to run. Will skip execution.` | Every experiment has been submitted or has finished. Pass `retry_failed=True` to run the failed ones. |
 | `Experiment '<name>' is not completed (status: RUNNING). Skipping parsing profiling data.` | Only finished experiments are parsed. Wait for the run to finish. |

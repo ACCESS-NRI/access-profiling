@@ -186,10 +186,11 @@ class CylcRoseManager(ProfilingManager[RoseSuiteConfiguration]):
                 default) gives it none.
 
         Raises:
-            ValueError: If the rose is named as generated experiments are, `exp-<digits>`, if the experiment
-                path does not exist, or if the labels are not JSON values. Nothing is added when it is raised.
+            ValueError: If the rose is not the name of a single directory or is named as generated experiments are,
+                `exp-<digits>`, if the experiment path does not exist, or if the labels are not JSON values. Nothing
+                is added when it is raised.
         """
-        self._refuse_numbered_name(rose)
+        self._refuse_added_name(rose)
         experiment_path = self.work_dir / rose
         if not experiment_path.is_dir():
             raise ValueError(f"Experiment path '{experiment_path}' does not exist or is not a directory.")

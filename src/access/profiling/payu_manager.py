@@ -366,21 +366,23 @@ class PayuManager(ProfilingManager[PayuConfiguration]):
             dict[str, ProfilingExperiment]: The experiments new to this manager, keyed by branch name.
 
         Raises:
-            ValueError: If this manager has no control, or if the control states no start point, which the
-                generator needs to branch from.
+            ValueError: If this manager has no control or no `lab_dir`, if the control states no start point,
+                which the generator needs to branch from, or if the control options name a laboratory.
+            RuntimeError: If `PAYU_LAB_PATH` is set in the environment.
             Exception: Whatever the experiment generator raises, unchanged.
         """
         # Bound once, and checked before anything is read off it. generate_scaling_experiments refuses a
         # missing control before it ever gets here, but this hook is callable on its own and `control` is a
-        # settable property, so the check belongs where the attribute is actually used.
+        # settable property, so the check belongs where the attribute is actually used. For the same reason, what
+        # _refuse_plans refuses is refused here again.
         control = self.control
         if control is None:
             raise ValueError(
                 "Cannot create experiments without a control: every experiment is a branch of one, so there "
                 "is nothing to clone. Pass a ControlSource to this manager."
             )
+        self._refuse_plans(plans, control_options)
         laboratory = self.laboratory
-        assert laboratory is not None, "_refuse_plans refuses a manager that has no lab_dir"
         control_options = control_options if control_options is not None else {}
         config_options = control_options.get("config.yaml", {})
         # Payu runs every experiment in a laboratory, and with PAYU_LAB_PATH unset, as _refuse_plans requires, every

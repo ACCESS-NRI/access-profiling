@@ -753,7 +753,7 @@ class TestSuiteRecords:
     ROSE = "u-aa123"
 
     @staticmethod
-    def added(tmp_path: Path, **kwargs) -> CylcRoseManager:
+    def added(tmp_path, **kwargs):
         manager = mock_manager(tmp_path / "work", tmp_path / "archive")
         (manager.work_dir / TestSuiteRecords.ROSE).mkdir(parents=True)
         manager.add_rose_experiment(TestSuiteRecords.ROSE, **kwargs)
@@ -804,6 +804,15 @@ class TestSuiteRecords:
 
         with pytest.raises(ValueError, match="of the form this manager gives"):
             manager.add_rose_experiment("exp-0001")
+        assert manager.experiments == {}
+
+    def test_a_rose_that_is_not_one_directory_is_refused(self, tmp_path):
+        """Its record would be kept where a later manager does not look for one."""
+        manager = mock_manager(tmp_path / "work", tmp_path / "archive")
+        (manager.work_dir / "suites" / "u-aa123").mkdir(parents=True)
+
+        with pytest.raises(ValueError, match="Experiment name 'suites/u-aa123' is not the name of a single directory"):
+            manager.add_rose_experiment("suites/u-aa123")
         assert manager.experiments == {}
 
     @pytest.mark.parametrize("labels", [{"grid": (4, 4)}, {"where": Path("/some/input")}])

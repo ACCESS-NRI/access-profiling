@@ -26,6 +26,7 @@ import os
 import tarfile
 import tempfile
 import time
+from collections.abc import Iterable
 from contextlib import contextmanager
 from dataclasses import dataclass
 from enum import Enum
@@ -45,6 +46,10 @@ RECORD_FILENAME: str = "access-profiling.json"
 
 RECORD_VERSION: int = 1
 """The version of the format of an experiment's record, which every record states."""
+
+# What every record holds, which is checked when one is read, so that a record missing an entry is refused with its
+# name rather than with a bare KeyError.
+_RECORD_KEYS = ("version", "path", "run_path", "complete", "layout", "changes", "labels", "ncpus")
 
 
 def _make_unique_region_names(regions: list[object]) -> list[object]:
@@ -134,13 +139,16 @@ def _refuse_other_than_json(what: str, value: dict) -> None:
         value (dict): The value.
 
     Raises:
-        ValueError: If the value is not made of JSON values, or is not the same once written and read again, as a
-            tuple or a key that is not a string is not.
+        ValueError: If the value is not made of JSON values, as NaN and infinity are not, or is not the same once
+            written and read again, as a tuple or a key that is not a string is not.
     """
     try:
-        unchanged = json.loads(json.dumps(value)) == value
+        unchanged = json.loads(json.dumps(value, allow_nan=False)) == value
     except (TypeError, ValueError) as error:
-        raise ValueError(f"The {what} must be JSON values. Got {value!r}.") from error
+        raise ValueError(
+            f"The {what} must be JSON values: strings, finite numbers, booleans, null, and lists and mappings of them "
+            f"with strings as keys. Got {value!r}."
+        ) from error
     if not unchanged:
         raise ValueError(
             f"The {what} must be JSON values, which {value!r} is not: written to a record and read again, it is "
@@ -352,7 +360,7 @@ def _layout_from_record(record: dict) -> ComponentLayout:
     )
 
 
-def read_versioned(text: str | bytes, source: Path, what: str, version: int) -> dict:
+def read_versioned(text: str | bytes, source: Path, what: str, version: int, keys: Iterable[str]) -> dict:
     """Returns what a file written by this package holds, refusing one in a format this version does not read.
 
     Args:
@@ -360,17 +368,23 @@ def read_versioned(text: str | bytes, source: Path, what: str, version: int) -> 
         source (Path): The file, or the archive it is in, for the message.
         what (str): What the file is, for the message.
         version (int): The version of the format that this version of the package reads.
+        keys (Iterable[str]): The entries the file holds in that version.
 
     Returns:
         dict: What the file holds.
 
     Raises:
-        ValueError: If the contents are not JSON, or state no format version or another one than `version`.
+        ValueError: If the contents are not a JSON object, if they state no format version or another one than
+            `version`, or if they lack one of the keys.
     """
     try:
         content = json.loads(text)
     except ValueError as error:
         raise ValueError(f"The {what} '{source}' cannot be read, since it is not JSON: {error}.") from error
+    if not isinstance(content, dict):
+        raise ValueError(
+            f"The {what} '{source}' cannot be read, since it holds a JSON {type(content).__name__} and not an object."
+        )
     found = content.get("version")
     if found != version:
         stated = "no format version" if found is None else f"the format version {found}"
@@ -378,7 +392,26 @@ def read_versioned(text: str | bytes, source: Path, what: str, version: int) -> 
             f"The {what} '{source}' states {stated}, and this version of access-profiling reads version {version}. "
             "Update access-profiling if a later version of it wrote the file."
         )
+    missing = [key for key in keys if key not in content]
+    if missing:
+        raise ValueError(f"The {what} '{source}' cannot be read, since it lacks the entries {missing}.")
     return content
+
+
+def read_record(record_file: Path) -> dict:
+    """Returns the record of an experiment, from its directory under the working directory.
+
+    Args:
+        record_file (Path): The record.
+
+    Returns:
+        dict: The record.
+
+    Raises:
+        ValueError: If the record is not a JSON object, if it states no format version or another one than
+            `RECORD_VERSION`, or if it lacks one of its entries.
+    """
+    return read_versioned(record_file.read_text(), record_file, "record", RECORD_VERSION, _RECORD_KEYS)
 
 
 def read_archived_record(archive_file: Path) -> dict | None:
@@ -394,7 +427,8 @@ def read_archived_record(archive_file: Path) -> dict | None:
             records does.
 
     Raises:
-        ValueError: If the record is not JSON, or states no format version or another one than `RECORD_VERSION`.
+        ValueError: If the record is not a JSON object, if it states no format version or another one than
+            `RECORD_VERSION`, or if it lacks one of its entries.
     """
     with tarfile.open(archive_file) as tar:
         first = tar.next()
@@ -402,7 +436,7 @@ def read_archived_record(archive_file: Path) -> dict | None:
             return None
         member = tar.extractfile(first)
         assert member is not None, "the record is added as a regular file"
-        return read_versioned(member.read(), archive_file, "record in the archive", RECORD_VERSION)
+        return read_versioned(member.read(), archive_file, "record in the archive", RECORD_VERSION, _RECORD_KEYS)
 
 
 class ProfilingExperiment:
@@ -614,6 +648,9 @@ class ProfilingExperiment:
         Only experiments with status DONE will be archived. No error will be raised if the experiment is not DONE.
 
         A record is written first, as `RECORD_FILENAME`, so that it can be read back without extracting the rest.
+        The archive is written whole or not at all: it is written to a temporary file beside it, which then takes
+        its name. Otherwise an archiving stopped part way would leave a tarball whose record is readable ahead of
+        the rest, and a manager built later would read the experiment from it.
 
         Symlinks to files and directories inside the experiment directory will be included as symlinks, pointing
         to their targets relative to where they are in the archive, so that they still point at them once the archive
@@ -640,7 +677,6 @@ class ProfilingExperiment:
         if not self._ready_to_archive(archive_file):
             return
 
-        mode = "w:gz" if overwrite else "x:gz"
         if not overwrite and archive_file.exists():
             raise FileExistsError(f"Archive destination {archive_file} already exists.")
 
@@ -653,30 +689,38 @@ class ProfilingExperiment:
             else [(self.path, Path("experiment")), (self.run_path, Path("runs"))]
         )
 
-        with tarfile.open(archive_file, mode) as tar:
-            if record is not None:
-                data = json.dumps(record, indent=2).encode()
-                info = tarfile.TarInfo(RECORD_FILENAME)
-                info.size = len(data)
-                info.mtime = time.time()
-                tar.addfile(info, io.BytesIO(data))
-            for path, prefix in paths_to_walk:
-                # A directory reached through a symlink, as a Cylc run directory often is, is archived as what it
-                # points to, rather than as the one link.
-                root = path.resolve()
-                for file, arcname in experiment_directory_walker(root, prefix, root, follow_symlinks=follow_symlinks):
-                    if _excluded(file, arcname.relative_to(prefix), exclude_dirs, exclude_files):
-                        continue
-                    logger.debug(f"Archiving file: {file} as {arcname}")
-                    inside = _target_inside(file, root) if file.is_symlink() else None
-                    if inside is None:
-                        tar.add(file, arcname=arcname)
-                        continue
-                    # Rewritten relative to the link's place in the archive, which also keeps it extractable at all:
-                    # the data filter directory() extracts with refuses a link to an absolute path.
-                    link = tar.gettarinfo(file, arcname=str(arcname))
-                    link.linkname = os.path.relpath(prefix / inside, arcname.parent)
-                    tar.addfile(link)
+        partial = archive_file.with_name(f".{archive_file.name}.{os.getpid()}.tmp")
+        try:
+            with tarfile.open(partial, "w:gz") as tar:
+                if record is not None:
+                    data = json.dumps(record, indent=2).encode()
+                    info = tarfile.TarInfo(RECORD_FILENAME)
+                    info.size = len(data)
+                    info.mtime = time.time()
+                    tar.addfile(info, io.BytesIO(data))
+                for path, prefix in paths_to_walk:
+                    # A directory reached through a symlink, as a Cylc run directory often is, is archived as what it
+                    # points to, rather than as the one link.
+                    root = path.resolve()
+                    for file, arcname in experiment_directory_walker(
+                        root, prefix, root, follow_symlinks=follow_symlinks
+                    ):
+                        if _excluded(file, arcname.relative_to(prefix), exclude_dirs, exclude_files):
+                            continue
+                        logger.debug(f"Archiving file: {file} as {arcname}")
+                        inside = _target_inside(file, root) if file.is_symlink() else None
+                        if inside is None:
+                            tar.add(file, arcname=arcname)
+                            continue
+                        # Rewritten relative to the link's place in the archive, which also keeps it extractable at all:
+                        # the data filter directory() extracts with refuses a link to an absolute path.
+                        link = tar.gettarinfo(file, arcname=str(arcname))
+                        link.linkname = os.path.relpath(prefix / inside, arcname.parent)
+                        tar.addfile(link)
+            partial.replace(archive_file)
+        except BaseException:
+            partial.unlink(missing_ok=True)
+            raise
 
         self.status = ProfilingExperimentStatus.ARCHIVED
         self.path = archive_file

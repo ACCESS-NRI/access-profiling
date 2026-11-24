@@ -202,6 +202,26 @@ def test_esm15_generate_scaling_experiments(mock_experiment_generator, esm15, tm
     }
 
 
+@mock.patch("access.profiling.payu_manager.ExperimentGenerator")
+def test_esm15_historical_refuses_the_study_of_the_preindustrial_configuration(mock_experiment_generator, tmp_path):
+    """The two run the same components on the same grids, so the historical configuration keys every pre-industrial
+    layout without error. A manager of it would skip generating those layouts and read the pre-industrial runs as
+    historical ones, so it is refused, from what the study file records."""
+    directories = (tmp_path / "work", tmp_path / "archive")
+    control = GitControlSource("https://example.com/repo", "commit")
+    study = PayuManager(*directories, ESM15_PREINDUSTRIAL, control, lab_dir=Path("/fake/lab"))
+    study.generate_scaling_experiments(
+        num_nodes_list=[9.0], cores_per_node=48, walltime=2.0, allocations=PREINDUSTRIAL_ALLOCATIONS
+    )
+
+    message = (
+        r"was made with ESM15Configuration 'preindustrial\+concentrations', as its study file records, but this "
+        r"manager's application is ESM15Configuration 'historical\+concentrations'"
+    )
+    with pytest.raises(ValueError, match=message):
+        PayuManager(*directories, ESM15_HISTORICAL, control, lab_dir=Path("/fake/lab"))
+
+
 def _esm15_control(path: Path, submodels: list[tuple[str, str, int | None]], jobname: str = "pre-industrial") -> Path:
     """Writes a control the way the ACCESS-ESM1.5 releases are laid out, as far as the reader looks."""
 

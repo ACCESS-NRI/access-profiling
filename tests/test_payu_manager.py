@@ -60,7 +60,7 @@ class MockPayuConfiguration(PayuConfiguration):
     def component_logs(self, output_dir):
         return {"component": ProfilingLog(output_dir, mock.MagicMock())}
 
-    def layout_key(self, layout) -> str:
+    def layout_key(self, layout):
         atm, ocn = layout.sub_layouts
         atm_nx, atm_ny = grid_of(atm)
         ocn_nx, ocn_ny = grid_of(ocn)
@@ -1729,6 +1729,34 @@ class TestLaboratory:
         assert manager.experiments == {}
         assert not (manager.work_dir / STUDY_FILENAME).exists(), "nor is a number taken"
 
+    @pytest.mark.parametrize(
+        "lab_dir, environment, control_options, error, message",
+        [
+            (None, {}, {}, ValueError, "without a lab_dir"),
+            (Path("/fake/lab"), {"PAYU_LAB_PATH": "/scratch/tm70/elsewhere"}, {}, RuntimeError, "PAYU_LAB_PATH is set"),
+            (
+                Path("/fake/lab"),
+                {},
+                {"config.yaml": {"laboratory": "/elsewhere"}},
+                ValueError,
+                "name a Payu laboratory",
+            ),
+        ],
+    )
+    @mock.patch("access.profiling.payu_manager.ExperimentGenerator")
+    def test_the_creation_hook_refuses_the_same_on_its_own(
+        self, mock_experiment_generator, tmp_path, lab_dir, environment, control_options, error, message
+    ):
+        """The hook is callable on its own, as its check of the control says, so it does not rely on generation
+        having refused these first, nor on an assertion that `python -O` strips."""
+        manager = PayuManager(
+            tmp_path / "work", tmp_path / "archive", MockPayuConfiguration(), MOCK_CONTROL, lab_dir=lab_dir
+        )
+
+        with mock.patch.dict(os.environ, environment), pytest.raises(error, match=message):
+            manager._create_experiments([], control_options=control_options)
+        mock_experiment_generator.assert_not_called()
+
     @mock.patch("access.profiling.payu_manager.ExperimentGenerator")
     def test_the_control_states_it_beside_the_other_options(self, mock_experiment_generator, manager, caplog):
         """Written into config.yaml of the control, which every experiment branches from, without touching the
@@ -1797,18 +1825,18 @@ class TestNumberedExperiments:
     NAMES = ["exp-0001", "exp-0002", "exp-0003", "exp-0004"]
 
     @staticmethod
-    def generate(manager, **kwargs) -> None:
+    def generate(manager, **kwargs):
         options = {"num_nodes_list": [1.0], "control_options": {}, "cores_per_node": 4, "walltime": 2.0}
         manager.generate_scaling_experiments(allocations=MOCK_ALLOCATIONS, **{**options, **kwargs})
 
     @staticmethod
-    def branches(mock_experiment_generator) -> list[str]:
+    def branches(mock_experiment_generator):
         """The branches of the last call to the generator, in order."""
         perturbations = mock_experiment_generator.call_args[0][0]["Perturbation_Experiment"]
         return [branch for block in perturbations.values() for branch in block["branches"]]
 
     @staticmethod
-    def later(manager) -> PayuManager:
+    def later(manager):
         """Another manager on the same directories, as a later session builds."""
         return PayuManager(
             manager.work_dir, manager.archive_dir, MockPayuConfiguration(), MOCK_CONTROL, lab_dir=manager.lab_dir
@@ -1954,6 +1982,22 @@ class TestNumberedExperiments:
         assert (manager.work_dir / "exp-0002" / RECORD_FILENAME).read_text() == record
         assert manager._read_study()["last_number"] == 4
         assert manager._read_study()["history"][-1]["experiments"] == ["exp-0002"]
+
+    @mock.patch("access.profiling.payu_manager.ExperimentGenerator")
+    def test_a_run_that_failed_in_an_earlier_session_is_regenerated(self, mock_experiment_generator, manager):
+        """An experiment found again from its record is NEW until the engine is asked, so its job files are read
+        before deciding what to regenerate."""
+        self.generate(manager)
+        failed = manager.experiments["exp-0002"].path
+        write_job_file(failed, 0, {"stage": "archive", "payu_run_status": 1})
+        (failed / "archive" / "output000").mkdir()
+
+        later = self.later(manager)
+        assert later.experiments["exp-0002"].status == ProfilingExperimentStatus.NEW
+        self.generate(later, walltime=4.0, regenerate_failed=True)
+
+        assert self.branches(mock_experiment_generator) == ["exp-0002"]
+        assert later.experiments["exp-0002"].status == ProfilingExperimentStatus.FAILED
 
     @mock.patch("access.profiling.payu_manager.ExperimentGenerator")
     def test_the_history_says_what_the_experiments_perturb(self, mock_experiment_generator, manager):

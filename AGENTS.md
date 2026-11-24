@@ -151,7 +151,8 @@ blocks, one page per concept. A new module needs a block on the right page and a
 ### Experiments
 
 - **A name carries nothing, and nothing is read out of one.** A generated experiment is numbered, `exp-0001`
-  onwards (`_NUMBERED_NAME`), and an added one keeps the name it is given, which may not be of that form. The name
+  onwards (`_NUMBERED_NAME`), and an added one keeps the name it is given, which must be the name of one directory
+  and may not be of that form (`_refuse_added_name`). The name
   is still the key of `experiments`, the experiment's branch and directory under `work_dir`, Payu's `experiment`,
   and the name of its tarball.
 - **What an experiment is, is in its record**, `<work_dir>/<name>/access-profiling.json` (`RECORD_FILENAME`), written
@@ -160,7 +161,12 @@ blocks, one page per concept. A new module needs a block on the right page and a
   `layout`, `changes`, `labels` and `ncpus`. What is true of the whole study goes in the study file instead
   (`STUDY_FILENAME`): the highest number given, and one history entry per call that created, added or deleted
   experiments. Don't add to the record what is the same for every experiment of a call. Labels are JSON values:
-  `ProfilingExperiment` refuses those a record would not give back as they were.
+  `ProfilingExperiment` refuses those a record would not give back as they were, NaN included.
+- **The records, the study file and the archives are written whole**: to a temporary file beside the target, which
+  then replaces it (`_write_whole`, and `ProfilingExperiment.archive` for a tarball). A record cut short stops the
+  study being opened, and an archive cut short still has its record readable, being its first member.
+  `delete_experiment` updates the working directory before forgetting the experiment, and where it cannot be written
+  forgets it for the session only, with a warning.
 - **Each of the two files states the version of its own format** (`RECORD_VERSION`, `STUDY_VERSION`), and
   `read_versioned` refuses a file that states another one, or none, naming the file. The record states its own
   because it is written once and read from an archive long after, by whatever version of the package is installed
@@ -170,9 +176,12 @@ blocks, one page per concept. A new module needs a block on the right page and a
   `Application.layout_key`, and its `changes`. `layout_key` must therefore be distinct for every layout and the same
   every time for the same one, and changing how a model keys its layouts means generation no longer recognises
   the experiments on disk. A layout read back from an experiment's files (`layout_given` False) identifies
-  nothing and is never recorded, and neither does an experiment whose changes are unknown (`None`). A layout the
-  application refuses, as one generated with another application is, makes `ProfilingManager.layout_key` raise with
-  the experiment's name, and so does generation. `__repr__` says so instead, since it never raises.
+  nothing and is never recorded, and neither does an experiment whose changes are unknown (`None`).
+- **A study has one application.** Two configurations of a model can key the same layout without error, so a
+  manager refuses, when it is built, a study whose study file records calls made with another application
+  (`_refuse_another_application`). Where there is no study file, a layout the application refuses makes
+  `ProfilingManager.layout_key` raise with the experiment's name, and so does generation. `__repr__` says so instead,
+  since it never raises.
 - **A number is never given twice**, not even a deleted experiment's: Payu keeps the branch, and the generator would
   apply a new experiment's changes on top of it. The numbers of a call are written to the study file before the
   engine is called, and stay taken if it fails. A call the engine refuses beforehand takes none: `_refuse_plans` is
@@ -189,8 +198,9 @@ blocks, one page per concept. A new module needs a block on the right page and a
   deleting while it is set. `lab_dir` is needed to generate, not to read, archive or delete.
 - **No status is stored.** A new manager finds the experiments of `work_dir` again from their records, as NEW, or
   DONE where the record says `complete`, and the tarballs in `archive_dir`, as ARCHIVED, an archive replacing the
-  experiment found in `work_dir`. Every other status is read afresh from what the engine recorded, by
-  `update_statuses`, which archiving, parsing and running all call first. ARCHIVED is terminal, since reading a
+  experiment found in `work_dir`. A tarball it cannot read is skipped with a warning. Every other status is read
+  afresh from what the engine recorded, by `update_statuses`, which archiving, parsing and running all call first,
+  and generation too when it is to regenerate failed experiments. ARCHIVED is terminal, since reading a
   status out of a tarball would mean extracting it. The records and the study file are all that is stored.
 - **`parse_status` never raises.** When it cannot tell, it logs why at DEBUG and returns `None`, which keeps the
   status the experiment has.
@@ -205,6 +215,8 @@ blocks, one page per concept. A new module needs a block on the right page and a
   which refuses absolute links and links leading out of the archive. A symlink to inside the experiment is kept, as
   a relative link; one to outside it is followed with `follow_symlinks=True`, and otherwise left out and logged at
   INFO. `exclude_dirs` and `exclude_files` are matched against the paths in the archive, never the absolute ones.
+  Where the number of CPUs cannot be read when archiving, the archive's record leaves it null, with a warning,
+  rather than stopping the other experiments being archived.
 
 ### Core counts
 

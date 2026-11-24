@@ -14,13 +14,17 @@ written in its record, a file in its directory (see `access.profiling.experiment
 is written in the study file, `STUDY_FILENAME` in the working directory: the highest number given so far, and one
 entry for each call that created, added or deleted experiments. A manager stores nothing else, and never a status.
 Each of the two files states the version of its own format, and a file of another version is refused when it is read.
+Both are written whole, to a temporary file that then replaces them, so that a session stopped part way through a
+write leaves the file as it was.
 """
 
 import itertools
 import json
 import logging
+import os
 import re
 import shutil
+import tarfile
 import textwrap
 from abc import ABC, abstractmethod
 from collections.abc import Callable
@@ -39,12 +43,12 @@ from access.profiling.application import Application
 from access.profiling.control import ControlSource
 from access.profiling.experiment import (
     RECORD_FILENAME,
-    RECORD_VERSION,
     ExperimentPlan,
     ProfilingExperiment,
     ProfilingExperimentStatus,
     ProfilingLog,
     read_archived_record,
+    read_record,
     read_versioned,
 )
 from access.profiling.metrics import ProfilingMetric
@@ -67,6 +71,8 @@ STUDY_FILENAME: str = "access-profiling-study.json"
 STUDY_VERSION: int = 1
 """The version of the format of the study file, which the file states."""
 
+_STUDY_KEYS = ("version", "last_number", "history")
+
 # The names given to generated experiments. Kept apart from the names experiments are added under, so that a
 # number is only ever one this manager gave.
 _NUMBERED_NAME = re.compile(r"exp-(\d+)")
@@ -75,6 +81,30 @@ _RUN_DIM_ERROR = (
     "Profiling data still has a 'run' dimension. Use select_best_run() to keep the best run of each experiment, "
     "or aggregate_runs() to reduce over runs."
 )
+
+
+def _write_whole(path: Path, text: str) -> None:
+    """Writes a file whole or not at all.
+
+    The text goes to a temporary file beside the target, which then replaces it in one step. A write that stops part
+    way, because the disk is full or the session is killed, therefore leaves the file as it was, rather than cut
+    short. A record cut short would stop the study being opened, and a study file cut short would stop every call
+    that numbers or logs experiments.
+
+    Args:
+        path (Path): The file to write.
+        text (str): What it is to hold.
+    """
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    try:
+        with temporary.open("w") as handle:
+            handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+        temporary.replace(path)
+    except BaseException:
+        temporary.unlink(missing_ok=True)
+        raise
 
 
 def _package_version() -> str:
@@ -175,8 +205,9 @@ class ProfilingManager(ABC, Generic[AppT]):
             generate_scaling_experiments, which has nothing to perturb without it.
 
     Raises:
-        ValueError: If the record of an experiment, in the working directory or in an archive, is not JSON, or
-            states no format version or another one than this version of the package reads.
+        ValueError: If the study file records calls made with another application than this one, or if the record
+            of an experiment, in the working directory or in an archive, is not a JSON object, states no format
+            version or another one than this version of the package reads, or lacks one of its entries.
 
     Attributes:
         work_dir (Path): Working directory where profiling experiments will be generated and run.
@@ -208,12 +239,13 @@ class ProfilingManager(ABC, Generic[AppT]):
         self._control = control
         self.experiments = {}
         self.data = {}
+        self._refuse_another_application()
 
         # The experiments of the working directory, each found again from the record in its directory.
         for record_file in sorted(self.work_dir.glob(f"*/{RECORD_FILENAME}")):
             name = record_file.parent.name
             logger.info(f"Found experiment: {name}")
-            record = read_versioned(record_file.read_text(), record_file, "record", RECORD_VERSION)
+            record = read_record(record_file)
             path = Path(record["path"])
             self.experiments[name] = ProfilingExperiment.from_record(
                 record,
@@ -228,8 +260,18 @@ class ProfilingManager(ABC, Generic[AppT]):
             for branch_path in sorted(self.archive_dir.glob("*.tar.gz")):
                 if branch_path.is_file():
                     branch_name = branch_path.name[: -len(".tar.gz")]
+                    try:
+                        record = read_archived_record(branch_path)
+                    except (tarfile.TarError, EOFError, OSError) as error:
+                        # An archive_experiments stopped part way leaves such a file. Skipping it keeps the
+                        # experiment of the working directory, which can then be archived again over it.
+                        logger.warning(
+                            f"Skipping the archive '{branch_path}', which cannot be read: {error}. An archiving that "
+                            "was stopped part way leaves such a file. Archive the experiment again with "
+                            "overwrite=True, or remove the file."
+                        )
+                        continue
                     logger.info(f"Found archived experiment: {branch_name}")
-                    record = read_archived_record(branch_path)
                     self.experiments[branch_name] = (
                         ProfilingExperiment(path=branch_path)
                         if record is None
@@ -310,22 +352,49 @@ class ProfilingManager(ABC, Generic[AppT]):
                 with no file yet starts at zero, with an empty history.
 
         Raises:
-            ValueError: If the file is not JSON, or states no format version or another one than `STUDY_VERSION`.
+            ValueError: If the file is not a JSON object, if it states no format version or another one than
+                `STUDY_VERSION`, or if it lacks one of its entries.
         """
         for directory in (self.work_dir, self.archive_dir):
             study_file = directory / STUDY_FILENAME
             if study_file.is_file():
-                return read_versioned(study_file.read_text(), study_file, "study file", STUDY_VERSION)
+                return read_versioned(study_file.read_text(), study_file, "study file", STUDY_VERSION, _STUDY_KEYS)
         return {"version": STUDY_VERSION, "last_number": 0, "history": []}
 
+    def _refuse_another_application(self) -> None:
+        """Refuses a study that was made with another application than this manager's, as its study file records.
+
+        A study has one application. A manager of another one would take the study's experiments for its own, since
+        two configurations of a model can key the same layout without error: it would skip generating those
+        layouts, and read the study's runs as runs of its own configuration. The record of an experiment does not
+        say which application made it, since that is the same for every experiment of a study, but the study file
+        records the application of every call.
+
+        Raises:
+            ValueError: If a call the study file records was made with another application.
+        """
+        own = {"class": type(self.application).__name__, "name": self.application.name}
+        others = []
+        for entry in self._read_study()["history"]:
+            if entry["application"] != own and entry["application"] not in others:
+                others.append(entry["application"])
+        if others:
+            made = " and ".join(f"{other['class']} '{other['name']}'" for other in others)
+            raise ValueError(
+                f"The study of the working directory '{self.work_dir}' and the archive directory '{self.archive_dir}' "
+                f"was made with {made}, as its study file records, but this manager's application is "
+                f"{own['class']} '{own['name']}'. A study has one application: build the manager with that one, or "
+                "give it working and archive directories of its own."
+            )
+
     def _write_study(self, study: dict) -> None:
-        """Writes the study file into the working directory.
+        """Writes the study file into the working directory, whole or not at all.
 
         Args:
             study (dict): The study, as _read_study returned it.
         """
         self.work_dir.mkdir(parents=True, exist_ok=True)
-        (self.work_dir / STUDY_FILENAME).write_text(json.dumps(study, indent=2, default=str) + "\n")
+        _write_whole(self.work_dir / STUDY_FILENAME, json.dumps(study, indent=2, default=str) + "\n")
 
     def _engine_record(self, **runner_options) -> dict:
         """Returns what the workflow engine adds to the history entry of a call that generated experiments.
@@ -369,7 +438,9 @@ class ProfilingManager(ABC, Generic[AppT]):
         self._write_study(study)
 
     def _write_record(self, name: str) -> None:
-        """Writes an experiment's record into its directory under the working directory, creating it if need be.
+        """Writes an experiment's record into its directory under the working directory, whole or not at all.
+
+        The directory is created if need be.
 
         Args:
             name (str): Name of the experiment.
@@ -377,7 +448,7 @@ class ProfilingManager(ABC, Generic[AppT]):
         directory = self.work_dir / name
         directory.mkdir(parents=True, exist_ok=True)
         record = self.experiments[name].record(self.work_dir)
-        (directory / RECORD_FILENAME).write_text(json.dumps(record, indent=2) + "\n")
+        _write_whole(directory / RECORD_FILENAME, json.dumps(record, indent=2) + "\n")
 
     def _remove_record(self, name: str) -> None:
         """Removes an experiment's record, and its directory if the record was all it held.
@@ -391,15 +462,24 @@ class ProfilingManager(ABC, Generic[AppT]):
             directory.rmdir()
 
     @staticmethod
-    def _refuse_numbered_name(name: str) -> None:
-        """Refuses a name of the form generated experiments are given, for an experiment being added.
+    def _refuse_added_name(name: str) -> None:
+        """Refuses a name that an experiment cannot be added under.
+
+        The record of an experiment is kept in `<work_dir>/<name>`, and a manager finds the records of the
+        directories directly under the working directory, so the name is that of one directory.
 
         Args:
             name (str): The name the experiment is being added under.
 
         Raises:
-            ValueError: If the name is `exp-<digits>`.
+            ValueError: If the name is not that of a single directory, or is `exp-<digits>`, the form of the names
+                generated experiments are given.
         """
+        if name in ("", ".", "..") or Path(name).name != name:
+            raise ValueError(
+                f"Experiment name '{name}' is not the name of a single directory, which its record is kept in under "
+                "the working directory. Add the experiment under a name without a '/'."
+            )
         if _NUMBERED_NAME.fullmatch(name) is not None:
             raise ValueError(
                 f"Experiment name '{name}' is of the form this manager gives the experiments it generates. Add "
@@ -750,7 +830,8 @@ class ProfilingManager(ABC, Generic[AppT]):
                 its run failed, so that a correction reaches it. False (the default) skips every experiment
                 already held, whatever became of it. Only failed ones are ever regenerated: a running one
                 would be rewritten underneath a live job, and one that finished has results that its
-                configuration should go on matching.
+                configuration should go on matching. The statuses are brought up to date first, so that a run
+                that failed in an earlier session is found.
             **runner_options (Any): Further options for the workflow engine, passed through to
                 _create_experiments.
 
@@ -766,6 +847,10 @@ class ProfilingManager(ABC, Generic[AppT]):
                 "there is nothing to generate from. Pass a ControlSource to this manager."
             )
         self._validate_sizing(num_nodes_list, cores_per_node)
+        if regenerate_failed:
+            # Which runs failed is the engine's to say, and a status does not outlive the session: an experiment
+            # found again from its record is NEW until the engine has been asked.
+            self.update_statuses()
         plans = self._plan_experiments(
             num_nodes_list, cores_per_node, walltime, allocations, max_layouts, regenerate_failed
         )
@@ -882,6 +967,9 @@ class ProfilingManager(ABC, Generic[AppT]):
             exclude_files (list[str] | None): File patterns to exclude when archiving experiments.
             follow_symlinks (bool): Whether to follow symlinks when archiving experiments. Defaults to False.
             overwrite (bool): Whether to overwrite existing archives. Defaults to False.
+
+        The record in each archive states the number of CPUs of the experiment. Where the count cannot be read, the
+        record leaves it null, with a warning, and the experiment is archived all the same.
         """
         # Only DONE experiments are archived, so a run that finished since the last look should be counted
         # among them rather than skipped as still running.
@@ -891,8 +979,15 @@ class ProfilingManager(ABC, Generic[AppT]):
         for branch, exp in self.experiments.items():
             if exp.status == ProfilingExperimentStatus.DONE:
                 # The run is over, so the count can no longer change. Kept in the archive's record, it is not
-                # read out of the tarball again.
-                self._ncpus(branch)
+                # read out of the tarball again. A count that cannot be read now is left to be read from the
+                # tarball when it is needed, rather than stopping the other experiments being archived.
+                try:
+                    self._ncpus(branch)
+                except (OSError, ValueError) as error:
+                    logger.warning(
+                        f"The number of CPUs of experiment '{branch}' could not be read ({error}), so the record in "
+                        "its archive leaves it null. It is read from the archive when a selection or a plot needs it."
+                    )
             exp.archive(
                 self.archive_dir / branch,
                 exclude_dirs=exclude_dirs,
@@ -917,18 +1012,18 @@ class ProfilingManager(ABC, Generic[AppT]):
         built later finds it again.
 
         Args:
-            name (str): Name of the experiment. Any name but one of the form `exp-<digits>`, which is what
-                generated experiments are named.
+            name (str): Name of the experiment: the name of a single directory, other than one of the form
+                `exp-<digits>`, which is what generated experiments are named.
             path (Path): Path to the experiment directory.
             labels (dict | None): The study's own keys and values for this experiment, as JSON values. None (the
                 default) gives it none.
 
         Raises:
-            ValueError: If the name is of the form generated experiments are given, if the specified path does
-                not exist, is not a directory, or is not inside the working directory, or if the labels are not
-                JSON values. Nothing is added when it is raised.
+            ValueError: If the name is not that of a single directory or is of the form generated experiments are
+                given, if the specified path does not exist, is not a directory, or is not inside the working
+                directory, or if the labels are not JSON values. Nothing is added when it is raised.
         """
-        self._refuse_numbered_name(name)
+        self._refuse_added_name(name)
         if not path.is_absolute():
             path = self.work_dir / path
         if not path.is_dir():
@@ -943,17 +1038,27 @@ class ProfilingManager(ABC, Generic[AppT]):
         """Deletes the specified experiment.
 
         Note that this only removes the experiment from the manager's tracking, together with its record in the
-        working directory, so that a manager built later does not find it there again. It does not delete any of
-        the experiment's own files, nor its archive: a manager built later still finds an experiment that was
-        archived, from its tarball in the archive directory.
+        working directory, and adds the call to the history of the study, so that a manager built later does not
+        find it there again. It does not delete any of the experiment's own files, nor its archive: a manager built
+        later still finds an experiment that was archived, from its tarball in the archive directory.
+
+        Where the working directory cannot be written, as a colleague's study may not be, the experiment is
+        forgotten in this session only, with a warning.
 
         Args:
             name (str): Name of the experiment to delete.
         """
         if name in self.experiments:
+            # The working directory first, so that the experiment is still held if writing it fails part way.
+            try:
+                self._remove_record(name)
+                self._log("delete_experiment", [name])
+            except OSError as error:
+                logger.warning(
+                    f"Could not update the working directory '{self.work_dir}' ({error}), so experiment '{name}' is "
+                    "forgotten in this session only: a manager built later finds it again."
+                )
             del self.experiments[name]
-            self._remove_record(name)
-            self._log("delete_experiment", [name])
         else:
             logger.warning(f"Experiment '{name}' not found; cannot delete.")
 
@@ -1016,8 +1121,8 @@ class ProfilingManager(ABC, Generic[AppT]):
             return
 
         for name in names_to_delete:
-            del self.experiments[name]
             self._remove_record(name)
+            del self.experiments[name]
         self._log("delete_experiments", names_to_delete)
 
     def parse_profiling_data(self):
