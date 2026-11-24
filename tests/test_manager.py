@@ -581,6 +581,29 @@ def test_delete_experiment(caplog, tmp_path):
     )
 
 
+class TestDeletingForgetsTheParsedData:
+    """A table or a plot reads every experiment with parsed data by default, and a deleted one must not be one."""
+
+    @staticmethod
+    def parsed(tmp_path):
+        paths = [tmp_path / "exp1", tmp_path / "exp2"]
+        return MockProfilingManager(paths, datasets=[make_component_dataset([1.0, 2.0])] * 2, work_dir=tmp_path)
+
+    def test_delete_experiment(self, tmp_path):
+        manager = self.parsed(tmp_path)
+
+        manager.delete_experiment("exp1")
+
+        assert list(manager.data) == ["exp2"]
+
+    def test_delete_experiments(self, tmp_path):
+        manager = self.parsed(tmp_path)
+
+        manager.delete_experiments(["exp1"])
+
+        assert list(manager.data) == ["exp2"]
+
+
 def test_parse_profiling_data(caplog):
     """Test the _parse_profiling_data_directory method of ProfilingManager."""
 
@@ -1249,6 +1272,15 @@ def test_bar_chart_run_dim_raises_value_error(run_data):
         run_data.plot_bar_chart([RegionGroup("component", ["Region 1"])], metric=tavg)
 
 
+def test_bar_chart_of_a_metric_with_more_than_one_value_for_each_region(block_study):
+    """As data for each PE has, which a bar cannot show, rather than a TypeError from turning it into one number."""
+
+    add_per_pe_log(block_study)
+
+    with pytest.raises(ValueError, match="has the dimensions \\['pe'\\] .* more values than a chart has bars"):
+        block_study.plot_bar_chart([RegionGroup("per_pe", ["Region 1"])], tavg, show=False)
+
+
 def _leaf(name: str, n_cores: int) -> ComponentLayout:
     """A single component of a layout, one thread per rank as the ACCESS models have it."""
 
@@ -1642,6 +1674,14 @@ def block_study():
     return manager
 
 
+def add_per_pe_log(manager):
+    """Gives every experiment a log with data for each of three PEs, which has more than one value for each region."""
+
+    per_pe = xr.DataArray([[1.0, 2.0, 3.0]], dims=["region", "pe"]).pint.quantify(tavg.units)
+    for data in manager.data.values():
+        data["per_pe"] = xr.Dataset(data_vars={tavg: per_pe}, coords={"region": ["Region 1"], "pe": [0, 1, 2]})
+
+
 class TestGather:
     """One dataset for several experiments, with what tells them apart as coordinates."""
 
@@ -1692,6 +1732,14 @@ class TestGather:
         assert list(gathered["experiment"].values) == ["exp-0004", "exp-0001"]
         assert gathered["blocks"].values.tolist() == [8, 4]
         assert gathered[tavg].sel(region="Dynamics").pint.dequantify().values.tolist() == [80.0, 50.0]
+
+    def test_a_name_given_twice_is_gathered_once(self, block_study):
+        """As two selections put together give it: an experiment is one entry along the dimension."""
+
+        gathered = block_study.gather(BLOCK_STUDY_GROUP, ["blocks"], experiments=["exp-0003", "exp-0001", "exp-0003"])
+
+        assert list(gathered["experiment"].values) == ["exp-0003", "exp-0001"]
+        assert gathered["blocks"].values.tolist() == [8, 4]
 
     def test_a_value_that_is_a_sequence_stays_one_value(self, block_study):
         """A process grid is one value of an experiment, not a row of a table of its own."""
@@ -1783,10 +1831,12 @@ class TestGather:
             block_study.gather(RegionGroup("component", ["Region 3"]))
 
     def test_data_still_holding_several_runs(self, block_study):
+        """The message offers runs first, which leaves the parsed data as it is."""
+
         data = block_study.data["exp-0001"]
         data["component"] = data["component"].expand_dims({"run": [1]})
 
-        with pytest.raises(ValueError, match="'run' dimension"):
+        with pytest.raises(ValueError, match="'run' dimension. Pass runs='min', 'max', 'mean' or 'median' to reduce"):
             block_study.gather(BLOCK_STUDY_GROUP)
 
 
@@ -1897,6 +1947,34 @@ class TestTable:
         ):
             block_study.table(BLOCK_STUDY_GROUP, tavg, "blocks")
 
+    def test_experiments_sharing_a_null_value(self, block_study):
+        """A null label is a value like any other, which pandas leaves out of its groups by default."""
+
+        for name in ("exp-0001", "exp-0003"):
+            block_study.experiments[name].labels = {"blocks": None}
+
+        with pytest.raises(ValueError, match="The experiments \\['exp-0001', 'exp-0003'\\] share their values"):
+            block_study.table(BLOCK_STUDY_GROUP, tavg, "blocks")
+
+    def test_two_regions_labelled_alike(self, block_study):
+        """The plots draw them as two lines, but a table would give them one column, and blame the experiments."""
+
+        group = RegionGroup("component", ["Region 1", "Region 2"], relabel={"Region 1": "X", "Region 2": "X"})
+
+        with pytest.raises(ValueError, match="The group gives the same label to several of its regions: \\['X'\\]"):
+            block_study.table(group, tavg, "blocks", component_cores("component"))
+
+    def test_a_coordinate_named_value(self, block_study):
+        """The name a table would give its column of values, were that column not keyed by the metric."""
+
+        for experiment in block_study.experiments.values():
+            experiment.labels = {"value": experiment.labels["blocks"]}
+
+        table = block_study.table(BLOCK_STUDY_GROUP, tavg, "value", component_cores("component"))
+
+        assert table.index.name == "value"
+        assert table["Dynamics"].values.tolist() == [[50.0, 100.0], [40.0, 80.0]]
+
     def test_a_metric_with_more_than_one_value_for_each_region(self, block_study):
         for name, n_pes in (("exp-0001", 3), ("exp-0002", 2)):
             per_pe = xr.DataArray([[1.0] * n_pes], dims=["region", "pe"]).pint.quantify(tavg.units)
@@ -1937,6 +2015,38 @@ class TestSelectExperiments:
     def test_a_value_no_experiment_has(self, block_study):
         assert block_study.select_experiments("blocks", 16) == []
 
+    def test_an_experiment_without_the_label_is_not_one_of_them(self, block_study):
+        """As in a study of two kinds of choice, each labelled by keys of its own."""
+
+        block_study.experiments["exp-0002"].labels = {"distribution": "roundrobin"}
+
+        assert block_study.select_experiments("blocks", 4) == ["exp-0001"]
+
+    def test_a_label_none_of_them_has(self, block_study):
+        """Which is a misspelt key, rather than a value none of them has."""
+
+        with pytest.raises(
+            ValueError, match="None of the experiments \\[.*'exp-0004'\\] has a label 'block'. Their labels are"
+        ):
+            block_study.select_experiments("block", 4)
+
+    def test_nothing_to_select_from(self, block_study):
+        assert block_study.select_experiments("blocks", 4, experiments=[]) == []
+
+    def test_an_experiment_this_manager_does_not_hold(self, block_study):
+        with pytest.raises(ValueError, match="Experiments \\['nope'\\] are not held by this manager. Available"):
+            block_study.select_experiments("blocks", 4, experiments=["exp-0001", "nope"])
+
+    def test_experiments_given_need_no_parsed_data(self, block_study):
+        """Labels and layouts are what is selected by, and neither is parsed."""
+
+        del block_study.data["exp-0001"]
+
+        assert block_study.select_experiments("blocks", 4, experiments=["exp-0001", "exp-0002"]) == [
+            "exp-0001",
+            "exp-0002",
+        ]
+
 
 class TestBarChartNamedByACoordinate:
     """The bars of each experiment named by a coordinate, as plot_metric names its series."""
@@ -1970,7 +2080,7 @@ class TestPlotMetric:
     """Plotting a metric against whatever the study varied, one line for each region and each series."""
 
     @staticmethod
-    def _lines(mock_plot) -> list[tuple]:
+    def _lines(mock_plot):
         """The lines handed to the plot: the label, the values along x and the values of the metric of each."""
 
         return [tuple(line) for line in mock_plot.call_args.args[0]]
@@ -2071,6 +2181,39 @@ class TestPlotMetric:
         assert "Experiments ['exp-0001', 'exp-0003'] all have 'component cores' 120 and 'blocks' 4." in caplog.text
         assert caplog.text.count("Plotting the fastest of them") == 1, "no other point is shared"
 
+    @pytest.mark.parametrize("order", [["exp-0001", "exp-0003"], ["exp-0003", "exp-0001"]])
+    @mock.patch("access.profiling.manager.plot_line_metrics")
+    def test_an_experiment_with_no_value_for_a_region_is_passed_over(self, mock_plot, block_study, order):
+        """Whichever experiment comes first, as plot_component_scaling_data passes over it.
+
+        A region that the run select_best_run kept does not have is NaN, the runs being put together with an outer
+        join.
+        """
+        block_study.data["exp-0001"] = make_component_dataset([math.nan, 9.0])
+
+        block_study.plot_metric([BLOCK_STUDY_GROUP], tavg, component_cores("component"), experiments=order)
+
+        assert self._lines(mock_plot) == [("Dynamics", [120], [40.0]), ("component: Region 2", [120], [9.0])]
+
+    @mock.patch("access.profiling.manager.plot_line_metrics")
+    def test_a_point_where_no_experiment_has_a_value_is_nan(self, mock_plot, block_study):
+        for name in ("exp-0001", "exp-0003"):
+            block_study.data[name] = make_component_dataset([math.nan, 9.0])
+
+        block_study.plot_metric([RegionGroup("component", ["Region 1"])], tavg, component_cores("component"))
+
+        ((_, x_values, fastest),) = self._lines(mock_plot)
+        assert x_values == [60, 120]
+        assert fastest[0] == 80.0 and math.isnan(fastest[1])
+
+    def test_a_metric_with_more_than_one_value_for_each_region(self, block_study):
+        """As data for each PE has, rather than a TypeError from turning it into one number."""
+
+        add_per_pe_log(block_study)
+
+        with pytest.raises(ValueError, match="has the dimensions \\['pe'\\] .* more values than a line has points"):
+            block_study.plot_metric([RegionGroup("per_pe", ["Region 1"])], tavg, "blocks")
+
     def test_nothing_is_reported_where_no_point_is_shared(self, block_study, caplog):
         with caplog.at_level(logging.INFO):
             block_study.plot_metric(
@@ -2129,6 +2272,50 @@ class TestPlotMetric:
         ):
             block_study.plot_metric([BLOCK_STUDY_GROUP], tavg, "blocks")
 
+    def test_a_boolean_is_not_a_number_along_the_x_axis(self, block_study):
+        """Python counts it as one, but true and false have no place along an axis."""
+
+        block_study.experiments["exp-0002"].labels = {"blocks": True}
+
+        with pytest.raises(ValueError, match="Experiment 'exp-0002' has the value True for 'blocks', which is not a"):
+            block_study.plot_metric([BLOCK_STUDY_GROUP], tavg, "blocks")
+
+    @mock.patch("access.profiling.manager.plot_line_metrics")
+    def test_the_series_are_told_apart_as_they_are_shown(self, mock_plot, block_study):
+        """1, True and 1.0 are equal in Python, so keyed by their values they would be one line named after one."""
+
+        for name, value in (("exp-0001", 1), ("exp-0002", True), ("exp-0003", 1.0)):
+            block_study.experiments[name].labels = {"threads": value}
+
+        block_study.plot_metric(
+            [RegionGroup("component", ["Region 1"])],
+            tavg,
+            component_cores("component"),
+            series="threads",
+            experiments=["exp-0001", "exp-0002", "exp-0003"],
+        )
+
+        assert self._lines(mock_plot) == [
+            ("component: Region 1, threads 1", [120], [50.0]),
+            ("component: Region 1, threads True", [60], [100.0]),
+            ("component: Region 1, threads 1.0", [120], [40.0]),
+        ]
+
+    def test_two_values_of_the_series_shown_alike(self, block_study):
+        """Their lines would carry the same label."""
+
+        block_study.experiments["exp-0001"].labels = {"threads": 1}
+        block_study.experiments["exp-0002"].labels = {"threads": "1"}
+
+        with pytest.raises(ValueError, match="The values 1 and '1' of 'threads' are both shown as '1'"):
+            block_study.plot_metric(
+                [BLOCK_STUDY_GROUP],
+                tavg,
+                component_cores("component"),
+                series="threads",
+                experiments=["exp-0001", "exp-0002"],
+            )
+
     @mock.patch("access.profiling.manager.plot_line_metrics")
     def test_a_series_need_not_be_a_number(self, mock_plot, block_study):
         for experiment in block_study.experiments.values():
@@ -2158,10 +2345,12 @@ class TestPlotMetric:
             block_study.plot_metric([BLOCK_STUDY_GROUP], tavg, "blocks", experiments=[])
 
     def test_data_still_holding_several_runs(self, block_study):
+        """A plot takes no runs, so the message offers the methods that reduce them."""
+
         data = block_study.data["exp-0001"]
         data["component"] = data["component"].expand_dims({"run": [1]})
 
-        with pytest.raises(ValueError, match="'run' dimension"):
+        with pytest.raises(ValueError, match="'run' dimension. Use select_best_run\\(\\)"):
             block_study.plot_metric([BLOCK_STUDY_GROUP], tavg, "blocks")
 
 

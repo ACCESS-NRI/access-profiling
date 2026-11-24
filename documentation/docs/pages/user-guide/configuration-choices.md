@@ -377,8 +377,8 @@ This prints the time of CICE6 with a row for each number of cores of the sea ice
 each number of blocks per rank. There are a few things to know about the table:
 
 - The rows are sorted by their value. The columns are in the order in which the experiments give their values.
-- The columns are grouped by region, under the labels of the group. Without the second coordinate, there is one
-  column for each region.
+- The columns are grouped by region, under the labels of the group, so each region of the group needs a label of
+  its own. Without the second coordinate, there is one column for each region.
 - The numbers are in the units of the metric. The table names these units in `table.attrs["units"]`.
 - An empty cell means that no experiment has that pair of values. If two experiments have the same pair, the
   method raises a `ValueError` that names them, since a cell holds one value.
@@ -395,7 +395,9 @@ on_24_cores = manager.select_experiments(component_cores("ice"), 24)
 
 The method returns the names of the experiments, which you can give to a table or a plot as `experiments`. It
 selects from the experiments with parsed data, because those are the ones a table or a plot can read. To select
-from a list of your own instead, give it as `experiments`.
+from a list of your own instead, give it as `experiments`. An experiment without the label is not selected, since
+the experiments of a study need not all have the same labels. If none of them has the label, which is what a
+misspelt key gives, the method raises a `ValueError`.
 
 You can also define a coordinate of your own. It needs a name, and a function that works the quantity out from a
 layout. For example, this one is the number of cores of the whole layout:
@@ -430,10 +432,11 @@ ideal scaling, because the coordinate does not have to be a number of cores.
 
 There are a few things to know about this plot:
 
-- The values of the coordinate must be numbers. If a label holds a string, the method raises a `ValueError`. Use
-  a bar chart for such a label.
+- The values of the coordinate must be numbers. If a label holds a string or a boolean, the method raises a
+  `ValueError`. Use a bar chart for such a label.
 - If several experiments have the same value of the coordinate, the fastest of them is plotted. The manager
-  names these experiments in an INFO message.
+  names these experiments in an INFO message. An experiment with no value for a region, which is NaN, is passed
+  over for that region.
 - With `series`, the experiments are first divided by a second coordinate. Each region then has one line for
   each value of that coordinate.
 
@@ -445,4 +448,5 @@ fig = manager.plot_metric([cice6], tmax, "blocks per rank", series=component_cor
 ```
 
 Each line is labelled with its region and its value of the series, such as `CICE6, ice cores 24`. The series can
-also be a label, and its values do not have to be numbers.
+also be a label, and its values do not have to be numbers. Each value is one line, under the text it is shown as.
+Two values that are shown alike, such as the number `1` and the string `"1"`, therefore raise a `ValueError`.

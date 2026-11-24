@@ -100,7 +100,7 @@ spread = (slowest - fastest) / fastest
 ```
 
 The parsed data still holds every run, so you can do this as many times as you like. Without `runs`, `gather`
-refuses data with a `run` dimension, as the plots do.
+refuses data with a `run` dimension, as the plots do, and its message points to `runs`.
 [Putting the experiments in a table](configuration-choices.md#putting-the-experiments-in-a-table) shows what
 `gather` collects.
 
