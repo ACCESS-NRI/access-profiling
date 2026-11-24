@@ -1,6 +1,7 @@
 # Copyright 2025 ACCESS-NRI and contributors. See the top-level COPYRIGHT file for details.
 # SPDX-License-Identifier: Apache-2.0
 
+import dataclasses
 import json
 import logging
 import os
@@ -17,6 +18,7 @@ from access.config.parallel_mpi_grid import MPICartesianGrid
 from access.profiling.experiment import (
     RECORD_FILENAME,
     ConfigurationChoice,
+    ExperimentCoordinate,
     ProfilingExperiment,
     ProfilingExperimentStatus,
     ProfilingLog,
@@ -1046,3 +1048,19 @@ class TestConfigurationChoice:
         choice = ConfigurationChoice({"config.yaml": {"env": {"ESMF_RUNTIME_PROFILE": Quoted("on")}}})
 
         assert type(choice.changes["config.yaml"]["env"]["ESMF_RUNTIME_PROFILE"]) is Quoted
+
+
+class TestExperimentCoordinate:
+    """A quantity of a layout, with the name it goes by."""
+
+    def test_it_holds_a_name_and_how_the_quantity_is_read(self):
+        coordinate = ExperimentCoordinate("cores", lambda layout: layout.n_cores)
+
+        assert coordinate.name == "cores"
+        assert coordinate.value(recorded_layout()) == recorded_layout().n_cores
+
+    def test_it_cannot_be_changed(self):
+        coordinate = ExperimentCoordinate("cores", lambda layout: layout.n_cores)
+
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            coordinate.name = "ranks"

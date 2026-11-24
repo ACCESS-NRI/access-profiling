@@ -215,10 +215,10 @@ manager has its own defaults, which you can find on its page: [Payu](../access/p
 
 There are two ways of removing experiments.
 [`delete_experiment`][access.profiling.manager.ProfilingManager.delete_experiment] only makes the manager forget
-an experiment. It removes the record of the experiment and adds the call to the study file, but deletes none of
-the files of the experiment. Note that the archive of an archived experiment therefore stays, and a manager that you
-create later finds the experiment again from it. On a study that you cannot write to, such as a colleague's, the
-manager forgets the experiment in this session only, with a warning.
+an experiment and its parsed data. It removes the record of the experiment and adds the call to the study file, but
+deletes none of the files of the experiment. Note that the archive of an archived experiment therefore stays, and a
+manager that you create later finds the experiment again from it. On a study that you cannot write to, such as a
+colleague's, the manager forgets the experiment in this session only, with a warning.
 [`delete_experiments`][access.profiling.manager.ProfilingManager.delete_experiments] really deletes the
 experiments, including what their workflow engine keeps for them. Since this cannot be undone, we recommend trying
 it first with `dry_run=True`, which only shows what would be deleted:
@@ -262,6 +262,10 @@ and what they mean:
 | `Experiment '<name>' is not completed (status: RUNNING). Skipping parsing profiling data.` | Only finished experiments are parsed. Wait for the run to finish. |
 | `Profiling data still has a 'run' dimension. ...` | The experiments ran several times. See [Reducing the runs](run-to-run-variability.md#reducing-the-runs). |
 | `Several selected experiments use the same number of CPUs ...` | See [Selecting the best layouts](scaling-studies.md#selecting-the-best-layouts). |
+| `Experiment '<name>' has no label '<key>'. ...` | A table or a plot was asked for a label that one of its experiments does not have. Restrict the selection with `experiments=[...]`. |
+| `None of the experiments [...] has a label '<key>'. ...` | `select_experiments` was asked for a label that no experiment has, as with a misspelt key. Check the key against the labels that the message lists. |
+| `The metric '<name>' has the dimensions [...] besides the experiments and the regions, ...` | A table, a bar chart or `plot_metric` was given a metric with more than one value for each region, such as a value for each PE. Choose a metric with one value for each region. |
+| `Experiment '<name>' has the value <value> for '<coordinate>', which is not a number, ...` | `plot_metric` places the experiments along the x-axis by a number. Use the coordinate as the `series`, or draw a bar chart. |
 
 Some messages are specific to one workflow engine. You can find them on its page, such as
 [Experiments with Payu](../access/payu.md#troubleshooting).

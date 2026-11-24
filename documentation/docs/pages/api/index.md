@@ -41,9 +41,9 @@ The package also exports the other types a study or an application is written wi
 these are the base class of the managers, `ProfilingManager`, and the experiments and their statuses,
 `ProfilingExperiment` and `ProfilingExperimentStatus`. They also include the configurations a study asks
 experiments for, `ConfigurationChoice`, and the logs and how an application declares them, `ProfilingLog`, `LogSpec`
-and `log_at`. It also exports the application types, the control sources,
-`ProfilingMetric` and the parsers, and, for the ACCESS models, the configuration types, the component types and the
-CICE partitioning types.
+and `log_at`. `ExperimentCoordinate`, a quantity of a layout that tables and plots are arranged by, is exported too.
+It also exports the application types, the control sources, `ProfilingMetric` and the parsers, and, for the ACCESS
+models, the configuration types, the component types and the CICE partitioning types.
 
 Everything else is imported from the module that defines it. This includes the metrics themselves and the
 functions, such as the scaling functions:

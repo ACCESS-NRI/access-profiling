@@ -298,7 +298,9 @@ class TestBlocksChosenForTheRankCount:
             grid=(1440, 1152), distribution_type=distribution_type, blocks_per_rank_range=(5, 8)
         )
 
-        assert partitioning.blocks(275) == CICEBlocks(block_shape=(32, 32), block_counts=(45, 36), blocks_per_rank=6)
+        assert partitioning.blocks(275) == CICEBlocks(
+            block_shape=(32, 32), block_counts=(45, 36), blocks_per_rank=6, process_grid=None
+        )
 
     def test_a_grid_no_block_size_tiles_is_padded_as_little_as_can_be(self):
         """Two ranks holding 5 to 8 blocks each need 10 to 16 blocks between them.
@@ -310,7 +312,9 @@ class TestBlocksChosenForTheRankCount:
 
         partitioning = CICEPartitioning(grid=(101, 7), distribution_type="roundrobin", blocks_per_rank_range=(5, 8))
 
-        assert partitioning.blocks(2) == CICEBlocks(block_shape=(51, 1), block_counts=(2, 7), blocks_per_rank=7)
+        assert partitioning.blocks(2) == CICEBlocks(
+            block_shape=(51, 1), block_counts=(2, 7), blocks_per_rank=7, process_grid=None
+        )
 
     @pytest.mark.parametrize("processor_shape", ["slenderX1", "slenderX2", "square-ice", "square-pop"])
     @pytest.mark.parametrize("n_ranks", [1, 6, 12, 24, 60])
@@ -320,6 +324,7 @@ class TestBlocksChosenForTheRankCount:
         blocks = partitioning.blocks(n_ranks)
         assert blocks is not None
         ranks_x, ranks_y = _cice_process_grid(n_ranks, blocks.block_counts[0], blocks.block_counts[1], processor_shape)
+        assert blocks.process_grid == (ranks_x, ranks_y)
         assert ranks_x * ranks_y == n_ranks
         assert blocks.block_counts[0] % ranks_x == 0
         assert blocks.block_counts[1] % ranks_y == 0
@@ -327,6 +332,24 @@ class TestBlocksChosenForTheRankCount:
         assert 5 <= blocks.blocks_per_rank <= 8
         for extent, size, count in zip(GRID, blocks.block_shape, blocks.block_counts, strict=True):
             assert -(-extent // size) == count, "the counts are what CICE makes of the size"
+
+    @pytest.mark.parametrize(
+        ("n_ranks", "block_shape", "process_grid"),
+        [
+            (24, (15, 54), (24, 1)),
+            # 360 points split 36 ways give 10-point columns, too many of them for 5 to 8 blocks per rank, so the
+            # only blocks that fit stack the ranks in a column instead: CICE's choice, not the processor shape's.
+            (36, (45, 9), (1, 36)),
+        ],
+    )
+    def test_the_process_grid_says_whether_cice_kept_its_ranks_in_one_row(self, n_ranks, block_shape, process_grid):
+        """What the ACCESS-OM3 100 km configuration comes to under slenderX1, as its CICE6 logs report it."""
+
+        partitioning = CICEPartitioning(grid=(360, 324), blocks_per_rank_range=(5, 8))
+
+        blocks = partitioning.blocks(n_ranks)
+        assert blocks is not None
+        assert (blocks.block_shape, blocks.process_grid) == (block_shape, process_grid)
 
     def test_blocks_are_never_thinner_than_their_ghost_cells(self):
         partitioning = CICEPartitioning(

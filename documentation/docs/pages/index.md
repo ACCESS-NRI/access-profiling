@@ -59,6 +59,7 @@ A profiling study is defined by three independent parts, which are introduced in
   [region groups](user-guide/analysing-data.md#choosing-the-regions).
 - Bar charts compare experiments side by side, region by region.
 - Scaling plots show the speedup and the parallel efficiency of the application and of each of its components.
+- Line plots show the timings against whatever a study varied, such as a setting of the application.
 - It is also possible to select the fastest experiment for each number of cores, and the fastest run of each
   experiment.
 - The datasets are plain xarray, so you can do any other analysis yourself.

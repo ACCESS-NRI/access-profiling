@@ -82,9 +82,10 @@ The variable is normally set by Read the Docs, and the build does not run withou
 foot of each page come from the git history. A page that has not been committed therefore causes a warning in the
 strict build.
 
-The figures of [Scaling studies](../user-guide/scaling-studies.md) and
-[Best layout for a budget](../user-guide/best-layout.md) are made from synthetic data, with the plotting functions
-of the package. If you change those functions, make the figures again:
+The figures of [Scaling studies](../user-guide/scaling-studies.md),
+[Best layout for a budget](../user-guide/best-layout.md) and
+[Configuration choices](../user-guide/configuration-choices.md) are made from synthetic data, with the plotting
+functions of the package. If you change those functions, make the figures again:
 
 ```bash
 python documentation/scripts/generate_figures.py

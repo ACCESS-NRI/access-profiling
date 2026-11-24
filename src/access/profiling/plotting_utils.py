@@ -4,8 +4,9 @@
 """What a plot is to show, and the parts of the plots that are not about scaling.
 
 `RegionGroup` names the regions of one log a plot is to show, what to call them and whose cores they are read
-against, and one list of groups describes a study to every plotting method of a manager. The bar chart those
-methods draw, and the helper that sizes the columns of the table beside a scaling plot, are here too.
+against, and one list of groups describes a study to every plotting method of a manager. The bar chart and the
+line plot those methods draw, and the helper that sizes the columns of the table beside a scaling plot, are here
+too.
 """
 
 from collections.abc import Mapping, Sequence
@@ -32,12 +33,13 @@ class RegionGroup:
     component says one thing, but a name prefixed with a pair of them is a coupler between two and looks the
     same; many names say nothing at all; and the call stack that would settle it is not kept. Hence this.
 
-    One list of groups describes a study to all three plotting methods. Only
+    One list of groups describes a study to all four plotting methods. Only
     `ProfilingManager.plot_component_scaling_data` reads `component`, being the only one whose x axis is a
-    component's own cores; `ProfilingManager.plot_scaling_data` reads every region against the whole job and
-    `ProfilingManager.plot_bar_chart` puts no cores on either axis, so both ignore it rather than refusing a list
-    that carries it. A component named here is still checked by the plot that uses it, so a misspelling is not
-    lost as long as the same list reaches that plot.
+    component's own cores; `ProfilingManager.plot_scaling_data` reads every region against the whole job,
+    `ProfilingManager.plot_bar_chart` puts no cores on either axis and `ProfilingManager.plot_metric` is told what
+    goes on its x axis, so the three ignore it rather than refusing a list that carries it. A component named here
+    is still checked by the plot that uses it, so a misspelling is not lost as long as the same list reaches that
+    plot.
 
     Args:
         log (str): Name of the profiling log the regions come from, as the application's LogSpec names it.
@@ -201,6 +203,51 @@ def plot_bar_metrics(
     ax.set_title(f"{metric.description}")
     ax.legend(title="Experiment")
     ax.grid(axis="y", linestyle="--", alpha=0.7)
+    fig.tight_layout()
+
+    if show:
+        plt.show()
+
+    return fig
+
+
+def plot_line_metrics(
+    lines: Sequence[tuple[str, Sequence[float], Sequence[float]]],
+    metric: ProfilingMetric,
+    xlabel: str,
+    ylabel: str | None = None,
+    show: bool = True,
+) -> Figure:
+    """Plots a profiling metric against a quantity of the experiments, one line at a time.
+
+    Both axes are linear and no ideal line is drawn, because the quantity along the x-axis need not be a number of
+    cores: it may be a size of block or a number of threads, for which nothing says what ideal would be.
+    `access.profiling.scaling.plot_component_scaling` is the plot of a metric against a component's own cores.
+
+    The figure carries no title, as that plot carries none: the y-axis already names the metric.
+
+    Args:
+        lines (Sequence[tuple[str, Sequence[float], Sequence[float]]]): The lines to draw, in the order they are
+            drawn and listed in the legend. Each is its label, its values along the x-axis and the value of the
+            metric at each of them. They come as a sequence and not as a mapping, so that two lines given the same
+            label are both drawn.
+        metric (ProfilingMetric): The metric being plotted, which labels the y-axis unless ylabel is given.
+        xlabel (str): Label for the x-axis: what the quantity along it is.
+        ylabel (str | None): Optional label for the y-axis. If None, the metric names it.
+        show (bool): Whether to call `plt.show()`. Default: True.
+
+    Returns:
+        Figure: The Matplotlib figure the lines are plotted on.
+    """
+    fig, ax = plt.subplots(figsize=(10, 6))
+
+    for label, x_values, values in lines:
+        ax.plot(x_values, values, marker="o", label=label)
+
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel(ylabel if ylabel is not None else f"{metric.name} ({metric.units})")
+    ax.legend()
+    ax.grid(linestyle="--", alpha=0.7)
     fig.tight_layout()
 
     if show:

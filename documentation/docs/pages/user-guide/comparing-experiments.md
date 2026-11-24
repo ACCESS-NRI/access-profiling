@@ -93,7 +93,9 @@ fig = manager.plot_bar_chart(
 
 The regions appear along the x axis in the order of the groups, and the experiments in the order you give them.
 By default, all the experiments with parsed data are included. The bars are labelled with the names of the
-experiments, and you can use `experiment_relabel_map` to give them other labels. The title of the chart is the
+experiments, and you can use `experiment_relabel_map` to give them other labels. Experiments with labels can also
+be named by one of them, with `label`, as [Configuration choices](configuration-choices.md#running-and-comparing)
+shows. The title of the chart is the
 description of the metric. Note that the number of cores does not appear anywhere in the chart, so you can also
 compare experiments of different sizes.
 [Best layout for a budget](best-layout.md#comparing-the-fastest-layouts) shows an example.

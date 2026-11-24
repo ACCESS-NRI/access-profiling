@@ -27,7 +27,7 @@ import xarray as xr  # noqa: E402
 
 from access.profiling import RegionGroup  # noqa: E402
 from access.profiling.metrics import tmax  # noqa: E402
-from access.profiling.plotting_utils import plot_bar_metrics  # noqa: E402
+from access.profiling.plotting_utils import plot_bar_metrics, plot_line_metrics  # noqa: E402
 from access.profiling.scaling import plot_component_scaling, plot_scaling_metrics  # noqa: E402
 
 FIGURES = Path(__file__).resolve().parents[1] / "docs" / "assets" / "figures"
@@ -131,12 +131,24 @@ def bar_chart_figure() -> plt.Figure:
     return plot_bar_metrics(data, [group.label(region) for region in regions], tmax, show=False)
 
 
+def line_plot_figure() -> plt.Figure:
+    """The figure ProfilingManager.plot_metric draws: a region against a coordinate of the experiments."""
+    group = RegionGroup("ESMF", ["[ICE] RunPhase1"], relabel={"[ICE] RunPhase1": "CICE6"})
+    # Four block sizes on one layout. With few blocks on each rank the work is shared out unevenly, and with many
+    # the ranks spend longer on the boundaries between the blocks.
+    blocks_per_rank = np.array([1, 4, 6, 12])
+    sea_ice = 70.0 + 30.0 / blocks_per_rank + 1.2 * blocks_per_rank
+    lines = [(group.label("[ICE] RunPhase1"), blocks_per_rank.tolist(), sea_ice.tolist())]
+    return plot_line_metrics(lines, tmax, xlabel="Blocks per rank", show=False)
+
+
 def main() -> None:
     FIGURES.mkdir(parents=True, exist_ok=True)
     for name, draw in [
         ("scaling", scaling_figure),
         ("component-scaling", component_scaling_figure),
         ("bar-chart", bar_chart_figure),
+        ("line-plot", line_plot_figure),
     ]:
         figure = draw()
         figure.savefig(FIGURES / f"{name}.png", dpi=100, bbox_inches="tight")

@@ -68,10 +68,11 @@ As the message says, there are two ways of getting one value for each experiment
 - [`select_best_run`][access.profiling.manager.ProfilingManager.select_best_run] keeps the best run of every
   experiment, which is the run where a region you choose was fastest. The same run is kept for all the logs of
   the experiment, so the result is a run that really happened.
-- [`aggregate_runs`][access.profiling.manager.ProfilingManager.aggregate_runs] computes the minimum, the mean or
-  the median over the runs. This is done for each region separately, so the values of different regions may come
-  from different runs. Use the minimum to estimate the best timings you can get, and the mean or the median for
-  the typical ones. Note that integer metrics, such as the number of calls, become floats.
+- [`aggregate_runs`][access.profiling.manager.ProfilingManager.aggregate_runs] computes the minimum, the maximum,
+  the mean or the median over the runs. This is done for each region separately, so the values of different
+  regions may come from different runs. Use the minimum to estimate the best timings you can get, the maximum for
+  the worst ones, and the mean or the median for the typical ones. Note that integer metrics, such as the number of
+  calls, become floats.
 
 For example, to keep the run in which the whole model was fastest:
 
@@ -81,6 +82,41 @@ manager.select_best_run("payu", "payu_model_run_duration_seconds", tmax)
 
 Both methods are applied to all the experiments, and do not touch the datasets that have no `run` dimension.
 Note that they replace the parsed data. If you want the individual runs back, call `parse_profiling_data` again.
+
+## Reducing the runs without replacing them
+
+You can also keep the parsed data as it is, and reduce the runs only for the data that you collect.
+[`gather`][access.profiling.manager.ProfilingManager.gather] takes the statistic as `runs`, with the same four
+choices as `aggregate_runs`. Each region is again reduced on its own. For example, to collect the fastest and the
+slowest run of every experiment:
+
+```python
+from access.profiling import RegionGroup
+
+runtime = RegionGroup("payu", ["payu_model_run_duration_seconds"])
+fastest = manager.gather(runtime, runs="min")[tmax]
+slowest = manager.gather(runtime, runs="max")[tmax]
+spread = (slowest - fastest) / fastest
+```
+
+The parsed data still holds every run, so you can do this as many times as you like. Without `runs`, `gather`
+refuses data with a `run` dimension, as the plots do, and its message points to `runs`.
+[Putting the experiments in a table](configuration-choices.md#putting-the-experiments-in-a-table) shows what
+`gather` collects.
+
+[`table`][access.profiling.manager.ProfilingManager.table] takes `runs` too. This gives the spread of every
+experiment as a table, arranged by what tells the experiments apart. For example, by the cores of the sea ice of
+ACCESS-OM3:
+
+```python
+from access.profiling.manager import component_cores
+
+fastest = manager.table(runtime, tmax, component_cores("ice"), runs="min")
+slowest = manager.table(runtime, tmax, component_cores("ice"), runs="max")
+print(100 * (slowest - fastest) / fastest)
+```
+
+This prints the spread in percent, with a row for each number of cores of the sea ice.
 
 ## Rose suites
 

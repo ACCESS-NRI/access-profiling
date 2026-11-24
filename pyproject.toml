@@ -18,6 +18,7 @@ classifiers = [
 requires-python = ">=3.11.4"
 dependencies = [
     "xarray",
+    "pandas",
     "pint",
     "pint-xarray",
     "matplotlib",

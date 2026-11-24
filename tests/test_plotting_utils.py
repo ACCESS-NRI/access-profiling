@@ -9,7 +9,12 @@ from matplotlib.figure import Figure
 from matplotlib.patches import Rectangle
 
 from access.profiling.metrics import tavg
-from access.profiling.plotting_utils import RegionGroup, calculate_column_widths, plot_bar_metrics
+from access.profiling.plotting_utils import (
+    RegionGroup,
+    calculate_column_widths,
+    plot_bar_metrics,
+    plot_line_metrics,
+)
 
 
 @pytest.fixture(scope="module")
@@ -197,3 +202,60 @@ class TestRegionGroup:
 
         assert group.regions == ("Ocean",)
         assert group.label("Ocean") == "Ocean total"
+
+
+class TestPlotLineMetrics:
+    """A metric against a quantity of the experiments, one line at a time."""
+
+    LINES = (("Ocean", [24, 48, 96], [300.0, 180.0, 120.0]), ("Sea ice", [24, 48], [80.0, 60.0]))
+
+    def test_each_line_is_drawn_through_its_points(self):
+        fig = plot_line_metrics(self.LINES, tavg, xlabel="Blocks per rank", show=False)
+
+        assert isinstance(fig, Figure)
+        lines = fig.axes[0].lines
+        assert [list(line.get_xdata()) for line in lines] == [[24, 48, 96], [24, 48]]
+        assert [list(line.get_ydata()) for line in lines] == [[300.0, 180.0, 120.0], [80.0, 60.0]]
+        assert all(line.get_marker() == "o" for line in lines), "so that a line of one point can be seen"
+
+    def test_the_legend_lists_the_lines_in_the_order_they_are_given(self):
+        fig = plot_line_metrics(self.LINES, tavg, xlabel="Blocks per rank", show=False)
+
+        assert legend_labels(fig.axes[0]) == ["Ocean", "Sea ice"]
+
+    def test_two_lines_with_the_same_label_are_both_drawn(self):
+        """Which is why the lines come as a sequence, and not keyed by their labels."""
+
+        lines = [("Total", [1, 2], [10.0, 6.0]), ("Total", [1, 2], [4.0, 3.0])]
+        fig = plot_line_metrics(lines, tavg, xlabel="Blocks per rank", show=False)
+
+        assert legend_labels(fig.axes[0]) == ["Total", "Total"]
+        assert len(fig.axes[0].lines) == 2
+
+    def test_the_axes_are_linear(self):
+        """The quantity along the x axis need not be a number of cores, so nothing here is logarithmic."""
+
+        ax = plot_line_metrics(self.LINES, tavg, xlabel="Blocks per rank", show=False).axes[0]
+
+        assert ax.get_xscale() == "linear" and ax.get_yscale() == "linear"
+        assert ax.xaxis.get_gridlines()[0].get_visible()
+
+    def test_the_axes_are_labelled_and_the_figure_has_no_title(self):
+        ax = plot_line_metrics(self.LINES, tavg, xlabel="Blocks per rank", show=False).axes[0]
+
+        assert ax.get_xlabel() == "Blocks per rank"
+        assert ax.get_ylabel() == f"{tavg.name} ({tavg.units})"
+        assert ax.get_title() == ""
+
+    def test_a_label_for_the_y_axis_replaces_the_metric(self):
+        fig = plot_line_metrics(self.LINES, tavg, xlabel="Blocks per rank", ylabel="Walltime (s)", show=False)
+
+        assert fig.axes[0].get_ylabel() == "Walltime (s)"
+
+    @mock.patch("access.profiling.plotting_utils.plt.show")
+    def test_it_is_shown_only_when_asked(self, mock_show):
+        plot_line_metrics(self.LINES, tavg, xlabel="Blocks per rank", show=False)
+        assert mock_show.call_count == 0
+
+        plot_line_metrics(self.LINES, tavg, xlabel="Blocks per rank")
+        assert mock_show.call_count == 1
