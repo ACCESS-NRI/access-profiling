@@ -2092,14 +2092,14 @@ class TestConfigurationChoices:
     ROUNDROBIN = {"ice_in": {"domain_nml": {"distribution_type": "'roundrobin'"}}}
 
     @staticmethod
-    def blocks(mock_experiment_generator) -> dict[str, dict]:
+    def blocks(mock_experiment_generator):
         """The perturbation blocks of the last call to the generator, keyed by their one branch."""
         perturbations = mock_experiment_generator.call_args[0][0]["Perturbation_Experiment"]
         assert all(len(block["branches"]) == 1 for block in perturbations.values())
         return {block["branches"][0]: block for block in perturbations.values()}
 
     @staticmethod
-    def layouts(manager) -> list:
+    def layouts(manager):
         """The four layouts of the mock model on 4 cores, as a study would find them."""
         return manager.select_layouts(4, allocations=MOCK_ALLOCATIONS)
 

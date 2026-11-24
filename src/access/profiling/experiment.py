@@ -19,6 +19,7 @@ The record also states the version of its own format, `RECORD_VERSION`. It is wr
 archive years later, by a later version of this package, so the file itself has to say how it is to be read.
 """
 
+import copy
 import io
 import json
 import logging
@@ -166,7 +167,8 @@ class ConfigurationChoice:
     comes to from its own fields, not from what a choice changes.
 
     The changes and the labels are kept in the experiment's record, which is how a study tells whether it already
-    has the experiment of a choice. They are therefore JSON values.
+    has the experiment of a choice. They are therefore JSON values. A choice holds copies of its own, so changing
+    the dictionaries it was made from afterwards changes neither the choice nor the experiment generated from it.
 
     Args:
         changes (dict): What the experiment changes in the control, keyed by file. Empty (the default) changes
@@ -188,6 +190,11 @@ class ConfigurationChoice:
     def __post_init__(self) -> None:
         _refuse_other_than_json("changes of a configuration choice", self.changes)
         _refuse_other_than_json("labels of a configuration choice", self.labels)
+        # Copied, rather than written and read back as JSON, which would turn a YAML library's quoted string into
+        # a plain one and lose its quotes. A study may build several choices from one dictionary and change it
+        # between batches, so each choice holds what it was validated as.
+        object.__setattr__(self, "changes", copy.deepcopy(self.changes))
+        object.__setattr__(self, "labels", copy.deepcopy(self.labels))
 
 
 @dataclass(frozen=True)
@@ -549,7 +556,7 @@ class ProfilingExperiment:
         self.layout = layout
         self.layout_given = layout is not None
         self.changes = changes
-        self.labels = dict(labels) if labels is not None else {}
+        self.labels = copy.deepcopy(labels) if labels is not None else {}
         _refuse_other_than_json("labels of an experiment", self.labels)
         self.complete = complete
         if self.path.name.endswith(".tar.gz"):

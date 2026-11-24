@@ -18,6 +18,7 @@ Both are written whole, to a temporary file that then replaces them, so that a s
 write leaves the file as it was.
 """
 
+import copy
 import itertools
 import json
 import logging
@@ -1060,11 +1061,13 @@ class ProfilingManager(ABC, Generic[AppT]):
                 )
             raise
 
-        # What the study stated goes into each record, since it is what tells the experiment from the others.
+        # What the study stated goes into each record, since it is what tells the experiment from the others. The
+        # experiment takes copies of its own: it is compared with later calls and written into its archive's record
+        # long after the choice it came from, whose dictionaries a study may still change in place.
         planned = {plan.name: plan for plan in plans}
         for name, experiment in created.items():
-            experiment.changes = planned[name].stated_changes
-            experiment.labels = dict(planned[name].labels)
+            experiment.changes = copy.deepcopy(planned[name].stated_changes)
+            experiment.labels = copy.deepcopy(planned[name].labels)
             self.experiments[name] = experiment
             self._write_record(name)
         self._log(call, [plan.name for plan in plans], generated=True, **runner_options)

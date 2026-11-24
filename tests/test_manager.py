@@ -2069,7 +2069,7 @@ CARTESIAN = {"ice_in": {"domain_nml": {"distribution_type": "'cartesian'"}}}
 ROUNDROBIN = {"ice_in": {"domain_nml": {"distribution_type": "'roundrobin'"}}}
 
 
-def choosing(tmp_path: Path) -> "MockProfilingManager":
+def choosing(tmp_path):
     """A manager with a control and a working directory of its own, ready to generate experiments."""
 
     manager = MockProfilingManager([], work_dir=tmp_path / "work", archive_dir=tmp_path / "archive")
@@ -2117,15 +2117,23 @@ class TestGenerateExperiments:
         assert record["layout"] is None
         assert manager.experiments["exp-0001"].labels == {"distribution": "roundrobin"}
 
-    def test_the_labels_of_an_experiment_are_its_own(self, tmp_path):
-        """Changing the labels a choice was given afterwards does not reach the experiment."""
+    def test_the_changes_and_the_labels_of_an_experiment_are_its_own(self, tmp_path):
+        """Changing a choice in place after generation reaches neither the experiment nor what identifies it.
+
+        The experiment's are what later calls are compared with, and what its archive's record is written from.
+        """
         manager = choosing(tmp_path)
-        labels = {"distribution": "roundrobin"}
+        choice = ConfigurationChoice({"config.yaml": {"walltime": "2:00:00"}}, labels={"grid": [12, 16]})
+        manager.generate_experiments([choice])
 
-        manager.generate_experiments([ConfigurationChoice(ROUNDROBIN, labels=labels)])
-        labels["distribution"] = "something else"
+        choice.changes["config.yaml"]["walltime"] = "4:00:00"
+        choice.labels["grid"].append(1)
 
-        assert manager.experiments["exp-0001"].labels == {"distribution": "roundrobin"}
+        experiment = manager.experiments["exp-0001"]
+        assert experiment.changes == {"config.yaml": {"walltime": "2:00:00"}}
+        assert experiment.labels == {"grid": [12, 16]}
+        manager.generate_experiments([choice])
+        assert list(manager.experiments) == ["exp-0001", "exp-0002"], "four hours is another configuration"
 
     def test_a_choice_the_study_has_is_skipped(self, tmp_path, caplog):
         manager = choosing(tmp_path)

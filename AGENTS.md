@@ -222,7 +222,8 @@ blocks, one page per concept. A new module needs a block on the right page and a
 - **A record's `changes` are what the study stated, never what the layout comes to** (`ExperimentPlan.stated_changes`,
   not `changes`), so a scaling experiment is its layout with `{}`, and both generating methods recognise each
   other's experiments. `ConfigurationChoice` refuses changes and labels that a record would not give back as they
-  were. Labels identify nothing: a held experiment keeps its own.
+  were. Labels identify nothing: a held experiment keeps its own. A choice and an experiment hold copies of their
+  own, made with `copy.deepcopy`: a JSON round trip would lose the type of a YAML library's quoted string.
 - **Regenerating leaves a FAILED experiment FAILED**: the failure is the run's record, and
   `run_experiments(retry_failed=True)` is what clears it.
 - **An archive holds only what can be extracted again**, since `directory()` extracts it with `filter="data"`,

@@ -820,12 +820,14 @@ class TestRecord:
         assert experiment.record(tmp_path)["layout"] is None
 
     def test_the_labels_are_the_experiments_own(self, tmp_path):
-        labels = {"version": "1.0"}
+        """Down to a value that is a list, as a process grid is."""
+        labels = {"version": "1.0", "grid": [12, 16]}
         experiment = ProfilingExperiment(tmp_path / "expt", labels=labels)
 
         labels["version"] = "2.0"
+        labels["grid"].append(1)
 
-        assert experiment.labels == {"version": "1.0"}
+        assert experiment.labels == {"version": "1.0", "grid": [12, 16]}
 
     def test_an_experiment_comes_back_from_its_record(self, tmp_path):
         layout = recorded_layout()
@@ -1004,6 +1006,18 @@ class TestConfigurationChoice:
         assert choice.changes == {"ice_in": {"domain_nml": {"block_size_x": 30}}}
         assert choice.layout is layout
         assert choice.labels == {"blocks": "30x54"}
+
+    def test_it_holds_copies_of_its_own(self):
+        """As a study that states the walltime of one batch of choices, and then of the next, needs."""
+        walltime = {"config.yaml": {"walltime": "2:00:00"}}
+        labels = {"grid": [12, 16]}
+        choice = ConfigurationChoice(walltime, labels=labels)
+
+        walltime["config.yaml"]["walltime"] = "4:00:00"
+        labels["grid"].append(1)
+
+        assert choice.changes == {"config.yaml": {"walltime": "2:00:00"}}
+        assert choice.labels == {"grid": [12, 16]}
 
     @pytest.mark.parametrize("changes", [{"config.yaml": {"input": Path("/some/input")}}, {"config.yaml": {1, 2}}])
     def test_changes_that_are_not_json_values_are_refused(self, changes):
