@@ -24,7 +24,7 @@ The results are now in `manager.data`, with one dataset for each log of each exp
 of one experiment, and at the regions of one of them:
 
 ```python
-name = "esm1p6-layout_piControl_atm_18x14_mom_16x16_ice_12"
+name = "exp-0001"
 print(list(manager.data[name]))
 print(manager.data[name]["MOM5"].region.values)
 ```

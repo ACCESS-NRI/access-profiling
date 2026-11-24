@@ -17,8 +17,8 @@ from access.config.parallel_domain import Domain
 from conftest import grid_of
 
 from access.profiling.control import GitControlSource
-from access.profiling.experiment import ProfilingLog
-from access.profiling.manager import ProfilingManager
+from access.profiling.experiment import RECORD_FILENAME, ProfilingLog
+from access.profiling.manager import STUDY_FILENAME, ProfilingManager
 from access.profiling.payu_configuration import PayuConfiguration
 from access.profiling.payu_manager import (
     PayuManager,
@@ -60,7 +60,7 @@ class MockPayuConfiguration(PayuConfiguration):
     def component_logs(self, output_dir):
         return {"component": ProfilingLog(output_dir, mock.MagicMock())}
 
-    def experiment_name(self, layout) -> str:
+    def layout_key(self, layout):
         atm, ocn = layout.sub_layouts
         atm_nx, atm_ny = grid_of(atm)
         ocn_nx, ocn_ny = grid_of(ocn)
@@ -79,10 +79,11 @@ MOCK_CONTROL = GitControlSource("https://example.com/repo", "commit")
 
 
 @pytest.fixture(scope="function")
-def manager():
+def manager(tmp_path):
+    """A manager on a working directory of its own, since generating writes the experiments' records into it."""
     return PayuManager(
-        Path("/fake/test_path"),
-        Path("/fake/archive_path"),
+        tmp_path / "test_path",
+        tmp_path / "archive_path",
         MockPayuConfiguration(),
         MOCK_CONTROL,
         lab_dir=Path("/fake/lab"),
@@ -614,8 +615,8 @@ class TestArchivedNcpus:
         rediscovered = PayuManager(work_dir, archive_dir, MockPayuConfiguration())
         assert rediscovered.experiments.keys() == {"full", "idle"}
         assert all(exp.status == ProfilingExperimentStatus.ARCHIVED for exp in rediscovered.experiments.values())
-        assert all(exp.ncpus is None for exp in rediscovered.experiments.values()), "nothing carried over"
-        assert {name: rediscovered._ncpus(name) for name in rediscovered.experiments} == {"full": 104, "idle": 104}
+        # Archiving worked the counts out, the runs being over, and each archive's record carries its own.
+        assert {name: exp.ncpus for name, exp in rediscovered.experiments.items()} == {"full": 104, "idle": 104}
 
 
 def test_select_layouts(manager):
@@ -653,7 +654,7 @@ def test_generate_scaling_experiments(mock_experiment_generator, manager):
     assert config["model_type"] == "mock-payu-model"
     assert config["repository_url"] == "https://example.com/repo"
     assert config["start_point"] == "commit"
-    assert config["test_path"] == "/fake/test_path"
+    assert config["test_path"] == str(manager.work_dir)
     assert config["repository_directory"] == "config"
     assert config["control_branch_name"] == "ctrl"
     assert config["Control_Experiment"] == {"some": "option", "config.yaml": {"laboratory": str(manager.laboratory)}}
@@ -680,7 +681,7 @@ def test_generate_scaling_experiments(mock_experiment_generator, manager):
     assert len(set(experiment_names)) == len(experiment_names), "so no two runs share a work or archive dir"
     for branch in branches:
         assert isinstance(manager.experiments[branch], ProfilingExperiment)
-        assert manager.experiments[branch].path == Path("/fake/test_path") / branch / "config"
+        assert manager.experiments[branch].path == manager.work_dir / branch / "config"
 
 
 @mock.patch("access.profiling.payu_manager.ExperimentGenerator")
@@ -733,10 +734,10 @@ def test_generate_scaling_experiments_attaches_the_layout(mock_experiment_genera
 
     layouts = {branch: exp.layout for branch, exp in manager.experiments.items()}
     assert all(layout is not None for layout in layouts.values())
-    # Every branch is a distinct layout, and the branch is named after it.
-    assert len(set(layouts.values())) == len(layouts)
-    for branch, layout in layouts.items():
-        assert manager.application.experiment_name(layout) == branch
+    # Every branch is a distinct layout, and is numbered rather than named after it.
+    assert sorted(layouts) == ["exp-0001", "exp-0002", "exp-0003", "exp-0004"]
+    assert len({manager.application.layout_key(layout) for layout in layouts.values()}) == 4
+    for layout in layouts.values():
         assert layout.n_cores == 4
 
 
@@ -774,9 +775,9 @@ class TestRegenerateFailed:
 
     @staticmethod
     def _fail(manager, branch: str) -> None:
-        """Marks one experiment failed, at a path parse_status can say nothing about."""
+        """Marks one experiment failed. It stays the experiment it was, which its layout is what identifies."""
 
-        manager.experiments[branch] = _experiment(Path("/fake/failed"), ProfilingExperimentStatus.FAILED)
+        manager.experiments[branch].status = ProfilingExperimentStatus.FAILED
 
     @mock.patch("access.profiling.payu_manager.ExperimentGenerator")
     def test_a_failed_experiment_is_generated_again(self, mock_experiment_generator, manager):
@@ -823,7 +824,7 @@ class TestRegenerateFailed:
 
         self._generate(manager)
         branch = sorted(manager.experiments)[0]
-        manager.experiments[branch] = _experiment(Path("/fake/other"), status)
+        manager.experiments[branch].status = status
         mock_experiment_generator.reset_mock()
 
         self._generate(manager, regenerate_failed=True)
@@ -978,7 +979,7 @@ def test_generate_scaling_experiments_retries_after_a_failed_generation(mock_exp
     assert len(manager.experiments) == 4
     for block in perturbations.values():
         branch = block["branches"][0]
-        assert manager.experiments[branch].path == Path("/fake/test_path") / branch / "config"
+        assert manager.experiments[branch].path == manager.work_dir / branch / "config"
 
 
 @mock.patch("access.profiling.payu_manager.ExperimentGenerator")
@@ -1089,7 +1090,7 @@ def test_run_experiments(mock_experiment_runner, manager):
     ):
         manager.run_experiments()
         expected_call = {
-            "test_path": Path("/fake/test_path"),
+            "test_path": manager.work_dir,
             "repository_directory": "config",
             "running_branches": ["branch1", "branch2"],
             "nruns": [1, 1],
@@ -1682,7 +1683,7 @@ class TestLaboratory:
 
     def test_it_is_named_after_the_model_and_the_working_directory(self, manager):
         """A digest of the working directory, so that one lab_dir can hold the laboratories of many studies."""
-        digest = hashlib.sha256(b"/fake/test_path").hexdigest()[:8]
+        digest = hashlib.sha256(str(manager.work_dir.resolve()).encode()).hexdigest()[:8]
 
         assert manager.laboratory == Path(f"/fake/lab/mock-payu-model-{digest}")
 
@@ -1718,16 +1719,43 @@ class TestLaboratory:
         assert manager.laboratory is None
 
     @mock.patch("access.profiling.payu_manager.ExperimentGenerator")
-    def test_generation_without_a_lab_dir_is_refused(self, mock_experiment_generator):
+    def test_generation_without_a_lab_dir_is_refused(self, mock_experiment_generator, tmp_path):
         """Nothing is generated, and nothing registered, without a laboratory to run in."""
-        manager = PayuManager(
-            Path("/fake/test_path"), Path("/fake/archive_path"), MockPayuConfiguration(), MOCK_CONTROL
-        )
+        manager = PayuManager(tmp_path / "test_path", tmp_path / "archive_path", MockPayuConfiguration(), MOCK_CONTROL)
 
         with pytest.raises(ValueError, match="without a lab_dir"):
             self.generate(manager, {})
         mock_experiment_generator.assert_not_called()
         assert manager.experiments == {}
+        assert not (manager.work_dir / STUDY_FILENAME).exists(), "nor is a number taken"
+
+    @pytest.mark.parametrize(
+        "lab_dir, environment, control_options, error, message",
+        [
+            (None, {}, {}, ValueError, "without a lab_dir"),
+            (Path("/fake/lab"), {"PAYU_LAB_PATH": "/scratch/tm70/elsewhere"}, {}, RuntimeError, "PAYU_LAB_PATH is set"),
+            (
+                Path("/fake/lab"),
+                {},
+                {"config.yaml": {"laboratory": "/elsewhere"}},
+                ValueError,
+                "name a Payu laboratory",
+            ),
+        ],
+    )
+    @mock.patch("access.profiling.payu_manager.ExperimentGenerator")
+    def test_the_creation_hook_refuses_the_same_on_its_own(
+        self, mock_experiment_generator, tmp_path, lab_dir, environment, control_options, error, message
+    ):
+        """The hook is callable on its own, as its check of the control says, so it does not rely on generation
+        having refused these first, nor on an assertion that `python -O` strips."""
+        manager = PayuManager(
+            tmp_path / "work", tmp_path / "archive", MockPayuConfiguration(), MOCK_CONTROL, lab_dir=lab_dir
+        )
+
+        with mock.patch.dict(os.environ, environment), pytest.raises(error, match=message):
+            manager._create_experiments([], control_options=control_options)
+        mock_experiment_generator.assert_not_called()
 
     @mock.patch("access.profiling.payu_manager.ExperimentGenerator")
     def test_the_control_states_it_beside_the_other_options(self, mock_experiment_generator, manager, caplog):
@@ -1751,6 +1779,7 @@ class TestLaboratory:
         with pytest.raises(ValueError, match="name a Payu laboratory"):
             self.generate(manager, {"config.yaml": {"laboratory": "/scratch/tm70/elsewhere"}})
         mock_experiment_generator.assert_not_called()
+        assert not (manager.work_dir / STUDY_FILENAME).exists(), "nor is a number taken"
 
     @mock.patch.dict(os.environ, {"PAYU_LAB_PATH": "/scratch/tm70/elsewhere"})
     @mock.patch("access.profiling.payu_manager.ExperimentGenerator")
@@ -1760,6 +1789,7 @@ class TestLaboratory:
             self.generate(manager, {})
         mock_experiment_generator.assert_not_called()
         assert manager.experiments == {}
+        assert not (manager.work_dir / STUDY_FILENAME).exists(), "nor is a number taken"
 
     @mock.patch.dict(os.environ, {"PAYU_LAB_PATH": "/scratch/tm70/elsewhere"})
     @mock.patch("access.profiling.payu_manager.subprocess.run")
@@ -1787,3 +1817,269 @@ class TestLaboratory:
                 manager.delete_experiments(["branch1"])
             assert "branch1" in manager.experiments
         mock_experiment_runner.assert_not_called()
+
+
+class TestNumberedExperiments:
+    """Generated experiments are numbered, and recognised by their records rather than by their names."""
+
+    NAMES = ["exp-0001", "exp-0002", "exp-0003", "exp-0004"]
+
+    @staticmethod
+    def generate(manager, **kwargs):
+        options = {"num_nodes_list": [1.0], "control_options": {}, "cores_per_node": 4, "walltime": 2.0}
+        manager.generate_scaling_experiments(allocations=MOCK_ALLOCATIONS, **{**options, **kwargs})
+
+    @staticmethod
+    def branches(mock_experiment_generator):
+        """The branches of the last call to the generator, in order."""
+        perturbations = mock_experiment_generator.call_args[0][0]["Perturbation_Experiment"]
+        return [branch for block in perturbations.values() for branch in block["branches"]]
+
+    @staticmethod
+    def later(manager):
+        """Another manager on the same directories, as a later session builds."""
+        return PayuManager(
+            manager.work_dir, manager.archive_dir, MockPayuConfiguration(), MOCK_CONTROL, lab_dir=manager.lab_dir
+        )
+
+    @mock.patch("access.profiling.payu_manager.ExperimentGenerator")
+    def test_they_are_numbered_in_the_order_they_are_created(self, mock_experiment_generator, manager):
+        self.generate(manager)
+
+        assert self.branches(mock_experiment_generator) == self.NAMES
+        assert list(manager.experiments) == self.NAMES
+
+    @mock.patch("access.profiling.payu_manager.ExperimentGenerator")
+    def test_each_gets_a_record_in_its_directory(self, mock_experiment_generator, manager):
+        self.generate(manager)
+
+        for name, experiment in manager.experiments.items():
+            record = json.loads((manager.work_dir / name / RECORD_FILENAME).read_text())
+            assert record == experiment.record(manager.work_dir)
+            assert record["path"] == f"{name}/config"
+            assert record["layout"]["name"] == "mock-model" and record["layout"]["n_cores"] == 4
+            # A scaling study changes nothing beyond the layout, which is what the empty changes say.
+            assert (record["changes"], record["labels"], record["complete"]) == ({}, {}, False)
+
+    @mock.patch("access.profiling.payu_manager.ExperimentGenerator")
+    def test_a_later_manager_finds_them_and_generates_nothing(self, mock_experiment_generator, manager):
+        """What re-running a notebook comes to: the records say which layouts the study already has."""
+        self.generate(manager)
+        mock_experiment_generator.reset_mock()
+
+        later = self.later(manager)
+
+        assert list(later.experiments) == self.NAMES
+        assert all(experiment.status == ProfilingExperimentStatus.NEW for experiment in later.experiments.values())
+        assert {name: experiment.layout for name, experiment in later.experiments.items()} == {
+            name: experiment.layout for name, experiment in manager.experiments.items()
+        }, "grids included, which reading the configuration back does not give"
+
+        self.generate(later)
+
+        mock_experiment_generator.assert_not_called()
+
+    @mock.patch("access.profiling.payu_manager.ExperimentGenerator")
+    def test_an_experiment_is_recognised_by_its_record_not_by_its_name(self, mock_experiment_generator, manager):
+        self.generate(manager)
+        manager.experiments["renamed"] = manager.experiments.pop("exp-0001")
+        mock_experiment_generator.reset_mock()
+
+        self.generate(manager)
+
+        mock_experiment_generator.assert_not_called()
+
+    @mock.patch("access.profiling.payu_manager.ExperimentGenerator")
+    def test_one_whose_changes_are_unknown_is_not_taken_for_a_layout(self, mock_experiment_generator, manager):
+        """As an experiment added by hand: nothing says it is the layout's own experiment, so one is generated."""
+        self.generate(manager)
+        manager.experiments["exp-0001"].changes = None
+
+        self.generate(manager)
+
+        assert self.branches(mock_experiment_generator) == ["exp-0005"]
+
+    @mock.patch("access.profiling.payu_manager.ExperimentGenerator")
+    def test_a_layout_read_back_does_not_identify_an_experiment(self, mock_experiment_generator, manager):
+        """Only the layout an experiment was given does: one read back from its files says less."""
+        self.generate(manager)
+        first = manager.experiments["exp-0001"]
+        manager.experiments["exp-0001"] = ProfilingExperiment(first.path, changes={})
+        manager.experiments["exp-0001"].layout = first.layout  # as ProfilingManager._layout() keeps it
+
+        self.generate(manager)
+
+        assert self.branches(mock_experiment_generator) == ["exp-0005"]
+
+    @mock.patch("access.profiling.payu_manager.ExperimentRunner")
+    @mock.patch("access.profiling.payu_manager.ExperimentGenerator")
+    def test_a_number_is_not_given_again_after_a_deletion(self, mock_experiment_generator, mock_runner, manager):
+        """Payu keeps the branch of a deleted experiment, and a new one would be created on top of it."""
+        self.generate(manager)
+        manager.delete_experiments(experiments=["exp-0004"])
+
+        self.generate(manager)
+
+        assert self.branches(mock_experiment_generator) == ["exp-0005"]
+        assert json.loads((manager.work_dir / STUDY_FILENAME).read_text())["last_number"] == 5
+
+    @mock.patch("access.profiling.payu_manager.ExperimentGenerator")
+    def test_a_number_stays_taken_when_generation_fails(self, mock_experiment_generator, manager):
+        """How far the generator got is unknown, so what it may have half created is not created over."""
+        mock_experiment_generator.return_value.run.side_effect = RuntimeError("generation failed")
+        with pytest.raises(RuntimeError, match="generation failed"):
+            self.generate(manager)
+        assert manager.experiments == {}
+        assert not any(manager.work_dir.glob(f"*/{RECORD_FILENAME}")), "nothing is recorded of what was not created"
+
+        mock_experiment_generator.return_value.run.side_effect = None
+        self.generate(manager)
+
+        assert self.branches(mock_experiment_generator) == ["exp-0005", "exp-0006", "exp-0007", "exp-0008"]
+
+    @mock.patch("access.profiling.payu_manager.ExperimentGenerator")
+    def test_a_call_refused_before_the_generator_runs_takes_no_number(self, mock_experiment_generator, manager, caplog):
+        """Nothing was started, so nothing may be half created: the corrected call numbers from where this one did."""
+        with pytest.raises(ValueError, match="name a Payu laboratory"):
+            self.generate(manager, control_options={"config.yaml": {"laboratory": "/scratch/tm70/elsewhere"}})
+        assert "Some may already exist" not in caplog.text
+
+        self.generate(manager)
+
+        assert self.branches(mock_experiment_generator) == self.NAMES
+
+    @mock.patch("access.profiling.payu_manager.ExperimentGenerator")
+    def test_a_call_with_nothing_to_create_needs_no_laboratory(self, mock_experiment_generator, manager, caplog):
+        """A session that only reads a study has no lab_dir, and runs the same generation cell again."""
+        self.generate(manager)
+        mock_experiment_generator.reset_mock()
+        reader = PayuManager(manager.work_dir, manager.archive_dir, MockPayuConfiguration(), MOCK_CONTROL)
+
+        self.generate(reader)
+
+        mock_experiment_generator.assert_not_called()
+        assert "No new experiments to generate" in caplog.text
+
+    @mock.patch("access.profiling.payu_manager.ExperimentGenerator")
+    def test_the_names_held_count_where_the_study_file_does_not(self, mock_experiment_generator, manager):
+        """As for a study whose working directory is gone, and whose archives are what is left of it."""
+        manager.experiments["exp-0007"] = ProfilingExperiment(Path("exp-0007"))
+        manager.experiments["release"] = ProfilingExperiment(Path("release"))
+
+        self.generate(manager)
+
+        assert self.branches(mock_experiment_generator)[0] == "exp-0008"
+
+    @mock.patch("access.profiling.payu_manager.ExperimentGenerator")
+    def test_regenerating_keeps_the_number_and_the_record(self, mock_experiment_generator, manager):
+        self.generate(manager)
+        manager.experiments["exp-0002"].status = ProfilingExperimentStatus.FAILED
+        record = (manager.work_dir / "exp-0002" / RECORD_FILENAME).read_text()
+
+        self.generate(manager, regenerate_failed=True)
+
+        assert self.branches(mock_experiment_generator) == ["exp-0002"]
+        assert (manager.work_dir / "exp-0002" / RECORD_FILENAME).read_text() == record
+        assert manager._read_study()["last_number"] == 4
+        assert manager._read_study()["history"][-1]["experiments"] == ["exp-0002"]
+
+    @mock.patch("access.profiling.payu_manager.ExperimentGenerator")
+    def test_a_run_that_failed_in_an_earlier_session_is_regenerated(self, mock_experiment_generator, manager):
+        """An experiment found again from its record is NEW until the engine is asked, so its job files are read
+        before deciding what to regenerate."""
+        self.generate(manager)
+        failed = manager.experiments["exp-0002"].path
+        write_job_file(failed, 0, {"stage": "archive", "payu_run_status": 1})
+        (failed / "archive" / "output000").mkdir()
+
+        later = self.later(manager)
+        assert later.experiments["exp-0002"].status == ProfilingExperimentStatus.NEW
+        self.generate(later, walltime=4.0, regenerate_failed=True)
+
+        assert self.branches(mock_experiment_generator) == ["exp-0002"]
+        assert later.experiments["exp-0002"].status == ProfilingExperimentStatus.FAILED
+
+    @mock.patch("access.profiling.payu_manager.ExperimentGenerator")
+    def test_the_history_says_what_the_experiments_perturb(self, mock_experiment_generator, manager):
+        self.generate(manager, control_options={"config.yaml": {"queue": "express"}})
+
+        study = json.loads((manager.work_dir / STUDY_FILENAME).read_text())
+        (entry,) = study["history"]
+
+        assert study["last_number"] == 4
+        assert entry["call"] == "generate_scaling_experiments"
+        assert entry["manager"] == "PayuManager"
+        assert entry["application"] == {"class": "MockPayuConfiguration", "name": "mock"}
+        assert entry["control"] == {"repository": "https://example.com/repo", "start_point": "commit"}
+        assert entry["engine"] == {
+            "laboratory": str(manager.laboratory),
+            "control_options": {"config.yaml": {"queue": "express"}},
+        }
+        assert entry["experiments"] == self.NAMES
+
+    @mock.patch("access.profiling.payu_manager.ExperimentGenerator")
+    def test_nothing_new_writes_nothing(self, mock_experiment_generator, manager):
+        self.generate(manager)
+        study = (manager.work_dir / STUDY_FILENAME).read_text()
+
+        self.generate(manager)
+
+        assert (manager.work_dir / STUDY_FILENAME).read_text() == study
+
+    def test_the_engine_states_no_laboratory_without_a_lab_dir(self, tmp_path):
+        manager = PayuManager(tmp_path / "work", tmp_path / "archive", MockPayuConfiguration())
+
+        assert manager._engine_record() == {"laboratory": None}
+
+    @mock.patch("access.profiling.payu_manager.ExperimentGenerator")
+    def test_the_manager_says_which_layout_each_number_is(self, mock_experiment_generator, manager):
+        """The name says nothing, so the representation of the manager is where the two are put side by side."""
+        self.generate(manager)
+
+        lines = repr(manager).splitlines()
+
+        for name, experiment in manager.experiments.items():
+            index = next(index for index, line in enumerate(lines) if line.strip().startswith(f"'{name}':"))
+            assert lines[index + 1].strip() == f"Layout: {manager.application.layout_key(experiment.layout)}"
+            assert manager.layout_key(name) == manager.application.layout_key(experiment.layout)
+
+    def test_an_experiment_given_no_layout_has_none_to_show(self, manager):
+        manager.experiments["release"] = ProfilingExperiment(Path("release"))
+
+        assert "Layout:" not in repr(manager)
+        assert manager.layout_key("release") is None
+
+    @mock.patch("access.profiling.payu_manager.ExperimentGenerator")
+    def test_a_layout_of_another_application_is_said_to_be_one(self, mock_experiment_generator, manager):
+        """As when a manager is built over the experiments of another configuration. Printing it is how they are
+        looked at, so it does not raise, and what does raise says which experiment and why."""
+        self.generate(manager)
+        mock_experiment_generator.reset_mock()
+        refusal = ValueError("The layout 'mock-model' has 2 component(s), but mock configuration 'other' runs 3.")
+
+        with mock.patch.object(MockPayuConfiguration, "layout_key", side_effect=refusal):
+            lines = repr(manager).splitlines()
+            index = next(index for index, line in enumerate(lines) if line.strip().startswith("'exp-0001':"))
+            assert lines[index + 1].strip() == "Layout: not a layout of mock"
+
+            message = (
+                r"Experiment 'exp-0001' was given a layout that is not a layout of 'mock', the application of this "
+                r"manager\. The layout 'mock-model' has 2 component\(s\), but mock configuration 'other' runs 3\. "
+                r"A study has one application"
+            )
+            with pytest.raises(ValueError, match=message):
+                manager.layout_key("exp-0001")
+            with pytest.raises(ValueError, match=message):
+                self.generate(manager)
+
+        mock_experiment_generator.assert_not_called()
+
+    def test_an_added_experiment_says_nothing_of_the_managers_control(self, manager):
+        """It was not made from that control, nor in the study's laboratory, so the history does not claim either."""
+        (manager.work_dir / "release").mkdir(parents=True)
+
+        manager.add_experiment_from_directory("release", Path("release"))
+
+        (entry,) = manager._read_study()["history"]
+        assert manager.control is not None and manager.laboratory is not None
+        assert (entry["control"], entry["engine"]) == (None, {})

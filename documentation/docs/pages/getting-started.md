@@ -161,11 +161,12 @@ MOM5 256 (16, 16)
 CICE5 12 (12,)
 ```
 
-Each layout becomes one experiment, and the name of the experiment is built from the layout. This means that the
-same layout always gives the same experiment. Ask the application for the name:
+Each layout becomes one experiment. The experiments are numbered, so the name of an experiment says nothing about
+its layout. Instead, every layout has a key, which the manager uses to tell whether it already has an experiment
+for that layout. This means that the same layout always gives the same experiment. Ask the application for the key:
 
 ```python
-print(ESM16_PI_CONTROL.experiment_name(layout))
+print(ESM16_PI_CONTROL.layout_key(layout))
 ```
 
 The output should be:

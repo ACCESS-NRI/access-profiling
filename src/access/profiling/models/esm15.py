@@ -75,7 +75,7 @@ class ESM15Configuration(SubmodelsConfiguration):
             is written for it.
         model_type (str): The model type identifier, as Payu defines it: `access`, the name Payu gives ACCESS-ESM1.5.
         model_name (str): The model's name, which names the root of the component tree with `name`.
-        experiment_prefix (str): Prefix for the names of experiments generated for this configuration.
+        experiment_prefix (str): Prefix of the key of every layout of this configuration.
 
     Raises:
         ValueError: If the name is empty, if the configuration has no component at all, if a grid is not

@@ -1,6 +1,7 @@
 # Copyright 2025 ACCESS-NRI and contributors. See the top-level COPYRIGHT file for details.
 # SPDX-License-Identifier: Apache-2.0
 
+import json
 import logging
 import sqlite3
 import subprocess
@@ -13,8 +14,8 @@ import pytest
 from access.profiling.control import ExistingDirectoryControlSource
 from access.profiling.cylc_manager import CylcRoseManager
 from access.profiling.cylc_parser import CylcDBReader, CylcProfilingParser
-from access.profiling.experiment import ExperimentPlan, ProfilingExperiment, ProfilingExperimentStatus
-from access.profiling.manager import ProfilingManager
+from access.profiling.experiment import RECORD_FILENAME, ExperimentPlan, ProfilingExperiment, ProfilingExperimentStatus
+from access.profiling.manager import STUDY_FILENAME, ProfilingManager
 from access.profiling.rose_configuration import RoseSuiteConfiguration
 
 
@@ -98,7 +99,7 @@ def test_layout_generation_is_unsupported(manager):
     with pytest.raises(NotImplementedError):
         _ = manager.parallel_component
     with pytest.raises(NotImplementedError):
-        manager.application.experiment_name(mock.MagicMock())
+        manager.application.layout_key(mock.MagicMock())
     with pytest.raises(NotImplementedError):
         manager.application.config_changes(mock.MagicMock())
     with pytest.raises(NotImplementedError):
@@ -744,3 +745,84 @@ def test_delete_experiments_without_a_run_directory(tmp_path, caplog):
     assert "u-aa123" not in manager.experiments
     assert not exp_path.exists()
     assert "Run directory" not in caplog.text
+
+
+class TestSuiteRecords:
+    """The record a suite gets when it is added, from which a manager built later finds it again."""
+
+    ROSE = "u-aa123"
+
+    @staticmethod
+    def added(tmp_path, **kwargs):
+        manager = mock_manager(tmp_path / "work", tmp_path / "archive")
+        (manager.work_dir / TestSuiteRecords.ROSE).mkdir(parents=True)
+        manager.add_rose_experiment(TestSuiteRecords.ROSE, **kwargs)
+        return manager
+
+    def test_it_states_where_the_suite_and_its_runs_are(self, tmp_path):
+        run_path = tmp_path / "cylc-run" / self.ROSE
+        manager = self.added(tmp_path, run_path=run_path, labels={"resolution": "n96e"})
+
+        record = json.loads((manager.work_dir / self.ROSE / RECORD_FILENAME).read_text())
+
+        assert record == {
+            "version": 1,
+            "path": self.ROSE,
+            "run_path": str(run_path),
+            "complete": False,
+            "layout": None,
+            "changes": None,
+            "labels": {"resolution": "n96e"},
+            "ncpus": None,
+        }
+
+    def test_a_later_manager_finds_the_suite_and_asks_how_it_went(self, tmp_path):
+        """A suite is not added as complete, so its status is what its own records say, once they are read."""
+        run_path = tmp_path / "cylc-run" / self.ROSE
+        manager = self.added(tmp_path, run_path=run_path)
+        TestParseStatus._suite_db(run_path, [0])
+
+        later = mock_manager(manager.work_dir, manager.archive_dir)
+
+        experiment = later.experiments[self.ROSE]
+        assert (experiment.path, experiment.run_path) == (manager.work_dir / self.ROSE, run_path)
+        assert experiment.status == ProfilingExperimentStatus.NEW
+        later.update_statuses()
+        assert experiment.status == ProfilingExperimentStatus.DONE
+
+    def test_the_call_is_written_into_the_history(self, tmp_path):
+        manager = self.added(tmp_path)
+
+        (entry,) = json.loads((manager.work_dir / STUDY_FILENAME).read_text())["history"]
+
+        assert (entry["call"], entry["experiments"]) == ("add_rose_experiment", [self.ROSE])
+        assert (entry["manager"], entry["control"], entry["engine"]) == ("CylcRoseManager", None, {})
+
+    def test_a_rose_named_as_generated_experiments_are_is_refused(self, tmp_path):
+        manager = mock_manager(tmp_path / "work", tmp_path / "archive")
+        (manager.work_dir / "exp-0001").mkdir(parents=True)
+
+        with pytest.raises(ValueError, match="of the form this manager gives"):
+            manager.add_rose_experiment("exp-0001")
+        assert manager.experiments == {}
+
+    def test_a_rose_that_is_not_one_directory_is_refused(self, tmp_path):
+        """Its record would be kept where a later manager does not look for one."""
+        manager = mock_manager(tmp_path / "work", tmp_path / "archive")
+        (manager.work_dir / "suites" / "u-aa123").mkdir(parents=True)
+
+        with pytest.raises(ValueError, match="Experiment name 'suites/u-aa123' is not the name of a single directory"):
+            manager.add_rose_experiment("suites/u-aa123")
+        assert manager.experiments == {}
+
+    @pytest.mark.parametrize("labels", [{"grid": (4, 4)}, {"where": Path("/some/input")}])
+    def test_labels_the_record_could_not_give_back_are_refused(self, tmp_path, labels):
+        manager = mock_manager(tmp_path / "work", tmp_path / "archive")
+        (manager.work_dir / self.ROSE).mkdir(parents=True)
+
+        with pytest.raises(ValueError, match="The labels of an experiment must be JSON values"):
+            manager.add_rose_experiment(self.ROSE, labels=labels)
+
+        assert manager.experiments == {}, "nothing is held that a later manager would not find"
+        assert not (manager.work_dir / self.ROSE / RECORD_FILENAME).exists()
+        assert not (manager.work_dir / STUDY_FILENAME).exists()

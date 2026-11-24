@@ -96,8 +96,9 @@ class PayuComponent(ABC):
     Attributes:
         name (str): How the component tree names it, and so the key a caller uses for it in an allocation strategy
             or a RegionGroup.
-        token (str): How `experiment_name` abbreviates it, where a configuration names its experiments after what
-            each component received. User-facing: changing it changes the names of the experiments on disk.
+        token (str): How `layout_key` abbreviates it, where a configuration states what each component received.
+            Changing it changes the key of every layout, so that the experiments on disk are no longer recognised
+            as the experiments of their layouts.
         logs (tuple[LogSpec, ...]): The profiling logs it writes, each naming it as the component its regions ran
             on.
 
@@ -157,7 +158,7 @@ class PlainComponent(PayuComponent):
 
     Args:
         name (str): How the component tree names it.
-        token (str): How `experiment_name` abbreviates it.
+        token (str): How `layout_key` abbreviates it.
         n_ranks (int | None): The rank count the model fixes, or None where the search chooses it.
         logs (tuple[LogSpec, ...]): The profiling logs it writes, if any.
 
@@ -473,12 +474,12 @@ class SubmodelsConfiguration(PayuConfiguration):
         # which is the order of the components, so zipping is the inverse of how the tree was built.
         return tuple(zip(components, layout.sub_layouts, strict=True))
 
-    def experiment_name(self, layout: ComponentLayout) -> str:
-        """Returns the name of the experiment holding a given layout.
+    def layout_key(self, layout: ComponentLayout) -> str:
+        """Returns the key identifying a given layout.
 
-        The name records the configuration and then what each component received: its process grid where it
+        The key records the configuration and then what each component received: its process grid where it
         decomposes one, and its ranks otherwise. It is therefore distinct for every distinct layout, and the
-        same layout always produces the same name, which is what lets a manager tell whether it already has
+        same layout always produces the same key, which is what lets a manager tell whether it already has
         an experiment for a layout before building one. The configuration is part of it because the layout is
         not enough: two configurations of a model can run the same components, on the same grids, on the same
         number of cores.
@@ -487,7 +488,7 @@ class SubmodelsConfiguration(PayuConfiguration):
             layout (ComponentLayout): Layout of the components, as returned by the layout search.
 
         Returns:
-            str: The experiment name.
+            str: The key.
 
         Raises:
             ValueError: If the layout is not a layout of this configuration.

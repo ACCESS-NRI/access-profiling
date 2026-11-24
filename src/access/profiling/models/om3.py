@@ -117,7 +117,7 @@ class OM3Configuration(PayuConfiguration):
             cores alone.
         model_type (str): The model type identifier, as Payu defines it.
         model_name (str): The model's name, which names the root of the component tree with `name`.
-        experiment_prefix (str): Prefix for the names of experiments generated for this configuration.
+        experiment_prefix (str): Prefix of the key of every layout of this configuration.
 
     Raises:
         ValueError: If the name is empty.
@@ -293,21 +293,21 @@ class OM3Configuration(PayuConfiguration):
             rootpe += component.n_cores
         return ranges
 
-    def experiment_name(self, layout: ComponentLayout) -> str:
-        """Returns the name of the experiment holding a given layout.
+    def layout_key(self, layout: ComponentLayout) -> str:
+        """Returns the key identifying a given layout.
 
-        The name records the configuration and then what each component received: its process grid where it
+        The key records the configuration and then what each component received: its process grid where it
         decomposes one, and its cores otherwise. A grid says both, since its product is the component's rank
-        count and so its core count too, every component running one thread per rank. The name is therefore
+        count and so its core count too, every component running one thread per rank. The key is therefore
         distinct for every distinct layout - including two that divide the cores the same way and decompose
-        them differently - and the same layout always produces the same name. This is what lets a manager tell
+        them differently - and the same layout always produces the same key. This is what lets a manager tell
         whether it already has an experiment for a layout before building one.
 
         Args:
             layout (ComponentLayout): Layout of the components, as returned by the layout search.
 
         Returns:
-            str: The experiment name.
+            str: The key.
 
         Raises:
             ValueError: If the layout is not a layout of this configuration.

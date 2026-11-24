@@ -1,7 +1,13 @@
 # Copyright 2025 ACCESS-NRI and contributors. See the top-level COPYRIGHT file for details.
 # SPDX-License-Identifier: Apache-2.0
 
+import json
 import logging
+import re
+import shutil
+import tarfile
+from datetime import datetime
+from importlib.metadata import PackageNotFoundError
 from pathlib import Path
 from unittest import mock
 
@@ -12,11 +18,14 @@ from conftest import component_of, layout_of
 
 from access.profiling.application import Application, LogSpec
 from access.profiling.control import GitControlSource
+from access.profiling.experiment import RECORD_FILENAME
 from access.profiling.manager import (
+    STUDY_FILENAME,
     ProfilingExperiment,
     ProfilingExperimentStatus,
     ProfilingLog,
     ProfilingManager,
+    _package_version,
     find_component,
 )
 from access.profiling.metrics import count, tavg
@@ -55,7 +64,7 @@ class MockApplication(Application):
             for name, component in self.log_components.items()
         )
 
-    def experiment_name(self, layout):
+    def layout_key(self, layout):
         raise NotImplementedError
 
     def config_changes(self, layout):
@@ -78,6 +87,9 @@ class MockProfilingManager(ProfilingManager[MockApplication]):
         paths (list[Path]): List of paths to simulate different configurations.
         ncpus (list[int]): List of number of CPUs corresponding to each path.
         datasets (list[xr.Dataset]): List of datasets to return for each path.
+        work_dir (Path): The working directory. A test that generates, adds or deletes experiments gives a real
+            one, since the manager writes their records and the study file into it.
+        archive_dir (Path): The archive directory.
     """
 
     def __init__(
@@ -85,8 +97,10 @@ class MockProfilingManager(ProfilingManager[MockApplication]):
         paths: list[Path],
         ncpus: list[int] | None = None,
         datasets: list[dict[str, xr.Dataset]] | None = None,
+        work_dir: Path = Path("/fake/work_dir"),
+        archive_dir: Path = Path("/fake/archive_dir"),
     ):
-        super().__init__(Path("/fake/work_dir"), Path("/fake/archive_dir"), MockApplication())
+        super().__init__(work_dir, archive_dir, MockApplication())
 
         # Pre-generate experiments
         for path in paths:
@@ -264,34 +278,99 @@ def test_repr_names_the_control_the_study_perturbs():
     assert repr(manager) == expected
 
 
-@mock.patch("access.profiling.manager.Path.is_dir")
-@mock.patch("access.profiling.manager.Path.glob")
-@mock.patch("access.profiling.manager.Path.is_file")
-@mock.patch("access.profiling.manager.ProfilingExperiment")
-def test_archive_discovery(mock_experiment, mock_is_file, mock_glob, mock_is_dir):
+def test_archive_discovery(tmp_path):
     """Test that ProfilingManager discovers archived experiments correctly."""
 
-    mock_glob.return_value = [Path("/fake/archive_dir/exp1.tar.gz"), Path("/fake/archive_dir/exp2.tar.gz")]
+    archive_dir = tmp_path / "archive_dir"
 
     # Test when archive directory does not exist
-    mock_is_dir.return_value = False
-    manager = MockProfilingManager(paths=[])
+    manager = MockProfilingManager(paths=[], archive_dir=archive_dir)
     assert manager.experiments == {}, "No experiments should be discovered if archive dir does not exist."
 
-    # Test when archive directory exists, but there are no files (treat all paths as non-files)
-    mock_is_dir.return_value = True
-    mock_is_file.return_value = False
-    manager = MockProfilingManager(paths=[])
+    # Test when archive directory exists, but what is named as an archive is not a file
+    (archive_dir / "exp0.tar.gz").mkdir(parents=True)
+    manager = MockProfilingManager(paths=[], archive_dir=archive_dir)
     assert manager.experiments == {}, "No experiments should be discovered if no archive files are present."
 
-    # Test when archive directory exists and files are present
-    mock_is_dir.return_value = True
-    mock_is_file.return_value = True
-    manager = MockProfilingManager(paths=[])
+    # Test when archive directory exists and files are present. These archives hold no record, as those made
+    # before experiments had one do not, so nothing is known of them but where they are.
+    for name in ("exp1", "exp2"):
+        tarfile.open(archive_dir / f"{name}.tar.gz", "w:gz").close()
+    manager = MockProfilingManager(paths=[], archive_dir=archive_dir)
     assert set(manager.experiments.keys()) == {"exp1", "exp2"}
-    assert mock_experiment.call_count == 2
-    mock_experiment.assert_any_call(path=Path("/fake/archive_dir/exp1.tar.gz"))
-    mock_experiment.assert_any_call(path=Path("/fake/archive_dir/exp2.tar.gz"))
+    for name, experiment in manager.experiments.items():
+        assert experiment.path == archive_dir / f"{name}.tar.gz"
+        assert experiment.status == ProfilingExperimentStatus.ARCHIVED
+        assert experiment.changes is None and experiment.labels == {} and experiment.layout is None
+
+
+class TestUnreadableArchives:
+    """An archive that cannot be read is skipped with a warning, rather than stopping the manager being built."""
+
+    @staticmethod
+    def truncated(archive):
+        """Cuts a tarball short, as an archive_experiments that was stopped part way leaves it."""
+        archive.write_bytes(archive.read_bytes()[:40])
+
+    @pytest.mark.parametrize("damage", ["empty", "truncated", "not gzip"])
+    def test_it_is_skipped_and_the_experiment_of_the_working_directory_kept(self, tmp_path, caplog, damage):
+        """The experiment found from its record is kept, so that it can be archived again over the broken file."""
+        manager = added(tmp_path)
+        manager.archive_experiments()
+        archive = manager.archive_dir / "release.tar.gz"
+        if damage == "empty":
+            archive.write_bytes(b"")
+        elif damage == "truncated":
+            self.truncated(archive)
+        else:
+            archive.write_text("not an archive")
+
+        with caplog.at_level(logging.WARNING):
+            found = later(manager)
+
+        assert f"Skipping the archive '{archive}', which cannot be read" in caplog.text
+        assert "overwrite=True" in caplog.text
+        assert found.experiments["release"].path == manager.work_dir / "release"
+        assert found.experiments["release"].status == ProfilingExperimentStatus.DONE
+
+    def test_the_others_are_still_found(self, tmp_path):
+        archive_dir = tmp_path / "archive_dir"
+        archive_dir.mkdir()
+        tarfile.open(archive_dir / "exp-0001.tar.gz", "w:gz").close()
+        (archive_dir / "exp-0002.tar.gz").write_bytes(b"")
+
+        manager = MockProfilingManager(paths=[], archive_dir=archive_dir)
+
+        assert list(manager.experiments) == ["exp-0001"]
+
+    def test_a_record_in_another_format_is_still_refused(self, tmp_path):
+        """A record that can be read and is not in this version's format is not damage, and is not skipped."""
+        manager = added(tmp_path)
+        manager.archive_experiments()
+        shutil.rmtree(manager.work_dir)
+
+        with (
+            mock.patch("access.profiling.experiment.RECORD_VERSION", 2),
+            pytest.raises(ValueError, match="The record in the archive .* states the format version 1"),
+        ):
+            later(manager)
+
+
+def test_archived_experiments_are_found_in_the_order_of_their_names(tmp_path):
+    """Whatever order the file system lists the archives in, as the records of the working directory are found."""
+
+    archive_dir = tmp_path / "archive_dir"
+    archive_dir.mkdir()
+    for name in ("exp-0002", "exp-0010", "exp-0001"):
+        tarfile.open(archive_dir / f"{name}.tar.gz", "w:gz").close()
+
+    listed = Path.glob
+    with mock.patch.object(
+        Path, "glob", autospec=True, side_effect=lambda path, pattern: sorted(listed(path, pattern), reverse=True)
+    ):
+        manager = MockProfilingManager(paths=[], archive_dir=archive_dir)
+
+    assert list(manager.experiments) == ["exp-0001", "exp-0002", "exp-0010"]
 
 
 class TestUpdateStatuses:
@@ -371,7 +450,7 @@ def test_archive_experiments_picks_up_a_run_that_has_since_finished(tmp_path):
     Without this the experiment is still RUNNING as far as the manager knows, and archive() skips it.
     """
 
-    manager = MockProfilingManager([tmp_path / "expt"])
+    manager = MockProfilingManager([tmp_path / "expt"], ncpus=[4])
     manager.archive_dir = tmp_path / "archive_dir"
     manager.experiments["expt"].status = ProfilingExperimentStatus.RUNNING
     manager._mock_status = {"expt": ProfilingExperimentStatus.DONE}
@@ -419,7 +498,7 @@ def test_archive_experiments(mock_archive, mock_mkdir):
 
     # Setup mock experiments
     exp_paths = [Path("/fake/work_dir/exp1"), Path("/fake/work_dir/exp2"), Path("/fake/work_dir/exp3")]
-    manager = MockProfilingManager(exp_paths)
+    manager = MockProfilingManager(exp_paths, ncpus=[4, 8, 16])
     manager.experiments["exp2"].status = ProfilingExperimentStatus.RUNNING
     manager.experiments["exp3"].status = ProfilingExperimentStatus.NEW
 
@@ -429,61 +508,62 @@ def test_archive_experiments(mock_archive, mock_mkdir):
     # Check calls
     mock_mkdir.assert_called_with(parents=True, exist_ok=True)  # Check archive directory creation
     assert mock_archive.call_count == 3, "Should attempt to archive all experiments."
-    mock_archive.assert_any_call(
-        Path("/fake/archive_dir/exp1"), exclude_files=None, exclude_dirs=None, follow_symlinks=False, overwrite=False
-    )
-    mock_archive.assert_any_call(
-        Path("/fake/archive_dir/exp2"), exclude_files=None, exclude_dirs=None, follow_symlinks=False, overwrite=False
-    )
-    mock_archive.assert_any_call(
-        Path("/fake/archive_dir/exp3"), exclude_files=None, exclude_dirs=None, follow_symlinks=False, overwrite=False
-    )
-    assert mock_archive.call_count == 3
+    for name in ("exp1", "exp2", "exp3"):
+        mock_archive.assert_any_call(
+            Path("/fake/archive_dir") / name,
+            exclude_files=None,
+            exclude_dirs=None,
+            follow_symlinks=False,
+            overwrite=False,
+            record=manager.experiments[name].record(manager.work_dir),
+        )
+
+    # Only the finished experiment has a count worth keeping: its run is over, so the count cannot change.
+    assert manager._parse_ncpus_calls == [(Path("/fake/work_dir/exp1"), None)]
+    assert manager.experiments["exp1"].record(manager.work_dir)["ncpus"] == 4
 
 
-@mock.patch("access.profiling.manager.Path.is_dir")
-def test_add_experiment_from_directory(mock_is_dir):
+def test_add_experiment_from_directory(tmp_path):
     """Test the add_experiment_from_directory method of ProfilingManager."""
 
-    mock_is_dir.return_value = False
-    manager = MockProfilingManager(paths=[])
+    work_dir = tmp_path / "work_dir"
+    for directory in ("existing_experiment", "relative_experiment"):
+        (work_dir / directory).mkdir(parents=True)
+    (tmp_path / "outside_work_dir" / "outside_experiment").mkdir(parents=True)
+    manager = MockProfilingManager(paths=[], work_dir=work_dir)
 
     # Test adding a valid experiment
-    mock_is_dir.return_value = True
-    manager.add_experiment_from_directory("existing_experiment", Path("/fake/work_dir/existing_experiment"))
+    manager.add_experiment_from_directory("existing_experiment", work_dir / "existing_experiment")
     assert "existing_experiment" in manager.experiments, "Experiment should be added."
     assert manager.experiments["existing_experiment"].status == ProfilingExperimentStatus.DONE, (
         "Experiment status should be set to DONE."
     )
 
     # Test adding a valid experiment with relative path
-    mock_is_dir.return_value = True
     manager.add_experiment_from_directory("relative_experiment", Path("relative_experiment"))
     assert "relative_experiment" in manager.experiments, "Experiment with relative path should be added."
     assert manager.experiments["relative_experiment"].status == ProfilingExperimentStatus.DONE, (
         "Experiment status should be set to DONE."
     )
-    assert manager.experiments["relative_experiment"].path == Path("/fake/work_dir/relative_experiment"), (
+    assert manager.experiments["relative_experiment"].path == work_dir / "relative_experiment", (
         "Experiment path should be correctly resolved to absolute path."
     )
 
     # Test adding an experiment with a non-existing path
-    mock_is_dir.return_value = False
     with pytest.raises(ValueError, match="does not exist or is not a directory"):
-        manager.add_experiment_from_directory("non_existing_experiment", Path("/fake/work_dir/non_existing_experiment"))
+        manager.add_experiment_from_directory("non_existing_experiment", work_dir / "non_existing_experiment")
 
     # Test adding an experiment outside the working directory
-    mock_is_dir.return_value = True
     with pytest.raises(ValueError, match="is not inside the working directory"):
-        manager.add_experiment_from_directory("outside_experiment", Path("/fake/outside_work_dir/outside_experiment"))
+        manager.add_experiment_from_directory("outside_experiment", tmp_path / "outside_work_dir/outside_experiment")
 
 
-def test_delete_experiment(caplog):
+def test_delete_experiment(caplog, tmp_path):
     """Test the delete_experiment method of ProfilingManager."""
 
     # Setup mock experiments
-    exp_paths = [Path("/fake/work_dir/exp1"), Path("/fake/work_dir/exp2")]
-    manager = MockProfilingManager(exp_paths)
+    exp_paths = [tmp_path / "exp1", tmp_path / "exp2"]
+    manager = MockProfilingManager(exp_paths, work_dir=tmp_path)
 
     # Delete an existing experiment
     manager.delete_experiment("exp1")
@@ -898,7 +978,7 @@ def test_experiment_ncpus_is_stored_on_the_experiment(layout_scaling_data):
     assert manager.experiments["1cpu"].ncpus == 1
 
 
-def test_a_replacement_experiment_does_not_inherit_a_deleted_count(layout_scaling_data):
+def test_a_replacement_experiment_does_not_inherit_a_deleted_count(layout_scaling_data, tmp_path):
     """Test that an experiment added under the name of a deleted one is parsed afresh.
 
     The count used to be held by the manager, keyed by name, and nothing removed it when an experiment was
@@ -906,7 +986,7 @@ def test_a_replacement_experiment_does_not_inherit_a_deleted_count(layout_scalin
     """
 
     paths, ncpus, datasets = layout_scaling_data
-    manager = MockProfilingManager(paths, ncpus, datasets)
+    manager = MockProfilingManager(paths, ncpus, datasets, work_dir=tmp_path)
     assert manager._ncpus("1cpu") == 1
 
     manager.delete_experiment("1cpu")
@@ -1521,3 +1601,465 @@ def test_a_manager_states_how_it_runs_experiments():
 
     with pytest.raises(TypeError, match="run_experiments"):
         WithoutRunExperiments(paths=[Path("/fake/work_dir")])
+
+
+def added(tmp_path, name="release", **kwargs):
+    """A manager on a working directory of its own, holding one experiment added from a directory in it."""
+
+    work_dir = tmp_path / "work"
+    (work_dir / name).mkdir(parents=True)
+    (work_dir / name / "config.yaml").write_text("ncpus: 4\n")
+    manager = MockProfilingManager([], work_dir=work_dir, archive_dir=tmp_path / "archive")
+    manager._mock_ncpus = {name: 4}
+    manager.add_experiment_from_directory(name, Path(name), **kwargs)
+    return manager
+
+
+def later(manager):
+    """Another manager on the same directories, as a later session builds."""
+
+    return MockProfilingManager([], work_dir=manager.work_dir, archive_dir=manager.archive_dir)
+
+
+class TestRecords:
+    """Each experiment's record in its directory, from which a manager built later finds the experiment again."""
+
+    def test_an_added_experiment_gets_one(self, tmp_path):
+        manager = added(tmp_path, labels={"version": "1.0"})
+
+        record = json.loads((manager.work_dir / "release" / RECORD_FILENAME).read_text())
+        assert record == {
+            "version": 1,
+            "path": "release",
+            "run_path": None,
+            "complete": True,
+            "layout": None,
+            "changes": None,
+            "labels": {"version": "1.0"},
+            "ncpus": None,
+        }
+
+    def test_a_later_manager_finds_the_experiment_again(self, tmp_path):
+        manager = added(tmp_path, labels={"version": "1.0"})
+
+        (found,) = later(manager).experiments.items()
+
+        assert found[0] == "release"
+        assert found[1].path == manager.work_dir / "release"
+        assert found[1].status == ProfilingExperimentStatus.DONE, "it was added as complete, which its record says"
+        assert found[1].labels == {"version": "1.0"}
+        assert found[1].changes is None, "nothing says what an added experiment changes"
+
+    def test_a_record_in_another_format_is_refused_with_its_name(self, tmp_path):
+        """A later version of the package may have written it, and the keys alone would not say so."""
+        manager = added(tmp_path)
+        record_file = manager.work_dir / "release" / RECORD_FILENAME
+        record_file.write_text(json.dumps({**json.loads(record_file.read_text()), "version": 2}))
+
+        with pytest.raises(ValueError, match=rf"The record '{record_file}' states the format version 2"):
+            later(manager)
+
+    def test_a_record_cut_short_is_refused_with_its_name(self, tmp_path):
+        manager = added(tmp_path)
+        record_file = manager.work_dir / "release" / RECORD_FILENAME
+        record_file.write_text(record_file.read_text()[:20])
+
+        with pytest.raises(ValueError, match=rf"The record '{record_file}' cannot be read, since it is not JSON"):
+            later(manager)
+
+    def test_the_format_a_record_is_held_to_is_the_records(self, tmp_path):
+        manager = added(tmp_path)
+
+        with (
+            mock.patch("access.profiling.experiment.RECORD_VERSION", 2),
+            pytest.raises(ValueError, match="The record .* states the format version 1, and .* reads version 2"),
+        ):
+            later(manager)
+
+    def test_the_record_is_under_the_name_wherever_the_experiment_is(self, tmp_path):
+        work_dir = tmp_path / "work"
+        (work_dir / "runs" / "release-1.0").mkdir(parents=True)
+        manager = MockProfilingManager([], work_dir=work_dir)
+
+        manager.add_experiment_from_directory("release", Path("runs/release-1.0"))
+
+        assert json.loads((work_dir / "release" / RECORD_FILENAME).read_text())["path"] == "runs/release-1.0"
+        assert later(manager).experiments["release"].path == work_dir / "runs" / "release-1.0"
+
+    def test_paths_outside_the_working_directory_are_read_as_they_are(self, tmp_path):
+        """As a suite's run directory is, and the path of an experiment a relative working directory was given."""
+        work_dir = tmp_path / "work"
+        (work_dir / "suite").mkdir(parents=True)
+        record = ProfilingExperiment(tmp_path / "elsewhere", run_path=tmp_path / "cylc-run").record(work_dir)
+        (work_dir / "suite" / RECORD_FILENAME).write_text(json.dumps(record))
+
+        experiment = MockProfilingManager([], work_dir=work_dir).experiments["suite"]
+
+        assert (experiment.path, experiment.run_path) == (tmp_path / "elsewhere", tmp_path / "cylc-run")
+        assert experiment.status == ProfilingExperimentStatus.NEW
+
+    def test_a_name_generated_experiments_are_given_is_refused(self, tmp_path):
+        manager = MockProfilingManager([], work_dir=tmp_path)
+        (tmp_path / "exp-0003").mkdir()
+
+        with pytest.raises(ValueError, match="of the form this manager gives"):
+            manager.add_experiment_from_directory("exp-0003", Path("exp-0003"))
+        assert manager.experiments == {}
+        assert not (tmp_path / "exp-0003" / RECORD_FILENAME).exists()
+
+    @pytest.mark.parametrize("name", ["by-hand/run1", "/abs", "release/", "..", ".", ""])
+    def test_a_name_that_is_not_one_directory_is_refused(self, tmp_path, name):
+        """The record is kept in `<work_dir>/<name>`, and only the directories directly in the working directory are
+        searched for records, so a later manager would not find it under any other name."""
+        manager = MockProfilingManager([], work_dir=tmp_path)
+        (tmp_path / "by-hand" / "run1").mkdir(parents=True)
+
+        with pytest.raises(ValueError, match=rf"Experiment name '{re.escape(name)}' is not the name of a single"):
+            manager.add_experiment_from_directory(name, Path("by-hand/run1"))
+        assert manager.experiments == {}
+        assert not list(tmp_path.rglob(RECORD_FILENAME))
+
+    def test_a_record_lacking_an_entry_stops_the_manager_with_its_name(self, tmp_path):
+        """Rather than with a bare KeyError from whatever reads the entry first."""
+        manager = added(tmp_path)
+        record_file = manager.work_dir / "release" / RECORD_FILENAME
+        record = json.loads(record_file.read_text())
+        del record["labels"]
+        record_file.write_text(json.dumps(record))
+
+        with pytest.raises(ValueError, match=rf"The record '{record_file}' cannot be read, since it lacks .*'labels'"):
+            later(manager)
+
+    @pytest.mark.parametrize("labels", [{"grid": (4, 4)}, {"where": Path("/some/input")}])
+    def test_labels_the_record_could_not_give_back_are_refused(self, tmp_path, labels):
+        """A tuple would come back as a list in a later session, and a path could not be written at all."""
+        manager = MockProfilingManager([], work_dir=tmp_path)
+        (tmp_path / "release").mkdir()
+
+        with pytest.raises(ValueError, match="The labels of an experiment must be JSON values"):
+            manager.add_experiment_from_directory("release", Path("release"), labels=labels)
+
+        assert manager.experiments == {}, "nothing is held that a later manager would not find"
+        assert not (tmp_path / "release" / RECORD_FILENAME).exists()
+        assert not (tmp_path / STUDY_FILENAME).exists()
+
+    def test_forgetting_an_experiment_removes_its_record_and_nothing_else(self, tmp_path):
+        manager = added(tmp_path)
+
+        manager.delete_experiment("release")
+
+        assert not (manager.work_dir / "release" / RECORD_FILENAME).exists()
+        assert (manager.work_dir / "release" / "config.yaml").exists(), "the experiment's own files are not touched"
+        assert later(manager).experiments == {}
+
+    def test_forgetting_on_a_study_that_cannot_be_written_holds_for_the_session(self, tmp_path, caplog):
+        """As on a colleague's study: the experiment is forgotten here, and a later manager finds it again."""
+        manager = added(tmp_path)
+
+        with (
+            mock.patch.object(Path, "unlink", side_effect=PermissionError("read-only")),
+            caplog.at_level(logging.WARNING),
+        ):
+            manager.delete_experiment("release")
+
+        assert "release" not in manager.experiments
+        assert f"Could not update the working directory '{manager.work_dir}' (read-only)" in caplog.text
+        assert "forgotten in this session only" in caplog.text
+        assert list(later(manager).experiments) == ["release"]
+        assert [entry["call"] for entry in manager._read_study()["history"]] == ["add_experiment_from_directory"]
+
+    def test_forgetting_when_the_history_cannot_be_written_holds_for_the_session(self, tmp_path, caplog):
+        manager = added(tmp_path)
+
+        with (
+            mock.patch("access.profiling.manager._write_whole", side_effect=OSError("disk full")),
+            caplog.at_level(logging.WARNING),
+        ):
+            manager.delete_experiment("release")
+
+        assert "release" not in manager.experiments
+        assert "(disk full), so experiment 'release' is forgotten in this session only" in caplog.text
+
+    def test_a_directory_that_held_only_the_record_goes_with_it(self, tmp_path):
+        work_dir = tmp_path / "work"
+        (work_dir / "runs" / "release-1.0").mkdir(parents=True)
+        manager = MockProfilingManager([], work_dir=work_dir)
+        manager.add_experiment_from_directory("release", Path("runs/release-1.0"))
+
+        manager.delete_experiment("release")
+
+        assert not (work_dir / "release").exists()
+        assert (work_dir / "runs" / "release-1.0").is_dir()
+
+    def test_deleting_experiments_removes_their_records(self, tmp_path):
+        manager = added(tmp_path)
+
+        manager.delete_experiments(experiments=["release"], dry_run=True)
+        assert (manager.work_dir / "release" / RECORD_FILENAME).exists(), "a dry run changes nothing"
+
+        manager.delete_experiments(experiments=["release"])
+        assert not (manager.work_dir / "release" / RECORD_FILENAME).exists()
+        assert later(manager).experiments == {}
+
+    def test_an_experiment_whose_record_cannot_be_removed_is_still_held(self, tmp_path):
+        """The manager goes on holding what a later manager would find again."""
+        manager = added(tmp_path)
+
+        with (
+            mock.patch.object(Path, "unlink", side_effect=PermissionError("read-only")),
+            pytest.raises(PermissionError, match="read-only"),
+        ):
+            manager.delete_experiments(experiments=["release"])
+
+        assert list(manager.experiments) == ["release"]
+
+
+class TestWholeWrites:
+    """A record or the study file is written whole or not at all, so that a write stopped part way leaves it intact."""
+
+    def test_a_record_whose_write_fails_is_left_as_it_was(self, tmp_path):
+        manager = added(tmp_path, labels={"version": "1.0"})
+        record_file = manager.work_dir / "release" / RECORD_FILENAME
+        before = record_file.read_text()
+        manager.experiments["release"].labels = {"version": "2.0"}
+
+        with (
+            mock.patch.object(Path, "replace", side_effect=OSError("disk full")),
+            pytest.raises(OSError, match="disk full"),
+        ):
+            manager._write_record("release")
+
+        assert record_file.read_text() == before
+        assert sorted(path.name for path in record_file.parent.iterdir()) == [RECORD_FILENAME, "config.yaml"]
+
+    def test_a_study_file_whose_write_fails_is_left_as_it_was(self, tmp_path):
+        manager = added(tmp_path)
+        study_file = manager.work_dir / STUDY_FILENAME
+        before = study_file.read_text()
+
+        with (
+            mock.patch("access.profiling.manager.os.fsync", side_effect=OSError("disk full")),
+            pytest.raises(OSError, match="disk full"),
+        ):
+            manager._write_study({**manager._read_study(), "last_number": 7})
+
+        assert study_file.read_text() == before
+        assert not list(manager.work_dir.glob(".*.tmp"))
+
+    def test_what_is_written_replaces_the_file_whole(self, tmp_path):
+        manager = added(tmp_path)
+
+        manager._write_study({**manager._read_study(), "last_number": 7})
+
+        assert manager._read_study()["last_number"] == 7
+        assert not list(manager.work_dir.glob(".*.tmp"))
+
+
+class TestArchivedRecords:
+    """The record an archive carries, and what a manager built later takes from it."""
+
+    def test_an_archive_replaces_the_experiment_of_the_working_directory(self, tmp_path):
+        manager = added(tmp_path, labels={"version": "1.0"})
+        manager.archive_experiments()
+
+        experiment = later(manager).experiments["release"]
+
+        assert experiment.status == ProfilingExperimentStatus.ARCHIVED
+        assert experiment.path == manager.archive_dir / "release.tar.gz"
+        assert experiment.labels == {"version": "1.0"}
+
+    def test_the_count_is_kept_so_the_archive_is_not_extracted_for_it(self, tmp_path):
+        manager = added(tmp_path)
+        manager.archive_experiments()
+        found = later(manager)
+
+        assert found._ncpus("release") == 4
+        assert found._parse_ncpus_calls == [], "the record states it"
+
+    @pytest.mark.parametrize("error", [FileNotFoundError("config.yaml"), ValueError("NPROC is not set")])
+    def test_a_count_that_cannot_be_read_stops_nothing(self, tmp_path, caplog, error):
+        """The other experiments are archived, the study file is copied, and the record leaves the count null. Payu's
+        parse_ncpus raises the first without a config.yaml, and Cylc's the second for a variable it cannot find."""
+        manager = added(tmp_path)
+        (manager.work_dir / "second").mkdir()
+        manager.add_experiment_from_directory("second", Path("second"))
+
+        def parse_ncpus(path, run_path=None):
+            if path.name == "release":
+                raise error
+            return 8
+
+        with mock.patch.object(manager, "parse_ncpus", side_effect=parse_ncpus), caplog.at_level(logging.WARNING):
+            manager.archive_experiments()
+
+        assert f"The number of CPUs of experiment 'release' could not be read ({error})" in caplog.text
+        found = later(manager)
+        assert found.experiments["release"].status == ProfilingExperimentStatus.ARCHIVED
+        assert found.experiments["release"].ncpus is None
+        assert found.experiments["second"].ncpus == 8
+        assert (manager.archive_dir / STUDY_FILENAME).is_file()
+
+    def test_the_record_in_the_working_directory_is_left_as_it_was(self, tmp_path):
+        """The count belongs to the archive, where nothing can change it any more."""
+        manager = added(tmp_path)
+        manager.archive_experiments()
+
+        assert json.loads((manager.work_dir / "release" / RECORD_FILENAME).read_text())["ncpus"] is None
+
+
+class TestStudyFile:
+    """What is true of the whole study: the calls that made it, and the highest number given."""
+
+    def test_a_study_with_no_file_starts_empty(self, tmp_path):
+        assert MockProfilingManager([], work_dir=tmp_path)._read_study() == {
+            "version": 1,
+            "last_number": 0,
+            "history": [],
+        }
+
+    def test_a_study_file_in_another_format_is_refused_with_its_name(self, tmp_path):
+        """Before a number is read out of it, so that no experiment is numbered from a file that cannot be read."""
+        manager = added(tmp_path)
+        study_file = manager.work_dir / STUDY_FILENAME
+        study_file.write_text(json.dumps({"version": 2, "last": 3}))
+
+        with pytest.raises(ValueError, match=rf"The study file '{study_file}' states the format version 2"):
+            manager._last_number()
+
+    def test_the_format_the_study_file_is_held_to_is_its_own(self, tmp_path):
+        """The records stay in theirs. The study file is read when a manager is built, to check its application."""
+        manager = added(tmp_path)
+
+        with (
+            mock.patch("access.profiling.manager.STUDY_VERSION", 2),
+            pytest.raises(ValueError, match="The study file .* states the format version 1, and .* reads version 2"),
+        ):
+            later(manager)
+
+    def test_a_study_file_lacking_an_entry_is_refused_with_its_name(self, tmp_path):
+        manager = added(tmp_path)
+        study_file = manager.work_dir / STUDY_FILENAME
+        study_file.write_text(json.dumps({"version": 1, "history": []}))
+
+        with pytest.raises(ValueError, match=rf"The study file '{study_file}' cannot be read, since it lacks .*'last_"):
+            manager._last_number()
+
+    def test_a_study_of_another_application_is_refused(self, tmp_path):
+        """Its layouts could be keyed as this application's without error, and its runs read as this one's."""
+        manager = added(tmp_path)
+        study_file = manager.work_dir / STUDY_FILENAME
+        study = json.loads(study_file.read_text())
+        study["history"][0]["application"] = {"class": "OtherApplication", "name": "other"}
+        study_file.write_text(json.dumps(study))
+
+        message = (
+            rf"The study of the working directory '{manager.work_dir}' and the archive directory "
+            rf"'{manager.archive_dir}' was made with OtherApplication 'other', as its study file records, but this "
+            r"manager's application is MockApplication 'mock'\. A study has one application"
+        )
+        with pytest.raises(ValueError, match=message):
+            later(manager)
+
+    def test_each_other_application_is_named_once(self, tmp_path):
+        manager = added(tmp_path)
+        study_file = manager.work_dir / STUDY_FILENAME
+        study = json.loads(study_file.read_text())
+        entry = study["history"][0]
+        others = [{"class": "MockApplication", "name": "renamed"}, {"class": "Other", "name": "mock"}]
+        study["history"] = [
+            {**entry, "application": application} for application in [*others, *others, entry["application"]]
+        ]
+        study_file.write_text(json.dumps(study))
+
+        with pytest.raises(ValueError, match=r"made with MockApplication 'renamed' and Other 'mock', as its study"):
+            later(manager)
+
+    def test_the_study_file_of_the_archive_directory_names_the_application_too(self, tmp_path):
+        """A study whose working directory is gone is checked against the copy beside its archives."""
+        manager = added(tmp_path)
+        manager.archive_experiments()
+        shutil.rmtree(manager.work_dir)
+        study_file = manager.archive_dir / STUDY_FILENAME
+        study = json.loads(study_file.read_text())
+        study["history"][0]["application"]["name"] = "other"
+        study_file.write_text(json.dumps(study))
+
+        with pytest.raises(ValueError, match="was made with MockApplication 'other'"):
+            later(manager)
+
+    def test_the_study_file_of_the_archive_directory_is_held_to_the_same(self, tmp_path):
+        manager = added(tmp_path)
+        manager.archive_experiments()
+        (manager.work_dir / STUDY_FILENAME).unlink()
+        archived = manager.archive_dir / STUDY_FILENAME
+        archived.write_text(json.dumps({**json.loads(archived.read_text()), "version": 2}))
+
+        with pytest.raises(ValueError, match=rf"The study file '{archived}' states the format version 2"):
+            manager._read_study()
+
+    def test_each_call_is_written_into_the_history(self, tmp_path):
+        manager = added(tmp_path)
+        manager.delete_experiment("release")
+        added(tmp_path / "again").delete_experiments(experiments=["release"])
+
+        history = json.loads((manager.work_dir / STUDY_FILENAME).read_text())["history"]
+        again = json.loads((tmp_path / "again" / "work" / STUDY_FILENAME).read_text())["history"]
+
+        assert [entry["call"] for entry in history] == ["add_experiment_from_directory", "delete_experiment"]
+        assert [entry["call"] for entry in again] == ["add_experiment_from_directory", "delete_experiments"]
+        assert all(entry["experiments"] == ["release"] for entry in history + again)
+
+    def test_an_entry_says_what_made_the_call(self, tmp_path):
+        manager = added(tmp_path)
+
+        (entry,) = manager._read_study()["history"]
+
+        assert datetime.fromisoformat(entry.pop("when")).utcoffset().total_seconds() == 0, "in UTC"
+        assert entry == {
+            "call": "add_experiment_from_directory",
+            "access_profiling_version": _package_version(),
+            "manager": "MockProfilingManager",
+            "application": {"class": "MockApplication", "name": "mock"},
+            # An added experiment was not made from this manager's control, so nothing is said of one.
+            "control": None,
+            "engine": {},
+            "experiments": ["release"],
+        }
+
+    def test_a_dry_run_and_a_name_not_held_write_nothing(self, tmp_path):
+        manager = added(tmp_path)
+
+        manager.delete_experiments(experiments=["release"], dry_run=True)
+        manager.delete_experiment("not-held")
+
+        assert len(manager._read_study()["history"]) == 1
+
+    def test_the_version_is_unknown_where_the_package_is_not_installed(self):
+        with mock.patch("access.profiling.manager.version", side_effect=PackageNotFoundError):
+            assert _package_version() == "unknown"
+
+    def test_archiving_copies_it_beside_the_archives(self, tmp_path):
+        manager = added(tmp_path)
+        manager.archive_experiments()
+
+        assert (manager.archive_dir / STUDY_FILENAME).read_text() == (manager.work_dir / STUDY_FILENAME).read_text()
+
+    def test_it_is_read_from_the_archive_directory_once_the_working_directory_is_gone(self, tmp_path):
+        manager = added(tmp_path)
+        manager.archive_experiments()
+        shutil.rmtree(manager.work_dir)
+
+        study = later(manager)._read_study()
+
+        assert [entry["call"] for entry in study["history"]] == ["add_experiment_from_directory"]
+
+    def test_a_study_never_written_has_nothing_to_copy(self, tmp_path):
+        """As one whose experiments were all put into the manager by hand."""
+        path = tmp_path / "work" / "expt"
+        path.mkdir(parents=True)
+        manager = MockProfilingManager([path], ncpus=[4], work_dir=tmp_path / "work", archive_dir=tmp_path / "archive")
+
+        manager.archive_experiments()
+
+        assert (tmp_path / "archive" / "expt.tar.gz").is_file()
+        assert not (tmp_path / "archive" / STUDY_FILENAME).exists()

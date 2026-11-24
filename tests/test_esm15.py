@@ -33,7 +33,7 @@ from access.profiling.um_parser import UMProfilingParser, UMTotalRuntimeParser
 PREINDUSTRIAL_TOTAL_CORES = 432
 PREINDUSTRIAL_UM7_GRID = (16, 15)
 PREINDUSTRIAL_MOM5_GRID = (18, 10)
-PREINDUSTRIAL_BRANCH = "esm1p5-layout_preindustrial+concentrations_atm_16x15_mom_18x10_ice_12"
+PREINDUSTRIAL_KEY = "esm1p5-layout_preindustrial+concentrations_atm_16x15_mom_18x10_ice_12"
 PREINDUSTRIAL_ALLOCATIONS = RootAllocation(
     subcomponents={
         ESM15_UM7_NAME: FixedAllocation(240, local_constraints=(SubdomainAspectRatioConstraint(1.5),)),
@@ -83,7 +83,7 @@ def test_esm15_reproduces_the_released_layout(preindustrial_layout):
 
 
 def test_esm15_experiment_name(esm15, preindustrial_layout):
-    assert esm15.experiment_name(preindustrial_layout) == PREINDUSTRIAL_BRANCH
+    assert esm15.layout_key(preindustrial_layout) == PREINDUSTRIAL_KEY
 
 
 def test_esm15_config_changes(esm15, preindustrial_layout):
@@ -125,9 +125,7 @@ def test_esm15_historical_is_the_same_layout_under_another_name(esm15, preindust
     """Both releases run the same components on the same grids and the same cores, so the name tells them apart."""
 
     assert ESM15_HISTORICAL.parallel_component.subcomponents == esm15.parallel_component.subcomponents
-    assert ESM15_HISTORICAL.experiment_name(preindustrial_layout) == PREINDUSTRIAL_BRANCH.replace(
-        "preindustrial", "historical"
-    )
+    assert ESM15_HISTORICAL.layout_key(preindustrial_layout) == PREINDUSTRIAL_KEY.replace("preindustrial", "historical")
 
 
 def test_esm15_sources_point_at_the_releases():
@@ -183,12 +181,12 @@ def test_esm15_parse_layout_reads_the_cores_of_every_submodel(esm15, tmp_path):
 
 
 @mock.patch("access.profiling.payu_manager.ExperimentGenerator")
-def test_esm15_generate_scaling_experiments(mock_experiment_generator, esm15):
+def test_esm15_generate_scaling_experiments(mock_experiment_generator, esm15, tmp_path):
     """Test that ACCESS-ESM1.5 scaling experiments can be generated end to end, as Payu's `access` model."""
 
     manager = PayuManager(
-        Path("/fake/test_path"),
-        Path("/fake/archive_path"),
+        tmp_path / "test_path",
+        tmp_path / "archive_path",
         esm15,
         GitControlSource("https://example.com/repo", "commit"),
         lab_dir=Path("/fake/lab"),
@@ -199,7 +197,29 @@ def test_esm15_generate_scaling_experiments(mock_experiment_generator, esm15):
 
     config = mock_experiment_generator.call_args[0][0]
     assert config["model_type"] == "access"
-    assert PREINDUSTRIAL_BRANCH in manager.experiments
+    assert PREINDUSTRIAL_KEY in {
+        manager.application.layout_key(experiment.layout) for experiment in manager.experiments.values()
+    }
+
+
+@mock.patch("access.profiling.payu_manager.ExperimentGenerator")
+def test_esm15_historical_refuses_the_study_of_the_preindustrial_configuration(mock_experiment_generator, tmp_path):
+    """The two run the same components on the same grids, so the historical configuration keys every pre-industrial
+    layout without error. A manager of it would skip generating those layouts and read the pre-industrial runs as
+    historical ones, so it is refused, from what the study file records."""
+    directories = (tmp_path / "work", tmp_path / "archive")
+    control = GitControlSource("https://example.com/repo", "commit")
+    study = PayuManager(*directories, ESM15_PREINDUSTRIAL, control, lab_dir=Path("/fake/lab"))
+    study.generate_scaling_experiments(
+        num_nodes_list=[9.0], cores_per_node=48, walltime=2.0, allocations=PREINDUSTRIAL_ALLOCATIONS
+    )
+
+    message = (
+        r"was made with ESM15Configuration 'preindustrial\+concentrations', as its study file records, but this "
+        r"manager's application is ESM15Configuration 'historical\+concentrations'"
+    )
+    with pytest.raises(ValueError, match=message):
+        PayuManager(*directories, ESM15_HISTORICAL, control, lab_dir=Path("/fake/lab"))
 
 
 def _esm15_control(path: Path, submodels: list[tuple[str, str, int | None]], jobname: str = "pre-industrial") -> Path:

@@ -1,18 +1,30 @@
 # Copyright 2025 ACCESS-NRI and contributors. See the top-level COPYRIGHT file for details.
 # SPDX-License-Identifier: Apache-2.0
 
+import json
 import logging
+import os
+import tarfile
 import tempfile
 from pathlib import Path
 from unittest import mock
 
 import pytest
+from access.config.parallel_component import ComponentLayout, CoreSharing
+from access.config.parallel_domain import Domain, DomainDecompositionSpec
+from access.config.parallel_mpi_grid import MPICartesianGrid
 
 from access.profiling.experiment import (
+    RECORD_FILENAME,
     ProfilingExperiment,
     ProfilingExperimentStatus,
     ProfilingLog,
+    _layout_from_record,
+    _layout_record,
     experiment_directory_walker,
+    read_archived_record,
+    read_record,
+    read_versioned,
 )
 from access.profiling.metrics import tavg, tmax
 from access.profiling.parser import ProfilingParser
@@ -248,21 +260,24 @@ def test_profiling_experiment_archive_file_exists():
         mock_exists.assert_called_once()
 
 
+@mock.patch.object(Path, "replace")
 @mock.patch("access.profiling.experiment.tarfile.open")
 @mock.patch("access.profiling.experiment.experiment_directory_walker", return_value=[])
-def test_profiling_experiment_archive_file_overwrite(mock_walker, mock_open):
+def test_profiling_experiment_archive_file_overwrite(mock_walker, mock_open, mock_replace):
     """Test the archive method of ProfilingExperiment when the archive file already exists and overwrite is True."""
 
     exp = ProfilingExperiment(path=Path("/fake/work_dir/exp1"))
     exp.status = ProfilingExperimentStatus.DONE
 
     exp.archive(Path("/fake/archive"), overwrite=True)
-    mock_open.assert_called_with(Path("/fake/archive").with_suffix(".tar.gz"), "w:gz")
+    mock_open.assert_called_with(Path(f"/fake/.archive.tar.gz.{os.getpid()}.tmp"), "w:gz")
+    mock_replace.assert_called_once_with(Path("/fake/archive").with_suffix(".tar.gz"))
 
 
+@mock.patch.object(Path, "replace")
 @mock.patch("access.profiling.experiment.tarfile.open")
 @mock.patch("access.profiling.experiment.experiment_directory_walker", return_value=[])
-def test_profiling_experiment_archive_name_with_dots(mock_walker, mock_open):
+def test_profiling_experiment_archive_name_with_dots(mock_walker, mock_open, mock_replace):
     """Archive names containing dots (e.g. version numbers) must not be truncated."""
 
     exp = ProfilingExperiment(path=Path("/fake/work_dir/exp1"))
@@ -272,7 +287,8 @@ def test_profiling_experiment_archive_name_with_dots(mock_walker, mock_open):
     exp.archive(archive_path)
 
     expected_archive_file = Path("/fake/archive/am3-release-n96e-1.0-24.tar.gz")
-    mock_open.assert_called_with(expected_archive_file, "x:gz")
+    mock_open.assert_called_with(Path(f"/fake/archive/.am3-release-n96e-1.0-24.tar.gz.{os.getpid()}.tmp"), "w:gz")
+    mock_replace.assert_called_once_with(expected_archive_file)
     assert exp.path == expected_archive_file
 
 
@@ -351,8 +367,9 @@ def assert_links_kept(mock_tarfile, root, links):
         mock_tarfile.gettarinfo.assert_any_call(root / link, arcname=str(Path("experiment") / link.relative_to("exp1")))
 
 
+@mock.patch.object(Path, "replace")
 @mock.patch("access.profiling.experiment.tarfile.open")
-def test_profiling_experiment_archive(mock_open, tmp_path, setup_experiment_directory, caplog):
+def test_profiling_experiment_archive(mock_open, mock_replace, tmp_path, setup_experiment_directory, caplog):
     """Test the archive method of ProfilingExperiment whithout following symlinks."""
 
     files, links = setup_experiment_directory(tmp_path, follow_symlinks=False)
@@ -375,7 +392,8 @@ def test_profiling_experiment_archive(mock_open, tmp_path, setup_experiment_dire
 
     # Check calls
     assert exp.status == ProfilingExperimentStatus.ARCHIVED  # Status should be updated to ARCHIVED
-    mock_open.assert_called_with(Path("/fake/archive").with_suffix(".tar.gz"), "x:gz")  # Check tarfile opening
+    mock_open.assert_called_with(Path(f"/fake/.archive.tar.gz.{os.getpid()}.tmp"), "w:gz")  # Check tarfile opening
+    mock_replace.assert_called_once_with(Path("/fake/archive").with_suffix(".tar.gz"))
     assert mock_tarfile.add.call_count == len(files), "All files should be added to the archive."
     for file in files:
         if "exp1" in file.parts:
@@ -388,8 +406,9 @@ def test_profiling_experiment_archive(mock_open, tmp_path, setup_experiment_dire
     assert_links_kept(mock_tarfile, tmp_path, links)
 
 
+@mock.patch.object(Path, "replace")
 @mock.patch("access.profiling.experiment.tarfile.open")
-def test_profiling_experiment_archive_follow_symlinks(mock_open, tmp_path, setup_experiment_directory):
+def test_profiling_experiment_archive_follow_symlinks(mock_open, mock_replace, tmp_path, setup_experiment_directory):
     """Test the archive method of ProfilingExperiment when following symlinks."""
 
     files, links = setup_experiment_directory(tmp_path, follow_symlinks=True)
@@ -407,7 +426,8 @@ def test_profiling_experiment_archive_follow_symlinks(mock_open, tmp_path, setup
 
     # Check calls
     assert exp.status == ProfilingExperimentStatus.ARCHIVED  # Status should be updated to ARCHIVED
-    mock_open.assert_called_with(Path("/fake/archive").with_suffix(".tar.gz"), "x:gz")  # Check tarfile opening
+    mock_open.assert_called_with(Path(f"/fake/.archive.tar.gz.{os.getpid()}.tmp"), "w:gz")  # Check tarfile opening
+    mock_replace.assert_called_once_with(Path("/fake/archive").with_suffix(".tar.gz"))
     assert mock_tarfile.add.call_count == len(files), "All files should be added to the archive."
     for file in files:
         if "exp1" in file.parts:
@@ -420,8 +440,9 @@ def test_profiling_experiment_archive_follow_symlinks(mock_open, tmp_path, setup
     assert_links_kept(mock_tarfile, tmp_path, links)
 
 
+@mock.patch.object(Path, "replace")
 @mock.patch("access.profiling.experiment.tarfile.open")
-def test_profiling_experiment_archive_with_filters(mock_open, tmp_path, setup_experiment_directory):
+def test_profiling_experiment_archive_with_filters(mock_open, mock_replace, tmp_path, setup_experiment_directory):
     """Test the archive method of ProfilingExperiment with exclude patterns."""
 
     files, links = setup_experiment_directory(tmp_path, follow_symlinks=True)
@@ -449,7 +470,8 @@ def test_profiling_experiment_archive_with_filters(mock_open, tmp_path, setup_ex
     exp.archive(Path("/fake/archive"), exclude_files=["*.nc"], exclude_dirs=["restart*", ".git"], follow_symlinks=True)
 
     # Check calls
-    mock_open.assert_called_with(Path("/fake/archive").with_suffix(".tar.gz"), "x:gz")  # Check tarfile opening
+    mock_open.assert_called_with(Path(f"/fake/.archive.tar.gz.{os.getpid()}.tmp"), "w:gz")  # Check tarfile opening
+    mock_replace.assert_called_once_with(Path("/fake/archive").with_suffix(".tar.gz"))
     assert mock_tarfile.add.call_count == len(files_to_archive), (
         "Only non-excluded files should be added to the archive."
     )
@@ -464,8 +486,9 @@ def test_profiling_experiment_archive_with_filters(mock_open, tmp_path, setup_ex
     assert_links_kept(mock_tarfile, tmp_path, links)
 
 
+@mock.patch.object(Path, "replace")
 @mock.patch("access.profiling.experiment.tarfile.open")
-def test_profiling_experiment_archive_with_run_path(mock_open, tmp_path):
+def test_profiling_experiment_archive_with_run_path(mock_open, mock_replace, tmp_path):
     """Test that archive() traverses both path and run_path, storing under experiment/ and runs/."""
 
     # Create experiment directory with one file
@@ -496,8 +519,54 @@ def test_profiling_experiment_archive_with_run_path(mock_open, tmp_path):
     mock_tarfile.add.assert_any_call(run_file2, arcname=Path("runs/timing.txt"))
 
     # run_path cleared after archiving
+    mock_replace.assert_called_once_with(Path("/fake/archive.tar.gz"))
     assert exp.run_path is None
     assert exp.path == Path("/fake/archive.tar.gz")
+
+
+class TestWholeArchives:
+    """An archive is written whole or not at all, so that an archiving stopped part way leaves no tarball whose record
+    reads as if the rest were there."""
+
+    @staticmethod
+    def done(tmp_path):
+        path = tmp_path / "exp1"
+        path.mkdir()
+        (path / "config.yaml").write_text("ncpus: 4\n")
+        experiment = ProfilingExperiment(path)
+        experiment.status = ProfilingExperimentStatus.DONE
+        return experiment
+
+    @mock.patch("access.profiling.experiment.experiment_directory_walker", side_effect=OSError("disk full"))
+    def test_one_stopped_part_way_leaves_nothing(self, mock_walker, tmp_path):
+        experiment = self.done(tmp_path)
+
+        with pytest.raises(OSError, match="disk full"):
+            experiment.archive(tmp_path / "archive", record={"version": 1})
+
+        assert list(tmp_path.iterdir()) == [tmp_path / "exp1"], "neither the archive nor the partial file is left"
+        assert experiment.status == ProfilingExperimentStatus.DONE
+        assert experiment.path == tmp_path / "exp1"
+
+    @mock.patch("access.profiling.experiment.experiment_directory_walker", side_effect=OSError("disk full"))
+    def test_one_stopped_part_way_leaves_the_archive_it_was_to_overwrite(self, mock_walker, tmp_path):
+        experiment = self.done(tmp_path)
+        (tmp_path / "archive.tar.gz").write_bytes(b"the archive made before")
+
+        with pytest.raises(OSError, match="disk full"):
+            experiment.archive(tmp_path / "archive", overwrite=True)
+
+        assert (tmp_path / "archive.tar.gz").read_bytes() == b"the archive made before"
+        assert not list(tmp_path.glob(".*.tmp"))
+
+    def test_a_finished_one_takes_the_name_and_leaves_no_partial_file(self, tmp_path):
+        experiment = self.done(tmp_path)
+
+        experiment.archive(tmp_path / "archive")
+
+        assert sorted(path.name for path in tmp_path.iterdir()) == ["archive.tar.gz", "exp1"]
+        with tarfile.open(tmp_path / "archive.tar.gz") as tar:
+            assert "experiment/config.yaml" in tar.getnames()
 
 
 class TestSymlinksInsideTheExperiment:
@@ -634,3 +703,286 @@ class TestWhatIsLeftOut:
 
         with experiment.directory() as (path, _):
             assert self.archived(path) == [Path("timings.txt")]
+
+
+def recorded_layout():
+    """A layout with everything a record has to keep: a process grid, a shared range, an offset and idle cores."""
+
+    atm = ComponentLayout(
+        name="atm",
+        n_cores=4,
+        n_ranks=4,
+        threads_per_rank=1,
+        decomposition=DomainDecompositionSpec(Domain(shape=(8, 6)), MPICartesianGrid(shape=(2, 2))),
+    )
+    cpl = ComponentLayout(name="cpl", n_cores=4, n_ranks=4, threads_per_rank=1, decomposition=None)
+    ice = ComponentLayout(name="ice", n_cores=2, n_ranks=2, threads_per_rank=1, decomposition=None, core_offset=2)
+    shared = ComponentLayout(
+        name="shared",
+        n_cores=4,
+        n_ranks=4,
+        threads_per_rank=None,
+        decomposition=None,
+        sub_layouts=(cpl, ice),
+        core_sharing=CoreSharing.SHARED,
+    )
+    return ComponentLayout(
+        name="model", n_cores=10, n_ranks=8, threads_per_rank=None, decomposition=None, sub_layouts=(atm, shared)
+    )
+
+
+class TestLayoutRecord:
+    """A layout written into a record, and built again from it."""
+
+    def test_it_comes_back_as_it_was_through_json(self):
+        layout = recorded_layout()
+
+        record = json.loads(json.dumps(_layout_record(layout)))
+
+        assert _layout_from_record(record) == layout
+
+    def test_one_stated_wrongly_is_refused(self):
+        """The layout is built again, so a record edited into something that is no layout does not get through."""
+        record = _layout_record(recorded_layout())
+        record["sub_layouts"][0]["n_ranks"] = 3
+
+        with pytest.raises(ValueError, match="n_ranks"):
+            _layout_from_record(record)
+
+
+class TestRecord:
+    """What an experiment writes down about itself, since its name says nothing."""
+
+    def test_it_holds_what_differs_from_one_experiment_to_the_next(self, tmp_path):
+        layout = recorded_layout()
+        experiment = ProfilingExperiment(
+            tmp_path / "exp-0001" / "config",
+            run_path=Path("/runs/exp-0001"),
+            layout=layout,
+            changes={"ice_in": {"domain_nml": {"block_size_x": "15"}}},
+            labels={"blocks per rank": "5-8"},
+        )
+        experiment.ncpus = 104
+
+        assert experiment.record(tmp_path) == {
+            "version": 1,
+            "path": "exp-0001/config",
+            "run_path": "/runs/exp-0001",
+            "complete": False,
+            "layout": _layout_record(layout),
+            "changes": {"ice_in": {"domain_nml": {"block_size_x": "15"}}},
+            "labels": {"blocks per rank": "5-8"},
+            "ncpus": 104,
+        }
+
+    @pytest.mark.parametrize(
+        "labels, message",
+        [
+            ({"where": Path("/some/input")}, r"The labels of an experiment must be JSON values: strings, .* Got"),
+            ({"speedup": float("nan")}, r"must be JSON values: strings, finite numbers, .* Got \{'speedup': nan\}"),
+            ({"speedup": float("inf")}, r"must be JSON values: strings, finite numbers, .* Got \{'speedup': inf\}"),
+            ({"grid": (4, 4)}, "The labels of an experiment must be JSON values, which .* is not what it was"),
+        ],
+    )
+    def test_labels_it_could_not_hold_are_refused(self, tmp_path, labels, message):
+        """Whatever gives an experiment its labels, they are what a later session reads back from the record.
+
+        NaN and infinity are not JSON, and NaN is not even equal to itself, so they are refused as not JSON
+        values rather than as values that change when written and read again."""
+        with pytest.raises(ValueError, match=message):
+            ProfilingExperiment(tmp_path / "release", labels=labels)
+
+    def test_what_is_unknown_is_null(self, tmp_path):
+        """As for an experiment added by hand, which was given no layout and whose changes nothing states."""
+        assert ProfilingExperiment(tmp_path / "release", complete=True).record(tmp_path) == {
+            "version": 1,
+            "path": "release",
+            "run_path": None,
+            "complete": True,
+            "layout": None,
+            "changes": None,
+            "labels": {},
+            "ncpus": None,
+        }
+
+    def test_a_path_outside_the_working_directory_is_kept_whole(self, tmp_path):
+        experiment = ProfilingExperiment(tmp_path / "elsewhere" / "expt")
+
+        assert experiment.record(tmp_path / "work")["path"] == str(tmp_path / "elsewhere" / "expt")
+
+    def test_a_layout_read_back_is_not_recorded(self, tmp_path):
+        """It is not what identifies the experiment, and says less than a layout the experiment was given."""
+        experiment = ProfilingExperiment(tmp_path / "expt")
+        experiment.layout = recorded_layout()  # as ProfilingManager._layout() keeps what it reads back
+
+        assert not experiment.layout_given
+        assert experiment.record(tmp_path)["layout"] is None
+
+    def test_the_labels_are_the_experiments_own(self, tmp_path):
+        labels = {"version": "1.0"}
+        experiment = ProfilingExperiment(tmp_path / "expt", labels=labels)
+
+        labels["version"] = "2.0"
+
+        assert experiment.labels == {"version": "1.0"}
+
+    def test_an_experiment_comes_back_from_its_record(self, tmp_path):
+        layout = recorded_layout()
+        original = ProfilingExperiment(
+            tmp_path / "expt", layout=layout, changes={"config.yaml": {"walltime": "1:00:00"}}, labels={"a": 1}
+        )
+        original.ncpus = 48
+        record = json.loads(json.dumps(original.record(tmp_path)))
+
+        experiment = ProfilingExperiment.from_record(record, tmp_path / "expt", run_path=tmp_path / "runs")
+
+        assert (experiment.path, experiment.run_path) == (tmp_path / "expt", tmp_path / "runs")
+        assert experiment.layout == layout and experiment.layout_given
+        assert experiment.changes == {"config.yaml": {"walltime": "1:00:00"}}
+        assert experiment.labels == {"a": 1}
+        assert experiment.ncpus == 48
+        assert experiment.status == ProfilingExperimentStatus.NEW
+
+    def test_one_added_as_complete_comes_back_done(self, tmp_path):
+        """No engine record says so, which is why the record does."""
+        record = ProfilingExperiment(tmp_path / "expt", complete=True).record(tmp_path)
+
+        assert ProfilingExperiment.from_record(record, tmp_path / "expt").status == ProfilingExperimentStatus.DONE
+
+    def test_an_archived_one_stays_archived(self, tmp_path):
+        record = ProfilingExperiment(tmp_path / "expt", complete=True).record(tmp_path)
+
+        experiment = ProfilingExperiment.from_record(record, tmp_path / "expt.tar.gz")
+
+        assert experiment.status == ProfilingExperimentStatus.ARCHIVED
+
+    def test_the_labels_are_shown(self, tmp_path):
+        experiment = ProfilingExperiment(tmp_path / "expt", labels={"distribution": "roundrobin"})
+
+        assert repr(experiment).endswith("status=NEW, labels={'distribution': 'roundrobin'})")
+
+
+class TestArchivedRecord:
+    """The record an archive holds, written first so that it is read without extracting the rest."""
+
+    @staticmethod
+    def record(tmp_path, **entries):
+        """A record with every entry, as an experiment writes one, with the given entries changed."""
+        return {**ProfilingExperiment(tmp_path / "expt").record(tmp_path), **entries}
+
+    @staticmethod
+    def archive(tmp_path, record):
+        path = tmp_path / "expt"
+        path.mkdir()
+        (path / "config.yaml").write_text("ncpus: 4\n")
+        experiment = ProfilingExperiment(path)
+        experiment.status = ProfilingExperimentStatus.DONE
+        (tmp_path / "archive").mkdir()
+        experiment.archive(tmp_path / "archive" / "expt", record=record)
+        return experiment
+
+    def test_it_is_the_first_member(self, tmp_path):
+        experiment = self.archive(tmp_path, self.record(tmp_path, labels={"a": 1}))
+
+        with tarfile.open(experiment.path) as tar:
+            names = tar.getnames()
+        assert names[0] == RECORD_FILENAME
+        assert "experiment/config.yaml" in names
+
+    def test_it_is_read_back(self, tmp_path):
+        record = self.record(tmp_path, labels={"a": 1})
+        experiment = self.archive(tmp_path, record)
+
+        assert read_archived_record(experiment.path) == record
+
+    def test_one_lacking_an_entry_is_refused_with_the_archive_it_is_in(self, tmp_path):
+        experiment = self.archive(tmp_path, {"version": 1, "labels": {"a": 1}})
+
+        with pytest.raises(
+            ValueError, match=r"The record in the archive '.*expt\.tar\.gz' cannot be read, since it lacks the entries"
+        ):
+            read_archived_record(experiment.path)
+
+    def test_one_in_another_format_is_refused_with_the_archive_it_is_in(self, tmp_path):
+        """An archive is read years after it was made, so it may come from a later version of the package."""
+        experiment = self.archive(tmp_path, self.record(tmp_path, version=2))
+
+        with pytest.raises(
+            ValueError, match=r"The record in the archive '.*expt\.tar\.gz' states the format version 2"
+        ):
+            read_archived_record(experiment.path)
+
+    def test_the_format_it_is_held_to_is_the_records(self, tmp_path):
+        experiment = self.archive(tmp_path, self.record(tmp_path))
+
+        with (
+            mock.patch("access.profiling.experiment.RECORD_VERSION", 2),
+            pytest.raises(ValueError, match="states the format version 1, and .* reads version 2"),
+        ):
+            read_archived_record(experiment.path)
+
+    def test_the_experiment_is_still_extracted_beside_it(self, tmp_path):
+        experiment = self.archive(tmp_path, self.record(tmp_path))
+
+        with experiment.directory() as (path, run_path):
+            assert (path / "config.yaml").read_text() == "ncpus: 4\n"
+            assert run_path is None
+
+    def test_an_archive_given_none_holds_none(self, tmp_path):
+        """As the archives made before experiments had records."""
+        experiment = self.archive(tmp_path, None)
+
+        assert read_archived_record(experiment.path) is None
+
+    def test_an_empty_archive_holds_none(self, tmp_path):
+        tarfile.open(tmp_path / "empty.tar.gz", "w:gz").close()
+
+        assert read_archived_record(tmp_path / "empty.tar.gz") is None
+
+
+class TestReadVersioned:
+    """A file states the version of its own format, and one in another format is refused with its name."""
+
+    def test_a_file_in_the_format_that_is_read_is_returned_whole(self, tmp_path):
+        text = json.dumps({"version": 3, "labels": {"a": 1}})
+
+        assert read_versioned(text, tmp_path / "f.json", "record", 3, ["labels"]) == {"version": 3, "labels": {"a": 1}}
+
+    def test_the_record_an_experiment_writes_is_in_the_format_that_is_read(self, tmp_path):
+        record = ProfilingExperiment(tmp_path / "expt").record(tmp_path)
+        (tmp_path / RECORD_FILENAME).write_text(json.dumps(record))
+
+        assert read_record(tmp_path / RECORD_FILENAME) == record
+
+    def test_a_file_lacking_an_entry_is_refused_with_its_name(self, tmp_path):
+        """Rather than with a bare KeyError from whatever reads the entry first."""
+        with pytest.raises(
+            ValueError, match=r"The record '.*f\.json' cannot be read, since it lacks the entries \['b'\]"
+        ):
+            read_versioned(json.dumps({"version": 1, "a": 1}), tmp_path / "f.json", "record", 1, ["a", "b"])
+
+    @pytest.mark.parametrize("content, kind", [([], "list"), ("text", "str"), (3, "int"), (None, "NoneType")])
+    def test_json_that_is_not_an_object_is_refused_with_its_name(self, tmp_path, content, kind):
+        with pytest.raises(
+            ValueError, match=rf"The record '.*f\.json' cannot be read, since it holds a JSON {kind} and"
+        ):
+            read_versioned(json.dumps(content), tmp_path / "f.json", "record", 1, [])
+
+    def test_another_version_is_refused(self, tmp_path):
+        message = (
+            rf"The record '{tmp_path}/file\.json' states the format version 2, and this version of access-profiling "
+            r"reads version 1\. Update access-profiling"
+        )
+        with pytest.raises(ValueError, match=message):
+            read_versioned(json.dumps({"version": 2}), tmp_path / "file.json", "record", 1, [])
+
+    def test_a_file_stating_no_version_is_refused(self, tmp_path):
+        with pytest.raises(ValueError, match=r"The study file '.*file\.json' states no format version, and"):
+            read_versioned(json.dumps({"last_number": 3}), tmp_path / "file.json", "study file", 1, ["last_number"])
+
+    def test_a_file_that_is_not_json_is_refused_with_its_name(self, tmp_path):
+        """As a file cut short when the disk filled up is, which the JSON error alone would not say which it is."""
+        with pytest.raises(
+            ValueError, match=r"The record '.*file\.json' cannot be read, since it is not JSON: Expecting"
+        ):
+            read_versioned('{"version": 1, "path"', tmp_path / "file.json", "record", 1, [])

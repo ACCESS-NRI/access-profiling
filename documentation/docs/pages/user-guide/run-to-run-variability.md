@@ -34,7 +34,7 @@ look at the runs of one experiment:
 from access.profiling.metrics import tmax
 
 manager.parse_profiling_data()
-name = "esm1p6-layout_piControl_atm_16x16_mom_16x15_ice_12"
+name = "exp-0001"
 runtime = manager.data[name]["payu"][tmax].sel(region="payu_model_run_duration_seconds")
 print(runtime.run.values)
 print(runtime.pint.to("minute").data)

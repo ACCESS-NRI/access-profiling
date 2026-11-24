@@ -76,7 +76,7 @@ class ESM16Configuration(SubmodelsConfiguration):
             configuration names one. None leaves the control's own.
         model_type (str): The model type identifier, as Payu defines it.
         model_name (str): The model's name, which names the root of the component tree with `name`.
-        experiment_prefix (str): Prefix for the names of experiments generated for this configuration.
+        experiment_prefix (str): Prefix of the key of every layout of this configuration.
 
     Raises:
         ValueError: If the name is empty, if the configuration has no component at all, or if a grid that is

@@ -60,8 +60,8 @@ control_options["config.yaml"]["modules"] = {"use": ["/g/data/vk83/modules"], "l
 
 So what happens when the experiments are created? First, the control is cloned into the working directory, under
 `config`, and the control options are committed there on a branch named `ctrl`, together with the laboratory of the
-study. Then one branch is created from `ctrl` for each experiment. The branch is named after the parallelisation
-layout, and contains the changes for that layout, its walltime and its name.
+study. Then one branch is created from `ctrl` for each experiment. The branch has the name of the experiment, such
+as `exp-0001`, and contains the changes for its parallelisation layout, its walltime and its name.
 
 ### The laboratory
 
@@ -79,8 +79,8 @@ every Payu command uses it. It also logs it when it creates the experiments, and
 meant for the large files that the runs write.
 
 Why does each study need its own laboratory? Without one, Payu uses its default,
-`/scratch/<project>/<user>/<model>`, which every study of the model and all your other Payu experiments share. Two
-studies of the same configuration name their experiments in the same way, so they would share directories. A study
+`/scratch/<project>/<user>/<model>`, which every study of the model and all your other Payu experiments share. Every
+study numbers its experiments in the same way, from `exp-0001`, so two studies would share directories. A study
 would then skip the experiments that another study has already run, and read their results instead. Deleting an
 experiment would also delete the runs of the other study. For this reason, a manager without a `lab_dir` refuses to
 create experiments, and the control options cannot name a laboratory. A manager that only reads, archives or deletes
@@ -206,10 +206,10 @@ about the job, with `qstat -x`. If PBS says that the job has finished, or does n
 was killed, and the experiment is FAILED. Note that if `qstat` is not available or does not answer, the experiment
 stays RUNNING.
 
-In a later session, you get your experiments back by creating the study again with the same arguments, as
-described in [Managing experiments](../user-guide/managing-experiments.md#picking-a-study-up-in-a-later-session).
-This is safe: the branches of the experiments already exist, and applying the same changes to them again does
-nothing.
+In a later session, the manager finds your experiments again from their records, as described in
+[Managing experiments](../user-guide/managing-experiments.md#picking-a-study-up-in-a-later-session). You can also
+create the study again with the same arguments. This is safe: the layouts that already have an experiment are
+skipped, so the generator is not called for them.
 
 ## Running failed experiments again
 
@@ -236,7 +236,9 @@ manager.archive_experiments(exclude_files=["*.nc", "aiihca*"])
 For each experiment it deletes,
 [`delete_experiments`][access.profiling.payu_manager.PayuManager.delete_experiments] first runs
 `payu sweep --hard`, which removes what Payu keeps for the experiment in its laboratory. It then deletes the
-directory of the experiment.
+directory of the experiment. The branch of the experiment stays in the clone of the control. This is why the
+number of a deleted experiment is not given to another one: a new experiment would be created on top of that
+branch.
 
 With `remove_repo_dir=True`, the clone of the control in the working directory is also deleted, but only when it
 is safe to do so. This clone has the branches of all the experiments of the study, and the experiments are cloned
