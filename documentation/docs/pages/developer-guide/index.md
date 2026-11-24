@@ -36,6 +36,7 @@ classDiagram
         experiments
         data
         generate_scaling_experiments()
+        generate_experiments()
         add_experiment_from_directory()
         update_statuses()
         parse_profiling_data()
@@ -188,6 +189,20 @@ fails, because the engine may have created some of the experiments. A subclass c
 to check beforehand. It overrides `_refuse_plans`, which the manager calls with the plans before it writes
 anything, and raises there. A call that is refused in this way takes no number. For example, this is where
 `PayuManager` refuses a manager that has no `lab_dir`. By default, `_refuse_plans` refuses nothing.
+
+[`generate_experiments`][access.profiling.manager.ProfilingManager.generate_experiments] goes the same way, without
+a search. It makes one plan for each
+[`ConfigurationChoice`][access.profiling.experiment.ConfigurationChoice] that the study states:
+
+- For a choice without a layout, the changes of the plan are those of the choice, and the application is not
+  asked anything.
+- For a choice with a layout, the manager asks the application for `config_changes(layout)`, and merges the
+  changes of the choice over them. Mappings are merged key by key and the choice wins. Two lists for the same key
+  raise a `ValueError`.
+
+Such a plan has no walltime, since a choice states its walltime among its changes, and it may have no layout. A
+subclass of `ProfilingManager` therefore has to accept both in `_create_experiments`. The manager tells whether it
+already holds the experiment of a choice from the key of its layout and from the changes that the choice states.
 
 Once the experiments are created, the manager writes a record for each of them, and adds the call to the study
 file. [Managing experiments](../user-guide/managing-experiments.md#what-the-manager-keeps-on-disk) describes both

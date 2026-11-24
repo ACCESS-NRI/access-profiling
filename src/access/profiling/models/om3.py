@@ -20,6 +20,7 @@ so the configuration writes and reads the PE layout itself.
 """
 
 import logging
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -29,6 +30,7 @@ from access.config.parallel_component import ComponentLayout, CoreSharing, Paral
 from access.profiling.application import LogSpec, log_at
 from access.profiling.control import GitControlSource
 from access.profiling.esmf_parser import ESMFSummaryProfilingParser
+from access.profiling.experiment import ConfigurationChoice
 from access.profiling.fms_parser import FMSProfilingParser
 from access.profiling.models.cice import CICEPartitioning
 from access.profiling.models.components import CICEComponent
@@ -352,6 +354,62 @@ class OM3Configuration(PayuConfiguration):
         for component in (*self.shared, *self.concurrent):
             changes.update(component.config_changes(realms[component.name]))
         return changes
+
+    def block_size_choices(
+        self,
+        layouts: Sequence[ComponentLayout],
+        blocks_per_rank_ranges: Mapping[str, tuple[int, int]],
+        changes: dict | None = None,
+        label: str = "blocks per rank",
+    ) -> list[ConfigurationChoice]:
+        """Returns the configuration choices of a study of CICE6's block size, on each of a number of layouts.
+
+        This configuration chooses the block size from the rank count of its sea ice, so that each rank holds the
+        blocks its partitioning asks for. A study of the block size asks for other ranges of blocks per rank
+        instead, and the size a range comes to depends on the ranks of the sea ice, which is why each choice names
+        its layout as well as its block size. The block size is stated in the sea ice's namelist group, as
+        `config_changes` states this configuration's own, so that the choice's wins.
+
+        Args:
+            layouts (Sequence[ComponentLayout]): Layouts of this configuration, for example ones that
+                `ProfilingManager.select_layouts` returned.
+            blocks_per_rank_ranges (Mapping[str, tuple[int, int]]): The fewest and the most blocks each rank should
+                hold, both inclusive, keyed by the label of the choices asking for them.
+            changes (dict | None): Further changes every choice makes, such as a walltime, keyed by file as the
+                changes of a `ConfigurationChoice` are. None (the default) makes none.
+            label (str): Key of the label each choice is given. Defaults to "blocks per rank".
+
+        Returns:
+            list[ConfigurationChoice]: One choice for each range and each layout, in that order. A layout on which
+                no block size gives the ranks of the sea ice so many blocks is left out of that range, and logged
+                at INFO.
+
+        Raises:
+            ValueError: If the changes set the namelist group of the sea ice, which every choice states, if a
+                range is not one, or if a layout is not a layout of this configuration.
+        """
+        changes = changes if changes is not None else {}
+        path, group = self.sea_ice.namelist_path, self.sea_ice.namelist_group
+        if group in changes.get(path, {}):
+            raise ValueError(
+                f"The changes set the {group} group of {path}, which every choice of a block size states. Make "
+                "these changes in the control options instead."
+            )
+
+        choices = []
+        for key, blocks_per_rank_range in blocks_per_rank_ranges.items():
+            sea_ice = replace(self.sea_ice, block_shape=None, blocks_per_rank_range=blocks_per_rank_range)
+            for layout in layouts:
+                n_ranks = self._realm_layouts(layout)[OM3_SEA_ICE_NAME].n_ranks
+                if sea_ice.blocks(n_ranks) is None:
+                    logger.info(
+                        f"No block size gives each of the {n_ranks} ranks of the sea ice {blocks_per_rank_range[0]} "
+                        f"to {blocks_per_rank_range[1]} blocks, so '{key}' has no choice on that layout."
+                    )
+                    continue
+                namelist = {**changes.get(path, {}), group: sea_ice.namelist_changes(n_ranks)}
+                choices.append(ConfigurationChoice({**changes, path: namelist}, layout=layout, labels={label: key}))
+        return choices
 
     def parse_layout(self, output_dir: Path) -> ComponentLayout | None:
         """Returns the layout an experiment ran, from the PE layout its NUOPC configuration states.

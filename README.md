@@ -24,6 +24,7 @@ ACCESS-OM3, ACCESS-AM3, ACCESS-rAM3 and ACCESS-CM3.
 
 - A search for the ways of dividing a number of cores among the components of an application.
 - Creating, running, tracking, archiving and deleting experiments.
+- Comparing settings of an application, with one experiment for each configuration.
 - Registering existing experiments that were run in some other way.
 - Parsers that read every profiling log into an xarray dataset, with the timings of each region and their units.
 - Running every experiment several times, to see how much the timings vary.

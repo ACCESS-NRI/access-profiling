@@ -24,7 +24,12 @@ from access.profiling.control import ControlSource, ExistingDirectoryControlSour
 from access.profiling.cylc_manager import CylcRoseManager
 from access.profiling.cylc_parser import CylcDBReader, CylcProfilingParser
 from access.profiling.esmf_parser import ESMFSummaryProfilingParser
-from access.profiling.experiment import ProfilingExperiment, ProfilingExperimentStatus, ProfilingLog
+from access.profiling.experiment import (
+    ConfigurationChoice,
+    ProfilingExperiment,
+    ProfilingExperimentStatus,
+    ProfilingLog,
+)
 from access.profiling.fms_parser import FMSProfilingParser
 from access.profiling.manager import ProfilingManager
 from access.profiling.metrics import ProfilingMetric
@@ -55,6 +60,7 @@ __all__ = [
     "CICEComponent",
     "CICEPartitioning",
     "CICEPartitioningMode",
+    "ConfigurationChoice",
     "ControlSource",
     "CylcDBReader",
     "CylcProfilingParser",

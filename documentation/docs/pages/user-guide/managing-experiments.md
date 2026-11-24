@@ -78,8 +78,8 @@ next:
 | `run_path` | Where its runs are, when they are kept somewhere else, as the runs of a Cylc suite are. |
 | `complete` | Whether the experiment was added as one that had already finished. |
 | `layout` | The layout the experiment was created with, process grids included. |
-| `changes` | What the study changed in the control beyond the layout. A scaling study changes nothing more. |
-| `labels` | Keys and values of your own, which you can give when you add an experiment. |
+| `changes` | What the study changed in the control beyond the layout: the changes of a [configuration choice](configuration-choices.md). A scaling study changes nothing more. |
+| `labels` | Keys and values of your own, which you can give in a configuration choice or when you add an experiment. |
 | `ncpus` | The number of CPUs the job was charged for. It stays `null` in the working directory, and is filled in only in the copy of the record that goes into the archive. |
 
 An entry that is not known is `null`. This is the case for the layout and the changes of an experiment that you
@@ -118,9 +118,9 @@ archive of the archive directory. The statuses are only kept in memory, so the e
 come back with the status NEW, and the manager then checks how their runs went. This is done by `update_statuses`,
 which `run_experiments` and `parse_profiling_data` also call first.
 
-You can also call `generate_scaling_experiments` again with the same arguments. Do not worry, nothing is created or
-submitted twice. The manager recognises the layouts that already have an experiment from the records, not from the
-names of the experiments.
+You can also call `generate_scaling_experiments` or `generate_experiments` again with the same arguments. Do not
+worry, nothing is created or submitted twice. The manager recognises the layouts and the configuration choices that
+already have an experiment from the records, not from the names of the experiments.
 
 Note that a study has one application. The study file records the application of every call, so the manager
 refuses, with a `ValueError`, a study made with another one. Two configurations of a model can run the same
@@ -182,6 +182,10 @@ a failed run, and how it cleans up before running again.
 If the failure had nothing to do with the experiment itself, such as a node failure, there is nothing to fix. In
 that case you only need `run_experiments(retry_failed=True)`.
 
+Note that `regenerate_failed` is only for the experiments of a scaling study. An experiment created from a
+[configuration choice](configuration-choices.md) is what its changes say, so corrected changes are another
+experiment. Delete the failed experiment and create the corrected one with `generate_experiments`.
+
 ## Archiving
 
 When an experiment has finished, you can archive it. This keeps its results in a safe place, and lets you find
@@ -239,6 +243,11 @@ and what they mean:
 | `No layouts found for N nodes (C cores). Check the bounds and the constraints of the allocation strategy.` | The strategy admits no parallelisation layout at that size. Loosen its bounds or constraints, which [Counting the layouts](experiments.md#counting-the-layouts) shows how to check. |
 | `More than M layouts found for C cores. Only the first M enumerated will be used, ...` | `max_layouts` truncated the search, keeping the first layouts found rather than the best ones. Tighten the strategy instead. |
 | `Experiment <name> already exists for layout <key>. Skipping addition.` | Generation found a layout the manager already has an experiment for. Expected when generating a study again. |
+| `Experiment <name> already exists for this configuration choice. Skipping addition.` | `generate_experiments` found a choice the manager already has an experiment for. Expected when generating a study again. |
+| `Experiment <name> keeps the labels it has, ...` | A choice the manager already has an experiment for was given with other labels. The experiment keeps its own. |
+| `Two of the configuration choices are the same configuration: ...` | Two choices of one call have the same layout and the same changes. Give each configuration once. |
+| `Both the layout and the configuration choice give a list for <file> > <key>, ...` | A choice with a layout gives a list for a key the application also gives a list for. Leave the list out of the choice. |
+| `The changes of a configuration choice must be JSON values...` | The changes or the labels of a choice hold something a record cannot, such as a tuple, a path or NaN. Use lists, strings and finite numbers. |
 | `The labels of an experiment must be JSON values...` | The labels of an experiment that you are adding hold something a record cannot, such as a tuple, a path or NaN. Use lists, strings and finite numbers. The experiment is not added. |
 | `The study of the working directory '<work_dir>' and the archive directory '<archive_dir>' was made with <class> '<name>', ...` | The manager was created with another application than the one the study was made with. Create the manager with that application, or give it directories of its own. |
 | `Experiment '<name>' was given a layout that is not a layout of '<application>', ...` | The manager was created with another application than the one its experiments were generated with, and the study file does not say so, for example because it is missing. Printing the manager shows `Layout: not a layout of <application>` for them. Create the manager with their application, or give it directories of its own. |

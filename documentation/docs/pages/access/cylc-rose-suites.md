@@ -12,7 +12,9 @@ profile another suite, see [Other suites](#other-suites).
 With [`CylcRoseManager`][access.profiling.cylc_manager.CylcRoseManager] you can register suites that are already
 in the working directory, run them, read their logs, plot and compare them, and archive and delete them. Two
 things are not possible. The manager cannot create experiments, because the package cannot search for layouts in
-a `rose-suite.conf`. It also cannot make the component scaling plot, which needs the layout of every experiment.
+a `rose-suite.conf`, or write changes into one. Both `generate_scaling_experiments` and `generate_experiments`
+therefore raise a `NotImplementedError`. It also cannot make the component scaling plot, which needs the layout of
+every experiment.
 
 The manager works with Cylc 7 suites that are run with `rose suite-run`. It expects to find a `cylc-suite.db`
 database, the suite log in `log/suite/log`, and the job logs of every task in

@@ -28,8 +28,9 @@ To run a study, you need:
 ## Generating the experiments
 
 With Payu, [`generate_scaling_experiments`][access.profiling.manager.ProfilingManager.generate_scaling_experiments]
-takes one extra option, `control_options`. These are changes that are applied to the control before the experiments are
-created, given for each file. They use the format of
+and [`generate_experiments`][access.profiling.manager.ProfilingManager.generate_experiments] take one extra option,
+`control_options`. These are changes that are applied to the control before the experiments are created, given for
+each file. They use the format of
 [experiment-generator](https://access-experiment-generator.access-hive.org.au/), where `"REMOVE"` deletes a key.
 [Generating the experiments](../user-guide/experiments.md#generating-the-experiments) shows the options the releases of
 ACCESS-ESM1.6 and ACCESS-OM3 need.
@@ -61,7 +62,46 @@ control_options["config.yaml"]["modules"] = {"use": ["/g/data/vk83/modules"], "l
 So what happens when the experiments are created? First, the control is cloned into the working directory, under
 `config`, and the control options are committed there on a branch named `ctrl`, together with the laboratory of the
 study. Then one branch is created from `ctrl` for each experiment. The branch has the name of the experiment, such
-as `exp-0001`, and contains the changes for its parallelisation layout, its walltime and its name.
+as `exp-0001`. It contains the changes for its parallelisation layout, the changes of its configuration choice, its
+walltime and its name.
+
+### The changes of a choice
+
+The `changes` of a [`ConfigurationChoice`][access.profiling.experiment.ConfigurationChoice] are handed to
+experiment-generator as they are. They are what one experiment changes in the control, given for each file.
+[Configuration choices](../user-guide/configuration-choices.md) shows them in use. These are the rules of the
+generator that you need most often:
+
+| What you write | What it does |
+|---|---|
+| A mapping | It is merged into the file key by key. The keys you do not name keep the value of the control. |
+| A number or a string | It replaces the value of the control. |
+| `"REMOVE"` | It deletes the key. |
+| A list inside another list, such as `[["a", "b"]]` | The inner list is merged into the list of the control, item by item. A list that is not wrapped is read as one value for each experiment. |
+| `"PRESERVE"` as an item of such a list | It keeps the item that the control has in that position. |
+| A string with its own quotes, such as `"'roundrobin'"` | It is written with its quotes. A string of a Fortran namelist needs them, since the generator adds none. |
+
+For example, this choice sets a walltime, changes a string of CICE6's namelist and removes a key of `MOM_input`:
+
+```python
+from access.profiling import ConfigurationChoice
+
+choice = ConfigurationChoice(
+    {
+        "config.yaml": {"walltime": "2:00:00"},
+        "ice_in": {"domain_nml": {"distribution_type": "'roundrobin'"}},
+        "MOM_input": {"IO_LAYOUT": "REMOVE"},
+    }
+)
+```
+
+The walltime of an experiment is the `walltime` of its `config.yaml`, as a string. A choice that gives none keeps
+the walltime of the control. A choice cannot set the `laboratory` or the `experiment` of `config.yaml`. The manager
+sets both itself, and raises a `ValueError` if a choice names one of them.
+
+If the choice has a layout, its changes are merged over the changes that the application makes for the layout.
+Mappings are merged key by key, and where both give a value, the value of the choice is used. If both give a list
+for the same key, the manager raises a `ValueError`, because only the generator knows how to merge two lists.
 
 ### The laboratory
 
@@ -257,3 +297,4 @@ These are the messages of Payu and of experiment-runner you may see, and what th
 | `Cannot create experiments without a lab_dir: ...` | The manager has nowhere to put the laboratory of the study. Create it again with a `lab_dir` on `/scratch`. |
 | `PAYU_LAB_PATH is set, to '...'. ...` | Payu would run the experiments in another laboratory than the one the manager reads. Unset the variable, for example with `del os.environ["PAYU_LAB_PATH"]`, and try again. |
 | `The control options name a Payu laboratory, ...` | The laboratory of a study is the manager's to choose. Remove `laboratory` from the control options, and give the manager the directory that is to hold it as `lab_dir`. |
+| `The changes of an experiment set ['laboratory'] in config.yaml, which the manager sets itself: ...` | A configuration choice names the `laboratory` or the `experiment` of `config.yaml`. Remove it from the changes of the choice. |

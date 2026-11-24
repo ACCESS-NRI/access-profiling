@@ -55,7 +55,8 @@ src/access/profiling/
   ── the generic layer: no ACCESS model, no workflow engine ──
   application.py        Application (the ABC), LogSpec, log_at
   control.py            ControlSource, GitControlSource, ExistingDirectoryControlSource: where a control is
-  experiment.py         ProfilingLog (one log -> one xr.Dataset), ExperimentPlan, ProfilingExperimentStatus,
+  experiment.py         ProfilingLog (one log -> one xr.Dataset), ConfigurationChoice (one configuration a study
+                        asks an experiment for), ExperimentPlan, ProfilingExperimentStatus,
                         ProfilingExperiment (its record, and its archive to and from a tarball)
   manager.py            ProfilingManager[AppT]: generation, records and the study file, statuses, parsing,
                         selection and plotting
@@ -190,12 +191,13 @@ blocks, one page per concept. A new module needs a block on the right page and a
 - **Each Payu study runs in a laboratory of its own**, `<lab_dir>/<model type>-<8 hex digits of the working directory>`
   (`_study_laboratory`). `_create_experiments` adds it, absolute, to the control options as `config.yaml`'s
   `laboratory`, which every experiment branches from and every Payu step reads. `_refuse_plans` refuses a `laboratory`
-  control option. Payu's default laboratory is shared by every study of a model, and every study numbers its experiments
-  from `exp-0001`, so sharing one makes the runner skip the experiments another study ran and `payu sweep --hard` delete
-  its runs. The generator's and the runner's `lab_path` reaches Payu only while it checks a branch out, and the runner's
-  `payu run` passes no laboratory, so `PAYU_LAB_PATH` never reaches the PBS job: neither can replace the key. A set
-  `PAYU_LAB_PATH` would override it on the login node only, so `_refuse_payu_lab_path` stops generating, running and
-  deleting while it is set. `lab_dir` is needed to generate, not to read, archive or delete.
+  control option, and a plan whose `config.yaml` changes name a `laboratory` or an `experiment`. Payu's default
+  laboratory is shared by every study of a model, and every study numbers its experiments from `exp-0001`, so sharing
+  one makes the runner skip the experiments another study ran and `payu sweep --hard` delete its runs. The generator's
+  and the runner's `lab_path` reaches Payu only while it checks a branch out, and the runner's `payu run` passes no
+  laboratory, so `PAYU_LAB_PATH` never reaches the PBS job: neither can replace the key. A set `PAYU_LAB_PATH` would
+  override it on the login node only, so `_refuse_payu_lab_path` stops generating, running and deleting while it is set.
+  `lab_dir` is needed to generate, not to read, archive or delete.
 - **No status is stored.** A new manager finds the experiments of `work_dir` again from their records, as NEW, or
   DONE where the record says `complete`, and the tarballs in `archive_dir`, as ARCHIVED, an archive replacing the
   experiment found in `work_dir`. A tarball it cannot read is skipped with a warning. Every other status is read
@@ -204,11 +206,24 @@ blocks, one page per concept. A new module needs a block on the right page and a
   status out of a tarball would mean extracting it. The records and the study file are all that is stored.
 - **`parse_status` never raises.** When it cannot tell, it logs why at DEBUG and returns `None`, which keeps the
   status the experiment has.
-- **Generation registers nothing unless all of it succeeds.** `generate_scaling_experiments` plans without touching
-  the disk, then calls `_create_experiments` once with every plan. If that raises, no new experiment is registered and
-  no record written, because one registered with nothing on disk would be run and never generated again.
-  `_create_experiments` returns only the new experiments, not those being regenerated (`ExperimentPlan.regenerating`),
-  which are held already. A plan's changes are computed afresh on every call, never replayed.
+- **Generation registers nothing unless all of it succeeds.** `generate_scaling_experiments` and
+  `generate_experiments` plan without touching the disk, then share `_generate`, which calls `_create_experiments`
+  once with every plan. If that raises, no new experiment is registered and no record written, because one
+  registered with nothing on disk would be run and never generated again. `_create_experiments` returns only the
+  new experiments, not those being regenerated (`ExperimentPlan.regenerating`), which are held already. A plan's
+  changes are computed afresh on every call, never replayed.
+- **`generate_scaling_experiments` searches for layouts and is for scaling studies only; `generate_experiments`
+  searches nothing.** It makes one experiment per `ConfigurationChoice`, whose `changes` are the engine's words and
+  are written as given. A choice without a layout never consults the application. With a layout, the choice's
+  changes are merged over `config_changes(layout)` by `_merge_changes`: mappings key by key, the choice winning, and
+  two lists for one key refused, since merging lists is the engine's. Nothing checks a choice's changes against
+  its layout. A choice is a walltime-free plan (`walltime_hours` None): a walltime is one of its changes, never a
+  parameter. Only scaling experiments are regenerated.
+- **A record's `changes` are what the study stated, never what the layout comes to** (`ExperimentPlan.stated_changes`,
+  not `changes`), so a scaling experiment is its layout with `{}`, and both generating methods recognise each
+  other's experiments. `ConfigurationChoice` refuses changes and labels that a record would not give back as they
+  were. Labels identify nothing: a held experiment keeps its own. A choice and an experiment hold copies of their
+  own, made with `copy.deepcopy`: a JSON round trip would lose the type of a YAML library's quoted string.
 - **Regenerating leaves a FAILED experiment FAILED**: the failure is the run's record, and
   `run_experiments(retry_failed=True)` is what clears it.
 - **An archive holds only what can be extracted again**, since `directory()` extracts it with `filter="data"`,

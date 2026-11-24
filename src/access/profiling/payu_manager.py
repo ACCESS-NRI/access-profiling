@@ -292,9 +292,9 @@ class PayuManager(ProfilingManager[PayuConfiguration]):
         """Returns what the experiment generator is to make of one planned experiment.
 
         A perturbation block names the branch it applies to and then, keyed by the configuration file each
-        change belongs in, everything that distinguishes this experiment from the control. The configuration
-        says what its own layout comes to; the walltime and the experiment name are added here, since they are
-        Payu's question rather than any model's.
+        change belongs in, everything that distinguishes this experiment from the control. The plan's changes
+        say what its layout comes to and what the study stated; the experiment name is added here, and so is
+        the walltime of a plan that has one, since they are Payu's question rather than any model's.
 
         Args:
             plan (ExperimentPlan): The experiment to create.
@@ -308,7 +308,10 @@ class PayuManager(ProfilingManager[PayuConfiguration]):
         changes_by_file = dict(plan.changes)
         # Not every model has something of its own to change in there.
         changes_by_file["config.yaml"] = dict(changes_by_file.get("config.yaml", {}))
-        changes_by_file["config.yaml"]["walltime"] = _walltime_string(plan.walltime_hours)
+        # A plan made from a configuration choice has no walltime of its own: the choice states one among its
+        # changes, or leaves the control's.
+        if plan.walltime_hours is not None:
+            changes_by_file["config.yaml"]["walltime"] = _walltime_string(plan.walltime_hours)
         # Payu names the laboratory's work and archive sub-directories after this. Left to work the name out
         # itself it would give every experiment the control directory's name, which is the same string for
         # all of them, and the runs would share one directory.
@@ -322,14 +325,16 @@ class PayuManager(ProfilingManager[PayuConfiguration]):
         """Refuses the planned experiments that could not be created to run in the study's own laboratory.
 
         Args:
-            plans (list[ExperimentPlan]): Unused.
+            plans (list[ExperimentPlan]): The experiments about to be created. Their changes to `config.yaml` must
+                name neither a laboratory nor an experiment, which `_create_experiments` sets.
             control_options (dict | None): Options of the control experiment, which must not name a laboratory.
                 None (the default) is none.
             **runner_options: Ignored. Accepted so that this stays substitutable for the base method, whose
                 callers may pass options other runners take.
 
         Raises:
-            ValueError: If this manager has no `lab_dir`, or if the control options name a laboratory.
+            ValueError: If this manager has no `lab_dir`, if the control options name a laboratory, or if the
+                changes of a plan name a laboratory or an experiment.
             RuntimeError: If `PAYU_LAB_PATH` is set in the environment.
         """
         if self.laboratory is None:
@@ -344,6 +349,14 @@ class PayuManager(ProfilingManager[PayuConfiguration]):
                 "the manager's lab_dir. Remove 'laboratory' from the control options, and pass the directory to put "
                 "the study's laboratory in as lab_dir."
             )
+        for plan in plans:
+            reserved = sorted({"laboratory", "experiment"} & plan.changes.get("config.yaml", {}).keys())
+            if reserved:
+                raise ValueError(
+                    f"The changes of an experiment set {reserved} in config.yaml, which the manager sets itself: "
+                    "every experiment of a study runs in the study's laboratory, under its own name. Remove "
+                    f"{reserved} from the changes."
+                )
 
     def _create_experiments(
         self, plans: list[ExperimentPlan], control_options: dict | None = None, **runner_options
@@ -355,10 +368,18 @@ class PayuManager(ProfilingManager[PayuConfiguration]):
         applied to the branch that already exists rather than starting it over, leaving its history intact,
         which is the generator's own behaviour.
 
+        The changes of a plan are handed to the generator as they are, so those a configuration choice states
+        are in the generator's format: what one branch of a perturbation states, keyed by file. A value that is
+        a list is therefore wrapped in another list, the generator reading a plain list as one value for each
+        branch, `"REMOVE"` deletes a key, `"PRESERVE"` keeps an item of a list as the control has it, and a
+        string of a Fortran namelist carries its own quotes, as `"'roundrobin'"` does.
+
         Args:
-            plans (list[ExperimentPlan]): The experiments to create.
+            plans (list[ExperimentPlan]): The experiments to create. Their changes to `config.yaml` must name
+                neither a laboratory nor an experiment, which are set here.
             control_options (dict | None): Options of the control experiment, passed to the experiment
-                generator together with the study's laboratory. None (the default) passes none.
+                generator together with the study's laboratory, which they must not name. None (the default)
+                passes none.
             **runner_options: Ignored. Accepted so that this stays substitutable for the base method, whose
                 callers may pass options other runners take.
 
@@ -367,7 +388,8 @@ class PayuManager(ProfilingManager[PayuConfiguration]):
 
         Raises:
             ValueError: If this manager has no control or no `lab_dir`, if the control states no start point,
-                which the generator needs to branch from, or if the control options name a laboratory.
+                which the generator needs to branch from, if the control options name a laboratory, or if the
+                changes of a plan name a laboratory or an experiment.
             RuntimeError: If `PAYU_LAB_PATH` is set in the environment.
             Exception: Whatever the experiment generator raises, unchanged.
         """

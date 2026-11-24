@@ -36,6 +36,7 @@ nav:
       - Analysing profiling data: pages/user-guide/analysing-data.md
     - Studies:
       - Comparing experiments: pages/user-guide/comparing-experiments.md
+      - Configuration choices: pages/user-guide/configuration-choices.md
       - Run-to-run variability: pages/user-guide/run-to-run-variability.md
       - Best layout for a budget: pages/user-guide/best-layout.md
       - Scaling studies: pages/user-guide/scaling-studies.md

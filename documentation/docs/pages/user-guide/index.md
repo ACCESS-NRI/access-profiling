@@ -5,10 +5,12 @@ are several kinds of study, depending on what changes from one run to the next:
 
 - when [comparing experiments](comparing-experiments.md), the build or the configuration of the application
   changes;
+- when comparing [configuration choices](configuration-choices.md), a setting of the application changes, with or
+  without its parallelisation layout;
 - when measuring [run-to-run variability](run-to-run-variability.md), nothing changes: the same experiment is
   simply run several times;
-- when looking for the [best parallelisation layout of a budget](best-layout.md), the number of cores stays the same,
-  but the way they are divided among the components of the application changes;
+- when looking for the [best layout of a budget](best-layout.md), the number of cores stays the same, but the way
+  they are divided among the components of the application changes;
 - in a [scaling study](scaling-studies.md), both the number of cores and the way they are divided change.
 
 All of these studies are built from the same few pieces, which are introduced here. Once you know them, [Generating and
@@ -71,6 +73,10 @@ experiments are numbered, `exp-0001` onwards, so the name of an experiment says 
 is, is written in a record, a small file in its directory. This means that the same layout always gives the same
 experiment, and that a manager finds the experiments of a study again in a later session.
 
+An experiment can also change other settings of the application. In that case you state each configuration that
+you want an experiment of yourself, with or without a layout, as [Configuration choices](configuration-choices.md)
+shows.
+
 When the results are plotted, there are two numbers of cores to keep in mind. The first is the number of cores the
 job occupied. This is what the scheduler charged for, and it can be larger than the number of cores the layout
 uses. Payu, for example, requests whole nodes of NCI's Gadi, so a layout of 508 cores on its 104-core nodes
@@ -84,7 +90,7 @@ Each experiment held by a manager has a status:
 ```mermaid
 stateDiagram-v2
     direction LR
-    [*] --> NEW: generate_scaling_experiments
+    [*] --> NEW: generate_scaling_experiments, generate_experiments
     NEW --> RUNNING: run_experiments
     RUNNING --> DONE: the run succeeded
     RUNNING --> FAILED: the run failed
