@@ -13,7 +13,7 @@ are for test code only: production code states the same thing with an explicit V
 reader is a user rather than whoever is holding the test output.
 
 It also holds what more than one test module needs: a stand-in parser, the layout search of a Payu application,
-and the closing of the figures a test draws.
+the variables of a Rose suite, and the closing of the figures a test draws.
 """
 
 from collections.abc import Iterator
@@ -66,6 +66,24 @@ def select_layouts(application: PayuConfiguration, total_cores: int, **kwargs) -
     """
     manager = PayuManager(Path("/fake/test_path"), Path("/fake/archive_path"), application)
     return manager.select_layouts(total_cores, **kwargs)
+
+
+def write_suite_conf(directory: Path, variables: dict[str, str], file: str = "rose-suite.conf") -> Path:
+    """Writes the variables of a Rose suite into the `[jinja2:suite.rc]` section of its configuration.
+
+    Args:
+        directory (Path): The suite directory, or its run directory. Created if need be.
+        variables (dict[str, str]): The values, as the file is to state them, keyed by variable.
+        file (str): The file, relative to the directory: `rose-suite.conf` (the default), or the copy of it a run
+            records, `log/rose-suite-run.conf`.
+
+    Returns:
+        Path: The file.
+    """
+    path = directory / file
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("[jinja2:suite.rc]\n" + "".join(f"{name}={value}\n" for name, value in variables.items()))
+    return path
 
 
 def component_of(layout: ComponentLayout, name: str) -> ComponentLayout:

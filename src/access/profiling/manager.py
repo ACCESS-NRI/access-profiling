@@ -1703,7 +1703,6 @@ class ProfilingManager(ABC, Generic[AppT]):
         Raises:
             ValueError: If the experiment has no such label, if the label is a list or a mapping, if the
                 experiment's layout cannot be told, or if the layout does not have the quantity.
-            NotImplementedError: If this manager's applications have no layout to read.
         """
         if isinstance(coordinate, str):
             labels = self.experiments[exp_name].labels
@@ -1746,7 +1745,6 @@ class ProfilingManager(ABC, Generic[AppT]):
 
         Raises:
             ValueError: If the experiment's layout cannot be told, or names no such component.
-            NotImplementedError: If this manager's applications have no layout to read.
         """
         return self._coordinate_value(exp_name, component_cores(component))
 
@@ -1888,8 +1886,6 @@ class ProfilingManager(ABC, Generic[AppT]):
                 if two coordinates have the same name or one is named as a coordinate the data has of its own, if
                 an experiment has no such label or the label is a list or a mapping, or if an experiment's layout
                 cannot be told or does not have the quantity.
-            NotImplementedError: If a quantity of the layout is asked for and the application being profiled
-                states no layout.
         """
         if runs is not None:
             _check_run_statistic(runs)
@@ -1963,8 +1959,6 @@ class ProfilingManager(ABC, Generic[AppT]):
                 own, if two experiments have the same values of `index` and `columns`, since a cell holds one
                 value, if the metric has more than one value for each experiment and region, or for any of the
                 reasons gather() raises.
-            NotImplementedError: If a quantity of the layout is asked for and the application being profiled
-                states no layout.
         """
         # The plots draw two regions labelled alike as two lines or two bars, but a table would give them one column.
         labels = [group.label(region) for region in group.regions]
@@ -2036,8 +2030,6 @@ class ProfilingManager(ABC, Generic[AppT]):
             ValueError: If an experiment is not held by this manager, if none of the experiments has the label or
                 the label of one is a list or a mapping, or if an experiment's layout cannot be told or does not
                 have the quantity.
-            NotImplementedError: If a quantity of the layout is asked for and the application being profiled
-                states no layout.
         """
         exp_names = experiments if experiments is not None else list(self.data)
         unknown = [exp_name for exp_name in exp_names if exp_name not in self.experiments]
@@ -2109,9 +2101,6 @@ class ProfilingManager(ABC, Generic[AppT]):
                 data, if no profiling data is found for a group's log, if a requested region is missing, if
                 the profiling data still has a 'run' dimension, or if an experiment's layout cannot be told
                 or names no such component.
-            NotImplementedError: If the application being profiled states no layout, so that what each
-                component was given cannot be told. There is nothing for this plot to put on its x-axis
-                in that case.
         """
         exp_names = self._selected_experiments(experiments)
 
@@ -2177,8 +2166,6 @@ class ProfilingManager(ABC, Generic[AppT]):
                 log, if a requested region is missing, if the profiling data still has a 'run' dimension, if the
                 metric has more than one value for each region, if two experiments have the same value of label,
                 or if label cannot be read for an experiment.
-            NotImplementedError: If label is a quantity of the layout and the application being profiled states
-                no layout.
         """
         if label is not None and experiment_relabel_map is not None:
             raise ValueError("Give experiment_relabel_map or label, not both: both say what the bars are named.")
@@ -2327,8 +2314,6 @@ class ProfilingManager(ABC, Generic[AppT]):
                 region, if an experiment has no such label or the label is a list or a mapping, if an experiment's
                 layout cannot be told or does not have the quantity, if a value of `x` is not a number or is a
                 boolean, or if two values of `series` are shown alike.
-            NotImplementedError: If a quantity of the layout is asked for and the application being profiled
-                states no layout.
         """
         exp_names = self._selected_experiments(experiments)
         # What was asked for is settled first, as plot_component_scaling_data settles it.

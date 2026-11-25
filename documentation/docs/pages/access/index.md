@@ -12,7 +12,9 @@ Each preset is described below. You will find the components of the model, the r
 follows, the logs that a run writes, and the number of cores used by the release. If your configuration is on a
 branch, a fork or a commit that the presets do not describe, you can read it from the files of the control with the
 `from_control` of its model, as [Experiments with Payu](payu.md#reading-a-configuration-from-its-control) shows. For
-the full details, see the [Models API](../api/models.md).
+ACCESS-AM3, this is `am3_from_control`, as
+[Cylc Rose suites](cylc-rose-suites.md#reading-a-configuration-from-its-control) shows. For the full details, see
+the [Models API](../api/models.md).
 
 None of the models limits how many cores a layout leaves idle. If you want a limit, set it in your allocation
 strategy, as [Generating and running experiments](../user-guide/experiments.md#choosing-an-allocation-strategy)
@@ -253,11 +255,14 @@ the `PELAYOUT_attributes` and reads them back.
 | Presets | [`AM3_N96E`][access.profiling.models.um_suites.AM3_N96E] and [`AM3_N512E`][access.profiling.models.um_suites.AM3_N512E] | [`RAM3`][access.profiling.models.um_suites.RAM3] | [`CM3_O25KM`][access.profiling.models.um_suites.CM3_O25KM] |
 | Controls | [`AM3_N96E_SOURCE`][access.profiling.models.um_suites.AM3_N96E_SOURCE] and [`AM3_N512E_SOURCE`][access.profiling.models.um_suites.AM3_N512E_SOURCE], `release-n96e-3.0` and `release-n512e-1.0` of the ACCESS-AM3 configurations | None: the suite is checked out by hand | [`CM3_O25KM_SOURCE`][access.profiling.models.um_suites.CM3_O25KM_SOURCE], the `cm3_O25km` branch of the ACCESS-CM3 configurations, as there is no release yet |
 | Manager | `CylcRoseManager` | `CylcRoseManager` | `CylcRoseManager` |
-| Layout variables | `MAIN_ATM_PROCX` and `MAIN_ATM_PROCY` | `rg01_rs01_m01_nproc`, as `x,y` | `ATM_NPROCX` and `ATM_NPROCY` |
+| Components | `UM` on the N96 grid, 192 × 144, or the N512 grid, 1024 × 768 | `UM rs01` and `UM rs02`, the two nests, each on a grid of 450 × 450 | `UM`, `MOM6` and `CICE6` |
+| Whole model | `ACCESS-AM3 n96e` and `ACCESS-AM3 n512e` | `ACCESS-rAM3 ram3` | `ACCESS-CM3 O25km` |
+| Layout variables | `MAIN_ATM_PROCX` and `MAIN_ATM_PROCY` | `rg01_rs01_m01_nproc` and `rg01_rs02_m01_nproc`, each as `x,y` | `ATM_NPROCX` and `ATM_NPROCY`; `OCN_NPROC` and `ICE_NPROC`, the ranks of MOM6 and CICE6 |
 | Threads and I/O server | `MAIN_OMPTHR_ATM` and `MAIN_IOS_NPROC` | None | `FLUME_IOS_NPROC`; one thread per rank |
-| Other components | None | None | `OCN_NPROC` and `ICE_NPROC`, the cores of MOM6 and CICE6, added to the UM's |
+| Layout rules | An even number of processes along x, and subdomains at most four times longer than they are wide | The same, for each nest | None: the layouts are read but not searched for |
+| Cores | The UM's, plus the I/O server's, times the threads | The larger nest's: each nest is a job of its own | The UM's, plus the I/O server's, MOM6's and CICE6's |
 
 For the three models, the UM timers of each task are read with the same two parsers, and give the logs
 `<task>_cycle<cycle>_UM_regions` and `<task>_cycle<cycle>_UM_total`. The logs that the ocean and the sea ice of
-ACCESS-CM3 write are not read. See [Cylc Rose suites](cylc-rose-suites.md) to learn how to prepare and analyse
-their experiments.
+ACCESS-CM3 write are not read. The grid of the UM of ACCESS-CM3 is not stated in its preset, so its layouts cannot
+be searched for. See [Cylc Rose suites](cylc-rose-suites.md) to learn how to prepare and analyse their experiments.

@@ -121,5 +121,7 @@ This prints the parallel efficiency of MOM5's total runtime at every number of C
 
 The scaling plot works in the same way for [Cylc Rose suites](../access/cylc-rose-suites.md). Their numbers of
 CPUs are also the ones their jobs requested from PBS, as explained in
-[Parsing and plotting](../access/cylc-rose-suites.md#parsing-and-plotting). The component scaling plot, however,
-is not available for Rose suites, because the package cannot read the layout of a Rose suite.
+[Parsing and plotting](../access/cylc-rose-suites.md#parsing-and-plotting). The component scaling plot works too,
+since the package reads the layout of each suite from its `rose-suite.conf`. The logs of a suite do not say which
+component they belong to, so each group names its component, as in `RegionGroup("cylc_tasks", [...],
+component="UM")`.

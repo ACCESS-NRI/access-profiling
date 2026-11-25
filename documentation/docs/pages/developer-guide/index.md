@@ -109,8 +109,20 @@ classDiagram
         logs
         config_changes(layout)
     }
+    class RoseComponent {
+        <<abstract>>
+        name
+        token
+        leaf
+        variable_changes(layout)
+        read_layout(variables)
+        occupied_cpus(variables)
+    }
     Application <|-- PayuConfiguration
     Application <|-- RoseSuiteConfiguration
+    RoseSuiteConfiguration --> "*" RoseComponent : components
+    RoseComponent <|-- RoseProcessGrid
+    RoseComponent <|-- RoseRanks
     PayuConfiguration <|-- SubmodelsConfiguration
     PayuConfiguration <|-- OM3Configuration
     SubmodelsConfiguration <|-- ESM16Configuration
@@ -129,8 +141,12 @@ A Payu model is put together from components, one for each code that it runs. A 
 decomposes, what it writes and which logs it produces. `ESM16Configuration`, for example, pairs the UM, MOM5 and
 CICE components with the submodels of its control. It does this through `SubmodelsConfiguration`, which writes and
 reads the layout of any model that Payu couples in this way. `OM3Configuration` builds the tree that NUOPC lays
-out from the same components. There is also one parser for each log format of the ACCESS models, and they are
-listed in [Log formats](../access/log-formats.md).
+out from the same components. A Rose suite is put together from components too, but of its own kind, since what a
+Rose component knows is which variables of `rose-suite.conf` state its layout. A `RoseProcessGrid` is a code that
+divides a grid along a process grid, such as the UM, and a `RoseRanks` is one given a number of ranks and nothing
+else. `RoseSuiteConfiguration` writes and reads the layout of every suite from them, so a suite is a value rather
+than a class. There is also one parser for each log format of the ACCESS models, and they are listed in
+[Log formats](../access/log-formats.md).
 
 ## Contracts
 
@@ -145,6 +161,7 @@ To extend the package, you implement one of these abstract classes:
 | [`PayuConfiguration`][access.profiling.payu_configuration.PayuConfiguration] | For an application run with Payu: as `Application`, plus the `model_type` and `model_name` attributes | [Adding an application](adding-an-application.md) |
 | [`SubmodelsConfiguration`][access.profiling.payu_configuration.SubmodelsConfiguration] | For a Payu model whose components are its submodels: `submodels`, from the fields of a frozen dataclass | [Adding an application](adding-an-application.md) |
 | [`PayuComponent`][access.profiling.payu_configuration.PayuComponent] | For one code of a Payu model: `domain`, `local_constraints` and `config_changes`, and the `name`, `token` and `logs` attributes | [Adding an application](adding-an-application.md) |
+| [`RoseComponent`][access.profiling.rose_configuration.RoseComponent] | For one code of a Rose suite: `leaf`, `variable_changes`, `read_layout` and `occupied_cpus`, and the `name` and `token` attributes | [Cylc Rose suites](../access/cylc-rose-suites.md#other-suites) |
 
 To support a new workflow engine, you write a new subclass of `ProfilingManager`. Most of the work is already
 done by the base class: choosing which experiments to create, selecting the best ones and plotting them are the

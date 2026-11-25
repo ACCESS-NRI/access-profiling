@@ -35,6 +35,16 @@ Constraints are cumulative and a caller can only tighten them, so it is set loos
 subdomains says so in its own allocation strategy.
 """
 
+UM_CONSTRAINTS: tuple[LocalConstraint, ...] = (
+    ProcessGridDimEvenConstraint(dim=0),
+    SubdomainAspectRatioConstraint(max_ratio=MAX_SUBDOMAIN_ASPECT_RATIO),
+)
+"""What every layout of the UM meets, whichever engine runs it: an even number of processes along x, and subdomains
+no more elongated than `MAX_SUBDOMAIN_ASPECT_RATIO`.
+
+`UMComponent` states them for the Payu models, and the Rose suites of `access.profiling.models.um_suites` for theirs.
+"""
+
 # Where Payu's drivers of the UM and of MOM5 read their files, relative to the control directory: the files are
 # the codes' own, and the directories are the names Payu gives their submodels in every ACCESS model.
 _UM_ENV_PATH: str = "atmosphere/um_env.yaml"
@@ -88,10 +98,7 @@ class UMComponent(PayuComponent):
 
     @property
     def local_constraints(self) -> tuple[LocalConstraint, ...]:
-        return (
-            ProcessGridDimEvenConstraint(dim=0),
-            SubdomainAspectRatioConstraint(max_ratio=MAX_SUBDOMAIN_ASPECT_RATIO),
-        )
+        return UM_CONSTRAINTS
 
     @property
     def logs(self) -> tuple[LogSpec, ...]:

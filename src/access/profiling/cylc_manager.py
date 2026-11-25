@@ -37,9 +37,9 @@ _PBS_NCPUS = re.compile(r"^#PBS\s+-l\s+(?:[^\s,]+,)*ncpus=(?P<ncpus>\d+)\b", re.
 class CylcRoseManager(ProfilingManager[RoseSuiteConfiguration]):
     """Profiling of any application driven by a Cylc Rose suite, such as the ACCESS models.
 
-    One class for every rose suite: what tells ACCESS-AM3 from ACCESS-rAM3 is the names their
-    `rose-suite.conf` files give the variables stating their parallelism, and which parsers read their task
-    logs, both of which arrive as a RoseSuiteConfiguration. What is written here is the engine - `rose
+    One class for every rose suite: what tells ACCESS-AM3 from ACCESS-rAM3 is the components they run, the
+    variables of their `rose-suite.conf` that state the parallelism of each, and which parsers read their task
+    logs, all of which arrive as a RoseSuiteConfiguration. What is written here is the engine - `rose
     suite-run`, the Cylc run directory and the suite database the scheduler writes - and none of it is any one
     suite's.
 
@@ -74,9 +74,8 @@ class CylcRoseManager(ProfilingManager[RoseSuiteConfiguration]):
                 callers may pass options other runners take.
 
         Raises:
-            NotImplementedError: Always. generate_experiments gets here, through `_refuse_plans`, with choices
-                that have no layout. generate_scaling_experiments does not, the configuration refusing the
-                layout search first.
+            NotImplementedError: Always. generate_scaling_experiments and generate_experiments both get here,
+                through `_refuse_plans`, before the study takes a number.
         """
         raise NotImplementedError(
             "Generating experiments is not supported for Cylc Rose suites yet: nothing here writes a change into "
@@ -107,7 +106,8 @@ class CylcRoseManager(ProfilingManager[RoseSuiteConfiguration]):
 
         Raises:
             FileNotFoundError: If neither configuration file exists.
-            ValueError: If a variable the configuration names is not set in the file that was found.
+            ValueError: If the file that was found has no `[jinja2:suite.rc]` section, or if a variable the
+                configuration names is not set in it.
         """
         layout_cpus = self._layout_ncpus(path, run_path)
         if run_path is None:
@@ -154,7 +154,8 @@ class CylcRoseManager(ProfilingManager[RoseSuiteConfiguration]):
 
         Raises:
             FileNotFoundError: If neither configuration file exists.
-            ValueError: If a variable the configuration names is not set in the file that was found.
+            ValueError: If the file that was found has no `[jinja2:suite.rc]` section, or if a variable the
+                configuration names is not set in it.
         """
         # both the run and original config will store cpu information
         config_paths = []
@@ -167,18 +168,7 @@ class CylcRoseManager(ProfilingManager[RoseSuiteConfiguration]):
             tried = ", ".join(str(p) for p in config_paths)
             raise FileNotFoundError(f"Could not find suitable config file. Tried: {tried}")
 
-        return self.application.occupied_cpus(self._parse_rose_conf(config_path), source=str(config_path))
-
-    # TODO: use "real" parser from access-config-utils once implemented.
-    @staticmethod
-    def _parse_rose_conf(config_path: Path) -> dict[str, str]:
-        """Parses a rose-suite.conf-style file into a dict mapping variable name to its raw string value."""
-        config = {}
-        for line in config_path.read_text().splitlines():
-            if not line.startswith("!!") and "=" in line:
-                key, value = line.split("=", 1)
-                config[key.strip()] = value.strip()
-        return config
+        return self.application.occupied_cpus(config_path)
 
     def add_rose_experiment(self, rose: str, run_path: Path | None = None, labels: dict | None = None) -> None:
         """Adds the given rose as an experiment to this manager.
