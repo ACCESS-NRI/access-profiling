@@ -8,6 +8,9 @@ A component is one code as the ACCESS models configure it: the UM decomposing it
 ACCESS-ESM1.6 and ACCESS-OM2 share them, each pairing them with the submodels its control declares, and
 ACCESS-OM3 runs CICE6 through the same CICE component. What a component writes is what its own code reads,
 whichever model it is coupled into, which is why each is described once here rather than once per model.
+
+What every layout of the UM meets, `UM_CONSTRAINTS`, is stated here once too, and shared with the Rose suites of
+`access.profiling.models.um_suites`, which run the UM in components of their own.
 """
 
 from dataclasses import dataclass

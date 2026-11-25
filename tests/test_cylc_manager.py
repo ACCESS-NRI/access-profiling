@@ -613,6 +613,20 @@ class TestLayoutsOfAddedSuites:
         ]
         assert manager.layout_key("u-4x2") is None, "a layout read back identifies nothing"
 
+    def test_the_layout_and_the_cpus_are_read_from_the_same_file(self, tmp_path):
+        """That of the run, where it recorded one, since it says what the run used: here a 2 by 2 grid.
+
+        The suite's own file states a 4 by 2 grid, which the run did not use.
+        """
+        manager = mock_manager(tmp_path / "work", tmp_path / "archive")
+        write_suite_conf(manager.work_dir / "u-aa123", {"um_layout": "4,2"})
+        run_path = tmp_path / "cylc-run" / "u-aa123"
+        write_suite_conf(run_path, {"um_layout": "2,2"}, "log/rose-suite-run.conf")
+        manager.add_rose_experiment("u-aa123", run_path=run_path)
+
+        assert manager._layout("u-aa123").n_cores == 4
+        assert manager._ncpus("u-aa123") == 4
+
     def test_its_cores_are_a_coordinate(self, tmp_path):
         manager = self.added(tmp_path, {(4, 2): 10.0, (2, 2): 18.0})
 

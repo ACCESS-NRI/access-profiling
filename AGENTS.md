@@ -273,7 +273,9 @@ blocks, one page per concept. A new module needs a block on the right page and a
   way Payu does, with Payu's defaults copied into `_PAYU_DEFAULT_NODE_SIZE` and `_PAYU_DEFAULT_NCPUS` because Payu
   exposes them nowhere. They have to follow Payu if it changes them.
 - `CylcRoseManager` reads the `#PBS -l ncpus=` requests in the job scripts Cylc submitted, and takes the smallest
-  that covers the layout; when no job asked for that many, it reports the layout's own count. That count is
+  that covers the layout; when no job asked for that many, it reports the layout's own count. Its layout is read from
+  the same file (`_suite_conf`, through `_parse_layout`): the run's `log/rose-suite-run.conf`, else the suite's
+  `rose-suite.conf`, so the two never disagree. That count is
   `RoseSuiteConfiguration.occupied_cpus`: the components' counts added up, or the largest of them where the
   components share the cores (`CoreSharing.SHARED`, rAM3's nests, each a job of its own). A process grid counts its
   I/O server, which is never part of a layout.
@@ -293,8 +295,10 @@ blocks, one page per concept. A new module needs a block on the right page and a
   since what one knows is which variables of `[jinja2:suite.rc]` in `rose-suite.conf` state its layout.
   `RoseSuiteConfiguration` writes and reads the layout of every suite from them, so a suite is a value, never a
   class. Its `parse_layout` is a true inverse of `config_changes`, process grids included, where a component states
-  its `grid`; one without a grid is read but not searched for (CM3). Rose files are read with `RoseConfParser` from
-  access-config-utils, through `read_section`, which leaves out what Rose ignores (`!KEY`, `!!KEY`).
+  its `grid`; one without a grid is read but not searched for (CM3). A component lists every variable it reads
+  (`suite_variables`), and a configuration refuses a variable read for two settings, which would overwrite each
+  other. Rose files are read with `RoseConfParser` from access-config-utils, through `read_section`, which leaves out
+  what Rose ignores (`!KEY`, `!!KEY`) and refuses a setting written both in use and ignored.
 - **Presets are module-level values with a docstring on the line after**, which is what puts them in the API
   reference. A model ships a preset per distinct layout, and a control source per configuration, beside the presets
   rather than on them: at the configuration's latest release tag, or at its `dev-*` branch while it has no release,
@@ -466,7 +470,7 @@ top as its reader would before calling a change done.
   (`_create_experiments`, `_delete_experiments`), except `_metrics`, which a parser sets as a class attribute or in
   `__init__`. `_`-prefixed names are left out of the API reference, so the contracts table of the developer guide
   lists them all. A hook whose default suits an engine with nothing to add is not abstract (`_engine_record`,
-  `_refuse_plans`).
+  `_refuse_plans`, `_parse_layout`).
 - `documentation/` comes from the ACCESS-NRI template,
   [documentation-infra](https://github.com/ACCESS-NRI/documentation-infra), and is kept so that it can be updated
   from there: `hooks/`, `overrides/`, `docs/css/`, `docs/js/`, `docs/fontello/`, `docs/assets/logos/`,

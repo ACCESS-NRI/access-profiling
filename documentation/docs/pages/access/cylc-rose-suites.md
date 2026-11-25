@@ -11,13 +11,14 @@ profile another suite, see [Other suites](#other-suites).
 
 With [`CylcRoseManager`][access.profiling.cylc_manager.CylcRoseManager] you can register suites that are already
 in the working directory, run them, read their logs, plot and compare them, and archive and delete them. The
-package also reads the layout of each suite from its `rose-suite.conf`. This means that the component scaling plot
+package also reads the layout of each suite from its configuration. This means that the component scaling plot
 works, and that tables and plots can use a quantity of the layout as a coordinate, as well as the labels that you
 give the suites. The package can also search for the layouts of ACCESS-AM3 and ACCESS-rAM3.
 
 One thing is not possible: the manager cannot create experiments, because nothing in the package writes changes
-into a suite. Both `generate_scaling_experiments` and `generate_experiments` therefore raise a
-`NotImplementedError`.
+into a suite. `generate_experiments` therefore raises a `NotImplementedError` whenever it has an experiment to
+create. `generate_scaling_experiments` raises it too, but only once it has searched for the layouts, which can take
+a while for a large number of cores.
 
 The manager works with Cylc 7 suites that are run with `rose suite-run`. It expects to find a `cylc-suite.db`
 database, the suite log in `log/suite/log`, and the job logs of every task in
@@ -233,7 +234,9 @@ run directory:
 
 How many CPUs did each experiment use? As for Payu, the answer is the number of CPUs that the job requested from
 PBS. This includes the cores that are left idle to fill whole nodes. To find it, the manager first works out how
-many CPUs the layout needs, from the `[jinja2:suite.rc]` section of the `rose-suite.conf` that the run used. For
+many CPUs the layout needs, from the `[jinja2:suite.rc]` section of the configuration that the run used. This is
+the copy that `rose suite-run` keeps in the run directory, `log/rose-suite-run.conf`, or the `rose-suite.conf` of
+the suite if there is no such copy. The layout of the suite is read from the same file. For
 the UM, this is the product of the two extents of its process grid, plus the ranks of the I/O server, times the
 OpenMP threads of each rank. The ranks of any other component that the suite runs are then added, such as those of
 the ocean and the sea ice of ACCESS-CM3. The two nests of ACCESS-rAM3 run as jobs of their own, so that suite needs
@@ -270,9 +273,10 @@ same task against the cores of the UM:
 fig = manager.plot_component_scaling_data(groups, tmax, xlabel="Cores of the UM")
 ```
 
-For our three suites, the two plots have the same x values, since the UM is the only component of ACCESS-AM3 and
-takes every core. They differ where a suite has an I/O server, or where its jobs left cores idle to fill whole
-nodes.
+The UM is the only component of ACCESS-AM3, so the two plots differ only where a job asked PBS for more cores than
+the UM puts to work. This is the case for a suite with an I/O server, and for a job that asked for whole nodes.
+For example, the 256 cores of our 16 by 16 suite are not a whole number of Gadi's nodes, of 48 or 104 cores, so a
+job of that suite that asked for whole nodes asked for more.
 
 If several suites use the same number of CPUs, select the best one first with
 [`select_best_experiments`](../user-guide/scaling-studies.md#selecting-the-best-layouts), as for any other manager.

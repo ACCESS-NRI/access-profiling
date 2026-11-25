@@ -65,8 +65,26 @@ class TestReadSection:
             read_section(conf, "jinja2:suite.rc")
 
     def test_a_file_that_is_not_there_is_refused(self, tmp_path):
-        with pytest.raises(FileNotFoundError):
+        with pytest.raises(FileNotFoundError, match="rose-suite.conf"):
             read_section(tmp_path / "rose-suite.conf", "jinja2:suite.rc")
+
+    def test_a_setting_both_in_use_and_ignored_is_refused(self, tmp_path):
+        """Rose uses whichever is written last, which the two keys the parser reads them as do not say.
+
+        Taking the one in use would count the 48 ranks of an I/O server that Rose ignores, here.
+        """
+        conf = tmp_path / "rose-suite.conf"
+        conf.write_text("[jinja2:suite.rc]\nIOS=48\n!!IOS=0\n!OMPTHR=2\n!!OMPTHR=1\n")
+
+        with pytest.raises(ValueError, match=r"holds \['IOS'\] both in use and ignored"):
+            read_section(conf, "jinja2:suite.rc")
+
+    def test_a_setting_ignored_twice_is_left_out(self, tmp_path):
+        """Both forms are ignored, so Rose uses neither, whichever is written last."""
+        conf = tmp_path / "rose-suite.conf"
+        conf.write_text("[jinja2:suite.rc]\nPROCX=6\n!OMPTHR=2\n!!OMPTHR=1\n")
+
+        assert read_section(conf, "jinja2:suite.rc") == {"PROCX": "6"}
 
 
 class TestRoseProcessGrid:
@@ -196,6 +214,26 @@ class TestRoseSuiteConfiguration:
     def test_a_configuration_running_no_component_is_refused(self):
         with pytest.raises(ValueError, match="Mock configuration 'mock' runs no component"):
             RoseSuiteConfiguration(name="mock", model_name="Mock", components=())
+
+    @pytest.mark.parametrize(
+        "components",
+        [
+            (
+                RoseProcessGrid(name="outer", token="rs01", variables=("RS01",), threads_variable="OMPTHR"),
+                RoseProcessGrid(name="inner", token="rs02", variables=("RS02",), threads_variable="OMPTHR"),
+            ),
+            (RoseProcessGrid(name="UM", token="atm", variables=("NPROC",), io_server_variable="NPROC"),),
+            (UM, RoseRanks(name="ice", token="ice", variable="OMPTHR")),
+        ],
+        ids=["two components", "one component", "a process grid and a rank count"],
+    )
+    def test_a_variable_read_for_two_settings_is_refused(self, components):
+        """Two values written into one variable would overwrite each other, and the layout read back would differ.
+
+        Two nests sharing a threads variable, given two and one threads, would both run one.
+        """
+        with pytest.raises(ValueError, match=r"reads the variables \['\w+'\] for more than one setting"):
+            RoseSuiteConfiguration(name="mock", model_name="Mock", components=components)
 
     def test_a_rose_suite_declares_no_logs_in_an_output_directory(self, tmp_path):
         """Its logs are one per task per cycle, so they are found by walking the run directory, not named here."""

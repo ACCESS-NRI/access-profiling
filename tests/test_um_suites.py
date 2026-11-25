@@ -195,6 +195,13 @@ class TestAM3FromControl:
         with pytest.raises(ValueError, match=r"\[namelist:nlsizes\] of .* states no \['global_rows'\]"):
             am3_from_control(suite)
 
+    def test_sizes_that_are_not_whole_numbers_are_refused(self, tmp_path):
+        """Named with the file and the sizes, as a missing size is, rather than as Python's bare int() error."""
+        suite = self.suite(tmp_path, {"global_row_length": "192,", "global_rows": 144})
+
+        with pytest.raises(ValueError, match=r"states the UM's grid as .*'192,'.*, which are not two positive whole"):
+            am3_from_control(suite)
+
     def test_a_suite_without_a_um_app_is_refused(self, tmp_path):
-        with pytest.raises(FileNotFoundError):
+        with pytest.raises(FileNotFoundError, match="app/um/rose-app.conf"):
             am3_from_control(tmp_path)

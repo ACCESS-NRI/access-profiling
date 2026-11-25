@@ -116,14 +116,20 @@ def am3_from_control(directory: Path, name: str | None = None) -> RoseSuiteConfi
     Raises:
         FileNotFoundError: If the suite has no `app/um/rose-app.conf`.
         ValueError: If the file has no `[namelist:nlsizes]` section in use, or if the section does not state the two
-            sizes as whole numbers.
+            sizes as positive whole numbers.
     """
     conf_path = directory / _UM_APP_CONF
     sizes = read_section(conf_path, _UM_SIZES)
     missing = [setting for setting in _UM_GRID_SETTINGS if setting not in sizes]
     if missing:
         raise ValueError(f"[{_UM_SIZES}] of {conf_path} states no {missing}, so the UM's grid cannot be read from it.")
-    grid = Domain(tuple(int(sizes[setting]) for setting in _UM_GRID_SETTINGS))
+    try:
+        grid = Domain(tuple(int(sizes[setting]) for setting in _UM_GRID_SETTINGS))
+    except ValueError as error:
+        stated = {setting: sizes[setting] for setting in _UM_GRID_SETTINGS}
+        raise ValueError(
+            f"[{_UM_SIZES}] of {conf_path} states the UM's grid as {stated}, which are not two positive whole numbers."
+        ) from error
     return _am3(name if name is not None else f"n{grid.shape[0] // 2}e", grid)
 
 

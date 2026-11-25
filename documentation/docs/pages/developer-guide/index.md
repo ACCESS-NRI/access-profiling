@@ -113,6 +113,7 @@ classDiagram
         <<abstract>>
         name
         token
+        suite_variables
         leaf
         variable_changes(layout)
         read_layout(variables)
@@ -161,13 +162,15 @@ To extend the package, you implement one of these abstract classes:
 | [`PayuConfiguration`][access.profiling.payu_configuration.PayuConfiguration] | For an application run with Payu: as `Application`, plus the `model_type` and `model_name` attributes | [Adding an application](adding-an-application.md) |
 | [`SubmodelsConfiguration`][access.profiling.payu_configuration.SubmodelsConfiguration] | For a Payu model whose components are its submodels: `submodels`, from the fields of a frozen dataclass | [Adding an application](adding-an-application.md) |
 | [`PayuComponent`][access.profiling.payu_configuration.PayuComponent] | For one code of a Payu model: `domain`, `local_constraints` and `config_changes`, and the `name`, `token` and `logs` attributes | [Adding an application](adding-an-application.md) |
-| [`RoseComponent`][access.profiling.rose_configuration.RoseComponent] | For one code of a Rose suite: `leaf`, `variable_changes`, `read_layout` and `occupied_cpus`, and the `name` and `token` attributes | [Cylc Rose suites](../access/cylc-rose-suites.md#other-suites) |
+| [`RoseComponent`][access.profiling.rose_configuration.RoseComponent] | For one code of a Rose suite: `suite_variables`, `leaf`, `variable_changes`, `read_layout` and `occupied_cpus`, and the `name` and `token` attributes | [Cylc Rose suites](../access/cylc-rose-suites.md#other-suites) |
 
 To support a new workflow engine, you write a new subclass of `ProfilingManager`. Most of the work is already
 done by the base class: choosing which experiments to create, selecting the best ones and plotting them are the
 same for every workflow engine. The subclass only has to deal with what is specific to its engine. This is where
 the logs are, how many CPUs a job used, what the status of a run is, and how experiments are created, run and
-deleted.
+deleted. The layout of an experiment that was given none is read from the files of the experiment directory by
+default. An engine that keeps a copy of the configuration a run used overrides `_parse_layout`, so that the layout
+and the CPU count come from the same file, as `CylcRoseManager` does.
 
 ## Generating a study
 

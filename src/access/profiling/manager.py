@@ -1472,9 +1472,25 @@ class ProfilingManager(ABC, Generic[AppT]):
         """
         experiment = self.experiments[exp_name]
         if experiment.layout is None:
-            with experiment.directory() as (exp_path, _):
-                experiment.layout = self.application.parse_layout(exp_path)
+            with experiment.directory() as (exp_path, run_path):
+                experiment.layout = self._parse_layout(exp_path, run_path)
         return experiment.layout
+
+    def _parse_layout(self, path: Path, run_path: Path | None) -> ComponentLayout | None:
+        """Returns the layout an experiment ran, read back out of its configuration files.
+
+        The application reads the files, and which files those are is the workflow engine's: those of the
+        experiment directory, unless a subclass knows of a copy the run kept, as a Cylc run keeps the
+        configuration it used.
+
+        Args:
+            path (Path): Path to the experiment directory.
+            run_path (Path | None): Optional path to a separate runs directory.
+
+        Returns:
+            ComponentLayout | None: The layout, or None if the files do not say.
+        """
+        return self.application.parse_layout(path)
 
     def update_statuses(self) -> None:
         """Brings the status of every experiment up to date with the state its run actually reached.

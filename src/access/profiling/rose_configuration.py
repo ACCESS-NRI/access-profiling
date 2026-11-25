@@ -45,6 +45,9 @@ def read_section(conf_path: Path, section: str) -> dict[str, str]:
     its `=` reads as the empty string, as Rose reads it. A value continued over several lines is one string, its
     lines joined by newlines.
 
+    A setting written both in use and ignored is refused. Rose uses the one written last, but `RoseConfParser`
+    reads the two as two keys, so which one that is cannot be told here.
+
     Args:
         conf_path (Path): The file, such as a suite's `rose-suite.conf` or an app's `rose-app.conf`.
         section (str): The section, as its header names it without the brackets, such as `jinja2:suite.rc`.
@@ -54,12 +57,21 @@ def read_section(conf_path: Path, section: str) -> dict[str, str]:
 
     Raises:
         FileNotFoundError: If the file does not exist.
-        ValueError: If the file holds no such section, or only an ignored one.
+        ValueError: If the file holds no such section, or only an ignored one, or if the section holds a setting
+            both in use and ignored.
     """
     conf = RoseConfParser().parse(conf_path.read_text())
     if section not in conf:
         raise ValueError(f"The Rose configuration {conf_path} has no section [{section}] in use.")
-    return {key: "" if value is None else value for key, value in conf[section].items() if not key.startswith("!")}
+    settings = conf[section]
+    in_use = {key for key in settings if not key.startswith("!")}
+    both = sorted(in_use & {key.lstrip("!") for key in settings if key.startswith("!")})
+    if both:
+        raise ValueError(
+            f"[{section}] of {conf_path} holds {both} both in use and ignored. Rose uses the one written last, which "
+            "cannot be told here: keep one of the two."
+        )
+    return {key: "" if value is None else value for key, value in settings.items() if key in in_use}
 
 
 def _integers(variables: Mapping[str, str], name: str, source: str, count: int = 1) -> tuple[int, ...]:
@@ -113,6 +125,15 @@ class RoseComponent(ABC):
 
     name: str
     token: str
+
+    @property
+    @abstractmethod
+    def suite_variables(self) -> tuple[str, ...]:
+        """Returns the variables of the suite this component reads, every one of them.
+
+        Returns:
+            tuple[str, ...]: The names of the variables.
+        """
 
     @property
     @abstractmethod
@@ -194,7 +215,7 @@ class RoseProcessGrid(RoseComponent):
             cores of their own, each running as many threads as a rank of the process grid. None (the default) runs
             no I/O server.
         local_constraints (tuple[LocalConstraint, ...]): The requirements every layout of the code meets, such as
-            `UM_CONSTRAINTS` in `access.profiling.models.um_suites`.
+            `UM_CONSTRAINTS` in `access.profiling.models.components`.
 
     Raises:
         ValueError: If it names other than one or two variables for the process grid, or if its grid is not
@@ -220,6 +241,11 @@ class RoseProcessGrid(RoseComponent):
                 f"{self.name} is given a {self.grid.ndim}-dimensional grid {self.grid.shape}. Its decomposition is "
                 "written as a two-dimensional process grid, so the grid it decomposes has to be one too."
             )
+
+    @property
+    def suite_variables(self) -> tuple[str, ...]:
+        optional = (self.threads_variable, self.io_server_variable)
+        return (*self.variables, *(variable for variable in optional if variable is not None))
 
     @property
     def leaf(self) -> ParallelComponent:
@@ -302,6 +328,10 @@ class RoseRanks(RoseComponent):
     variable: str
 
     @property
+    def suite_variables(self) -> tuple[str, ...]:
+        return (self.variable,)
+
+    @property
     def leaf(self) -> ParallelComponent:
         return ParallelComponent(name=self.name, local_constraints=(FixedThreadsPerRankConstraint(n_threads=1),))
 
@@ -337,7 +367,8 @@ class RoseSuiteConfiguration(Application):
         experiment_prefix (str): Prefix of the key of every layout of this configuration.
 
     Raises:
-        ValueError: If the name is empty, or if the configuration runs no component.
+        ValueError: If the name is empty, if the configuration runs no component, or if it reads one variable for
+            two settings.
     """
 
     name: str
@@ -353,6 +384,15 @@ class RoseSuiteConfiguration(Application):
         if not self.components:
             raise ValueError(
                 f"{self.model_name} configuration {self.name!r} runs no component. There is nothing to profile."
+            )
+        # A variable states one setting: two settings written into it would overwrite each other, and the layout
+        # read back would not be the one written.
+        names = [name for component in self.components for name in component.suite_variables]
+        shared = sorted({name for name in names if names.count(name) > 1})
+        if shared:
+            raise ValueError(
+                f"{self.model_name} configuration {self.name!r} reads the variables {shared} for more than one "
+                "setting. Give each setting, of each component, a variable of its own."
             )
 
     @property
@@ -456,9 +496,8 @@ class RoseSuiteConfiguration(Application):
     def parse_layout(self, output_dir: Path) -> ComponentLayout | None:
         """Returns the layout a suite runs, read back out of the variables of its `rose-suite.conf`.
 
-        A process grid whose component states its grid comes back with its decomposition, so that a layout written
-        with `config_changes` is read back as it was, the cores of its root aside: what the root held beyond what its
-        components were given is not in the file. A component the variables give no cores is left out.
+        `CylcRoseManager` reads a suite that ran from the configuration its run recorded instead, with
+        `read_layout`.
 
         Args:
             output_dir (Path): The suite directory. Must contain a `rose-suite.conf`.
@@ -471,7 +510,27 @@ class RoseSuiteConfiguration(Application):
             ValueError: If the file has no `[jinja2:suite.rc]` section, or if a variable a component names is not
                 set in it or does not hold whole numbers.
         """
-        conf_path = output_dir / SUITE_CONF
+        return self.read_layout(output_dir / SUITE_CONF)
+
+    def read_layout(self, conf_path: Path) -> ComponentLayout | None:
+        """Returns the layout the variables of a suite state, from the file they are read from.
+
+        A process grid whose component states its grid comes back with its decomposition, so that a layout written
+        with `config_changes` is read back as it was, the cores of its root aside: what the root held beyond what its
+        components were given is not in the file. A component the variables give no cores is left out. The manager
+        finds the file, as for `occupied_cpus`.
+
+        Args:
+            conf_path (Path): The suite's `rose-suite.conf`, or the copy of it the run recorded.
+
+        Returns:
+            ComponentLayout | None: The layout, or None if the variables give no component any cores.
+
+        Raises:
+            FileNotFoundError: If the file does not exist.
+            ValueError: If the file has no `[jinja2:suite.rc]` section, or if a variable a component names is not
+                set in it or does not hold whole numbers.
+        """
         variables = read_section(conf_path, SUITE_VARIABLES)
         sub_layouts = tuple(
             sub_layout
