@@ -303,8 +303,9 @@ manager.run_experiments()
 
 The manager then checks how each suite is going by reading the database in its run directory, as described in
 [Experiments and their statuses](../user-guide/index.md#experiments-and-their-statuses). A suite fails as soon as
-one of its tasks fails. You can also run a suite by hand, with `rose suite-run` in its directory, and the manager
-follows it in the same way.
+one of its tasks fails and Cylc does not run it again. Some suites retry a task that failed, as those of ACCESS-AM3
+retry the UM once: the suite is RUNNING until the retry ends. You can also run a suite by hand, with
+`rose suite-run` in its directory, and the manager follows it in the same way.
 
 ## Running failed suites again
 
@@ -447,7 +448,7 @@ values, such as strings, numbers and lists, since they are kept in the record of
 number of ranks of the I/O server, which a table or a plot can use as a coordinate.
 
 The status of each suite is read from its run directory. A suite is DONE if all its tasks succeeded, FAILED if
-one of them failed, RUNNING if some tasks are still going, and NEW if it has not run. Note that if you register a
+one of them failed and is not run again, RUNNING if some tasks are still going, and NEW if it has not run. Note that if you register a
 suite without its run directory, it stays NEW, because the manager has nowhere to read its status from.
 
 The experiment has the name of the suite, which is the name of its directory in the working directory. It can be

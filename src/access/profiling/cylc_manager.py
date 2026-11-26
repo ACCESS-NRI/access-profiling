@@ -721,9 +721,13 @@ class CylcRoseManager(ProfilingManager[RoseSuiteConfiguration]):
     def parse_status(self, path: Path, run_path: Path | None = None) -> ProfilingExperimentStatus | None:
         """Parses the state the tasks of a Rose Cylc suite reached.
 
-        Cylc records a run status per task attempt in the task_jobs table of the suite database: 0 where the
-        task succeeded, non-zero where it failed, and nothing at all while it is still going. A suite is done
-        once every task it has recorded has succeeded, and failed as soon as any of them has not.
+        Cylc records the state of each task in the task_states table of the suite database, and a run status per
+        attempt at it in the task_jobs table: 0 where the attempt succeeded, non-zero where it failed, and nothing
+        while it is still going or where its job could not be submitted. A suite has failed as soon as Cylc gives up
+        on one of its tasks, whose state is then `failed` or `submit-failed`. It is done once the latest attempt at
+        every task it has recorded has succeeded, and still running otherwise. An attempt that failed therefore fails
+        the suite only where Cylc does not run the task again, as it does where the suite sets `execution retry
+        delays`, and not at all where a later attempt succeeds.
 
         Args:
             path (Path): Path to the experiment directory. Unused: the database lives with the run.
@@ -745,7 +749,10 @@ class CylcRoseManager(ProfilingManager[RoseSuiteConfiguration]):
         # A connection used as a context manager only ends a transaction, so it is closed explicitly.
         try:
             with closing(sqlite3.connect(f"file:{cylcdb}?mode=ro", uri=True)) as connection:
-                statuses = [row[0] for row in connection.execute("SELECT run_status FROM task_jobs")]
+                states = {row[0] for row in connection.execute("SELECT status FROM task_states")}
+                # SQLite takes a column that is not aggregated from the row holding the maximum: the latest attempt.
+                latest = "SELECT run_status, MAX(submit_num) FROM task_jobs GROUP BY cycle, name"
+                statuses = [row[0] for row in connection.execute(latest)]
         except sqlite3.Error as error:
             logger.debug(f"Could not read task statuses from {cylcdb}: {error}.")
             return None
@@ -754,9 +761,9 @@ class CylcRoseManager(ProfilingManager[RoseSuiteConfiguration]):
             logger.debug(f"The Cylc suite database at {cylcdb} records no task yet.")
             return None
 
-        if any(status is not None and status != 0 for status in statuses):
+        if states & {"failed", "submit-failed"}:
             return ProfilingExperimentStatus.FAILED
-        if any(status is None for status in statuses):
+        if any(status != 0 for status in statuses):
             return ProfilingExperimentStatus.RUNNING
         return ProfilingExperimentStatus.DONE
 

@@ -63,19 +63,33 @@ def manager():
 
 
 class TestParseStatus:
-    """The state a suite reached, read back from the run statuses Cylc records per task."""
+    """The state a suite reached, read back from the states and the run statuses Cylc records per task."""
 
     @staticmethod
-    def _suite_db(run_path: Path, statuses: list[int | None]) -> None:
-        """Writes a cylc-suite.db recording one task job per given run status."""
+    def _suite_db(run_path, tasks, states=None):
+        """Writes a cylc-suite.db recording the attempts at each task, `task<i>`, and the state Cylc left it in.
 
+        Args:
+            run_path (Path): The run directory.
+            tasks (list): The run status of each task's one attempt, or the list of the run statuses of its attempts.
+            states (dict[str, str] | None): The state of a task, by name, where it is not the one its latest attempt
+                leaves it in: `succeeded` for 0, `running` for None and `failed` for any other run status.
+        """
         run_path.mkdir(parents=True, exist_ok=True)
         with closing(sqlite3.connect(run_path / "cylc-suite.db")) as connection, connection:
-            connection.execute("CREATE TABLE task_jobs (name TEXT, run_status INTEGER)")
-            connection.executemany(
-                "INSERT INTO task_jobs VALUES (?, ?)",
-                [(f"task{i}", status) for i, status in enumerate(statuses)],
-            )
+            connection.execute("CREATE TABLE task_jobs (cycle TEXT, name TEXT, submit_num INTEGER, run_status INTEGER)")
+            connection.execute("CREATE TABLE task_states (name TEXT, cycle TEXT, status TEXT)")
+            for i, attempts in enumerate(tasks):
+                name = f"task{i}"
+                attempts = attempts if isinstance(attempts, list) else [attempts]
+                connection.executemany(
+                    "INSERT INTO task_jobs VALUES ('1', ?, ?, ?)",
+                    [(name, number, status) for number, status in enumerate(attempts, start=1)],
+                )
+                state = {0: "succeeded", None: "running"}.get(attempts[-1], "failed")
+                connection.execute(
+                    "INSERT INTO task_states VALUES (?, '1', ?)", (name, (states or {}).get(name, state))
+                )
 
     def test_every_task_succeeded_is_done(self, manager, tmp_path):
         self._suite_db(tmp_path, [0, 0, 0])
@@ -90,6 +104,26 @@ class TestParseStatus:
     def test_a_task_with_no_status_yet_is_still_running(self, manager, tmp_path):
         self._suite_db(tmp_path, [0, None])
         assert manager.parse_status(Path("/fake/expt"), tmp_path) == ProfilingExperimentStatus.RUNNING
+
+    def test_a_task_cylc_runs_again_is_still_running(self, manager, tmp_path):
+        """Its attempt failed, but the suite retries it, as ACCESS-AM3's suites retry atmos_main once."""
+        self._suite_db(tmp_path, [0, 1], states={"task1": "retrying"})
+        assert manager.parse_status(Path("/fake/expt"), tmp_path) == ProfilingExperimentStatus.RUNNING
+
+    def test_a_task_that_succeeded_when_run_again_is_done(self, manager, tmp_path):
+        """Only its latest attempt counts, so the attempt that failed before does not fail the suite for good."""
+        self._suite_db(tmp_path, [0, [1, 0]])
+        assert manager.parse_status(Path("/fake/expt"), tmp_path) == ProfilingExperimentStatus.DONE
+
+    def test_an_attempt_that_never_ran_does_not_keep_the_suite_running(self, manager, tmp_path):
+        """Its job could not be submitted, so it has no run status, but the attempt after it succeeded."""
+        self._suite_db(tmp_path, [[None, 0]])
+        assert manager.parse_status(Path("/fake/expt"), tmp_path) == ProfilingExperimentStatus.DONE
+
+    def test_a_task_whose_job_could_not_be_submitted_is_failed(self, manager, tmp_path):
+        """Its attempt has no run status, as one still going has none, but Cylc has given up on it."""
+        self._suite_db(tmp_path, [0, None], states={"task1": "submit-failed"})
+        assert manager.parse_status(Path("/fake/expt"), tmp_path) == ProfilingExperimentStatus.FAILED
 
     def test_no_task_recorded_yet_says_nothing(self, manager, tmp_path):
         self._suite_db(tmp_path, [])

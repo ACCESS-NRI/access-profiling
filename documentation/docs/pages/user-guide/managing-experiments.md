@@ -35,7 +35,7 @@ This prints the name and the status of every experiment. The status always refer
 | NEW | The manager has not submitted the experiment, and the workflow engine has no record of a run. |
 | RUNNING | The experiment was submitted, and its latest run has not recorded an outcome yet. |
 | DONE | The latest run succeeded. Only DONE and ARCHIVED experiments are parsed. |
-| FAILED | The latest run failed, or its job ended before Payu could record an outcome. A Cylc suite fails as soon as one of its tasks fails. |
+| FAILED | The latest run failed, or its job ended before Payu could record an outcome. A Cylc suite fails as soon as one of its tasks fails and Cylc does not run it again. |
 | ARCHIVED | The experiment has been archived, and is read from its archive from then on. |
 
 The manager gets this information from the workflow engine. Payu keeps it in
