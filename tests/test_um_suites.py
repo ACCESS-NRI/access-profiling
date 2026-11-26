@@ -170,22 +170,71 @@ class TestSearches:
 class TestAM3FromControl:
     """An ACCESS-AM3 configuration read from a suite checked out by hand, its grid stated where the UM reads it."""
 
+    N96E_SIZES = {"global_row_length": 192, "global_rows": 144}
+
     @staticmethod
-    def suite(directory, nlsizes):
-        """Writes the UM app of a suite, its sizes as `nlsizes` gives them."""
+    def suite(directory, nlsizes, resolution="'n96e'", opt=None):
+        """Writes the UM app of a suite, its sizes as `nlsizes` gives them, and its rose-suite.conf.
+
+        Args:
+            directory (Path): The suite directory.
+            nlsizes (dict): The settings of `[namelist:nlsizes]` in `app/um/rose-app.conf`.
+            resolution (str | None): The value of `EXPT_HORIZ_ATM`, as the file states it. None leaves it out.
+            opt (str | None): The text of the optional configuration of the UM app for `n512e`. None writes none.
+        """
         conf = directory / "app/um/rose-app.conf"
         conf.parent.mkdir(parents=True)
         sizes = "".join(f"{key}={value}\n" for key, value in nlsizes.items())
         conf.write_text(f"meta=um-atmos/vn13.8\n\n[namelist:nlsizes]\nbl_levels=70\n{sizes}model_levels=85\n")
+        write_suite_conf(
+            directory, {"EXPT_HORIZ_ATM": resolution} if resolution is not None else {"MAIN_CLOCK": "'PT1H'"}
+        )
+        if opt is not None:
+            (directory / "app/um/opt").mkdir()
+            (directory / "app/um/opt/rose-app-n512e.conf").write_text(opt)
         return directory
 
-    @pytest.mark.parametrize(
-        ("grid", "preset"), [((192, 144), AM3_N96E), ((1024, 768), AM3_N512E)], ids=["n96e", "n512e"]
-    )
-    def test_the_releases_give_back_their_presets(self, tmp_path, grid, preset):
-        suite = self.suite(tmp_path, {"global_row_length": grid[0], "global_rows": grid[1]})
+    def test_the_n96e_release_gives_back_its_preset(self, tmp_path):
+        """It has the optional configuration of N512e, as the release has, which its resolution does not select."""
+        suite = self.suite(tmp_path, self.N96E_SIZES, opt="[namelist:nlsizes]\nglobal_row_length=1024\n")
 
-        assert am3_from_control(suite) == preset
+        assert am3_from_control(suite) == AM3_N96E
+
+    def test_the_n512e_release_gives_back_its_preset(self, tmp_path):
+        """It states its grid in the optional configuration of its resolution, over the N96e grid of rose-app.conf."""
+        opt = "[namelist:easyaerosol]\nl_easyaerosol_lw=.false.\n\n[namelist:nlsizes]\nglobal_row_length=1024\n"
+        opt += "global_rows=768\n"
+        suite = self.suite(tmp_path, self.N96E_SIZES, resolution="'n512e'", opt=opt)
+
+        assert am3_from_control(suite) == AM3_N512E
+
+    def test_the_optional_configuration_changes_only_the_sizes_it_states(self, tmp_path):
+        suite = self.suite(tmp_path, self.N96E_SIZES, resolution='"n512e"', opt="[namelist:nlsizes]\nglobal_rows=768\n")
+
+        assert am3_from_control(suite).components[0].grid == Domain((192, 768))
+
+    @pytest.mark.parametrize(
+        "opt",
+        ["[namelist:run_gwd]\nussp_launch_factor=1.2\n", "[!namelist:nlsizes]\nglobal_row_length=1024\n"],
+        ids=["no sizes", "sizes it ignores"],
+    )
+    def test_an_optional_configuration_that_states_no_sizes_changes_none(self, tmp_path, opt):
+        suite = self.suite(tmp_path, self.N96E_SIZES, resolution="'n512e'", opt=opt)
+
+        assert am3_from_control(suite) == AM3_N96E
+
+    def test_a_suite_that_names_no_resolution(self, tmp_path):
+        """A fork may select its optional configurations otherwise: the grid is that of rose-app.conf."""
+        suite = self.suite(tmp_path, self.N96E_SIZES, resolution=None, opt="[namelist:nlsizes]\nglobal_rows=768\n")
+
+        assert am3_from_control(suite) == AM3_N96E
+
+    def test_a_resolution_that_is_not_a_quoted_string_is_refused(self, tmp_path):
+        """An expression of Jinja2, whose value would have to be guessed, and with it the grid."""
+        suite = self.suite(tmp_path, self.N96E_SIZES, resolution="RESOLUTION")
+
+        with pytest.raises(ValueError, match="states EXPT_HORIZ_ATM as RESOLUTION, which is not a quoted string"):
+            am3_from_control(suite)
 
     def test_a_name_of_your_own(self, tmp_path):
         suite = self.suite(tmp_path, {"global_row_length": 192, "global_rows": 144})
@@ -203,6 +252,12 @@ class TestAM3FromControl:
         suite = self.suite(tmp_path, {"global_row_length": "192,", "global_rows": 144})
 
         with pytest.raises(ValueError, match=r"states the UM's grid as .*'192,'.*, which are not two positive whole"):
+            am3_from_control(suite)
+
+    def test_sizes_of_the_optional_configuration_name_it(self, tmp_path):
+        suite = self.suite(tmp_path, self.N96E_SIZES, resolution="'n512e'", opt="[namelist:nlsizes]\nglobal_rows=7x\n")
+
+        with pytest.raises(ValueError, match=r"rose-app.conf with .*/app/um/opt/rose-app-n512e.conf states the UM's"):
             am3_from_control(suite)
 
     def test_a_suite_without_a_um_app_is_refused(self, tmp_path):

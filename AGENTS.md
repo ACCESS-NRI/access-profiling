@@ -345,7 +345,8 @@ blocks, one page per concept. A new module needs a block on the right page and a
   `rose-suite.conf` (`_control_directory`).
 - **`from_control` reads the application's own files, never the engine's**: `config.yaml` and the CICE namelist for
   the submodel models, `nuopc.runconfig`, `ice_in` and `MOM_input` for OM3, by the Payu model types the control
-  names, and `app/um/rose-app.conf` for `am3_from_control`. It reproduces the preset of the same control (the OM3
+  names, and `app/um/rose-app.conf` for `am3_from_control`, with the optional configuration that `EXPT_HORIZ_ATM`
+  in `rose-suite.conf` selects (N512e states its grid there). It reproduces the preset of the same control (the OM3
   readers after the blocks `replace`), which the tests check.
 - **Logging** is `logging.getLogger(__name__)` in each module that logs, with no handlers and no `warnings.warn`: a
   warning to the user is a `logger.warning`. Tests assert on `caplog.text`, so rewording a message can fail one.

@@ -67,7 +67,11 @@ The presets describe the released suites. If your ACCESS-AM3 suite is on a branc
 describe, you can read its configuration from the suite itself with
 [`am3_from_control`][access.profiling.models.um_suites.am3_from_control]. It reads the grid of the UM from the
 sizes that the UM reads itself, `global_row_length` and `global_rows` in the `[namelist:nlsizes]` section of
-`app/um/rose-app.conf`. For example, we read the configuration of the release that we cloned above:
+`app/um/rose-app.conf`. A suite can change these sizes in an optional configuration, which is a file of settings that
+Rose applies over `rose-app.conf` when the suite asks for it. The suite picks the one of its resolution by the
+variable `EXPT_HORIZ_ATM` of `rose-suite.conf`, as `app/um/opt/rose-app-<resolution>.conf`. The N512e release states
+its grid there, so `am3_from_control` reads that file too, where it exists. For example, we read the configuration
+of the release that we cloned above:
 
 ```python
 from pathlib import Path
