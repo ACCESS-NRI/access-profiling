@@ -208,7 +208,9 @@ The numbers of the new experiments are taken before `_create_experiments` is cal
 fails, because the engine may have created some of the experiments. A subclass can avoid this for what it is able
 to check beforehand. It overrides `_refuse_plans`, which the manager calls with the plans before it writes
 anything, and raises there. A call that is refused in this way takes no number. For example, this is where
-`PayuManager` refuses a manager that has no `lab_dir`. By default, `_refuse_plans` refuses nothing.
+`PayuManager` refuses a manager that has no `lab_dir`. `CylcRoseManager` works out there the text of every file
+that it would write, so that a change that cannot be made is refused before a number is taken. By default,
+`_refuse_plans` refuses nothing.
 
 [`generate_experiments`][access.profiling.manager.ProfilingManager.generate_experiments] goes the same way, without
 a search. It makes one plan for each
@@ -237,4 +239,5 @@ and `iter_layouts`. The same package has parsers for configuration files, such a
 the ACCESS models use to read their files. The Payu manager creates experiments with
 [experiment-generator](https://access-experiment-generator.access-hive.org.au/) and runs them with
 [experiment-runner](https://access-experiment-runner.access-hive.org.au/), which in turn drive
-[Payu](https://payu.readthedocs.io/en/stable/).
+[Payu](https://payu.readthedocs.io/en/stable/). The Cylc manager writes the Rose configurations of its copies of a
+suite with `RoseConfParser`, from access-config-utils, and runs the suites with `rose suite-run`.

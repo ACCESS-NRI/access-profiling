@@ -42,10 +42,12 @@ def test_am3_states_its_process_grid_in_two_variables_and_ram3_its_nests_in_one_
     assert um.variables == ("MAIN_ATM_PROCX", "MAIN_ATM_PROCY")
     assert (um.threads_variable, um.io_server_variable) == ("MAIN_OMPTHR_ATM", "MAIN_IOS_NPROC")
     assert um.local_constraints == UM_CONSTRAINTS
+    assert AM3_N96E.walltime_variable == "MAIN_CLOCK"
 
     assert [nest.variables for nest in RAM3.components] == [("rg01_rs01_m01_nproc",), ("rg01_rs02_m01_nproc",)]
     assert all(nest.threads_variable is None and nest.io_server_variable is None for nest in RAM3.components)
     assert RAM3.core_sharing is CoreSharing.SHARED
+    assert RAM3.walltime_variable is None, "rAM3 states its walltime in site/nci-gadi/suite-adds.rc"
 
 
 def test_am3_counts_the_cpus_its_pbs_macro_asks_for(tmp_path):
@@ -73,6 +75,7 @@ def test_am3_n512e_is_n96e_on_another_grid():
     assert AM3_N512E.components[0].grid == Domain((1024, 768))
     assert replace(AM3_N512E.components[0], grid=Domain((192, 144))) == AM3_N96E.components[0]
     assert AM3_N512E.experiment_prefix == AM3_N96E.experiment_prefix
+    assert AM3_N512E.walltime_variable == AM3_N96E.walltime_variable
     assert (AM3_N96E_SOURCE.start_point, AM3_N512E_SOURCE.start_point) == ("release-n96e-3.0", "release-n512e-1.0")
 
 

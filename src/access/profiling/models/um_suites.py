@@ -63,6 +63,7 @@ def _am3(name: str, grid: Domain) -> RoseSuiteConfiguration:
         ),
         parsers=UM_SUITE_PARSERS,
         experiment_prefix="am3-layout",
+        walltime_variable="MAIN_CLOCK",
     )
 
 
@@ -71,7 +72,7 @@ AM3_N96E: RoseSuiteConfiguration = _am3("n96e", Domain((192, 144)))
 
 Its `rose-suite.conf` names the two extents of the UM's process grid separately, adds the I/O server's ranks to their
 product, and multiplies the result by the OpenMP threads each rank runs. This is the arithmetic of the pbs_cpus macro
-in site/nci_gadi.rc: `cpus(x, y, i, nt) = (x*y + i)*nt`.
+in site/nci_gadi.rc: `cpus(x, y, i, nt) = (x*y + i)*nt`. The walltime of the UM's job is `MAIN_CLOCK`.
 """
 
 AM3_CONFIGS_REPOSITORY: str = "git@github.com:ACCESS-NRI/ACCESS-AM3-configs.git"
@@ -83,8 +84,8 @@ AM3_N96E_SOURCE: GitControlSource = GitControlSource(
 """The release `AM3_N96E` describes, as a control to profile it against.
 
 Cylc takes its control the same way Payu does - ACCESS-AM3's configurations are a git repository whose releases
-are tags - but nothing here clones it: the suite is expected to be in the working directory already, so this
-records what a study was run against rather than fetching it.
+are tags - but nothing here clones it: the suite is expected in the working directory already, under `config`, where
+generating a study copies it from, so this records what a study was run against rather than fetching it.
 """
 
 AM3_N512E: RoseSuiteConfiguration = _am3("n512e", Domain((1024, 768)))
@@ -156,7 +157,8 @@ Each nest states both extents of its process grid in one comma-separated variabl
 `rg01_rs02_m01_nproc`, and runs one thread per rank with no I/O server. The nests run as tasks of their own, each a
 job of its own, so they share the cores rather than divide them: the suite occupies as many as the larger nest. Its
 suites are checked out by hand - `rosie checkout` after `mosrs-auth`, or `git clone` now that the configurations are
-moving to git - so a study supplies its own control rather than taking one from here.
+moving to git - so a study supplies its own control rather than taking one from here. It states the walltime of its
+jobs in `site/nci-gadi/suite-adds.rc` rather than in a variable, so it names no `walltime_variable`.
 """
 
 

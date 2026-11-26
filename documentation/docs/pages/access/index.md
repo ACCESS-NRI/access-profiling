@@ -259,10 +259,13 @@ the `PELAYOUT_attributes` and reads them back.
 | Whole model | `ACCESS-AM3 n96e` and `ACCESS-AM3 n512e` | `ACCESS-rAM3 ram3` | `ACCESS-CM3 O25km` |
 | Layout variables | `MAIN_ATM_PROCX` and `MAIN_ATM_PROCY` | `rg01_rs01_m01_nproc` and `rg01_rs02_m01_nproc`, each as `x,y` | `ATM_NPROCX` and `ATM_NPROCY`; `OCN_NPROC` and `ICE_NPROC`, the ranks of MOM6 and CICE6 |
 | Threads and I/O server | `MAIN_OMPTHR_ATM` and `MAIN_IOS_NPROC` | None | `FLUME_IOS_NPROC`; one thread per rank |
+| Walltime variable | `MAIN_CLOCK` | None: the walltime is in `site/nci-gadi/suite-adds.rc` | None |
 | Layout rules | An even number of processes along x, and subdomains at most four times longer than they are wide | The same, for each nest | None: the layouts are read but not searched for |
 | Cores | The UM's, plus the I/O server's, times the threads | The larger nest's: each nest is a job of its own | The UM's, plus the I/O server's, MOM6's and CICE6's |
 
 For the three models, the UM timers of each task are read with the same two parsers, and give the logs
 `<task>_cycle<cycle>_UM_regions` and `<task>_cycle<cycle>_UM_total`. The logs that the ocean and the sea ice of
 ACCESS-CM3 write are not read. The grid of the UM of ACCESS-CM3 is not stated in its preset, so its layouts cannot
-be searched for. See [Cylc Rose suites](cylc-rose-suites.md) to learn how to prepare and analyse their experiments.
+be searched for. Only ACCESS-AM3 states its walltime in a variable, so the walltime of the other two is a change
+of the study's own. See [Cylc Rose suites](cylc-rose-suites.md) to learn how to generate and analyse their
+experiments.

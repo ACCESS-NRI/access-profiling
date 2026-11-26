@@ -3,10 +3,10 @@
 How much faster does your application run if you give it more cores? This is what a scaling study tells you. The
 application is run on several numbers of cores, and we look at how the run time goes down, for the whole
 application and for each of its components. The experiments are created as shown in
-[Generating and running experiments](experiments.md), whose example is a scaling study. They can also be Rose
-suites prepared by hand, as in [Cylc Rose suites](../access/cylc-rose-suites.md). In this tutorial we use the
+[Generating and running experiments](experiments.md), whose example is a scaling study. In this tutorial we use the
 `manager` of that page and the `groups` of [Choosing the regions](analysing-data.md#choosing-the-regions). The
-figures are drawn from synthetic data, to show what each plot looks like and how to read it.
+experiments of a Rose suite are created in the same way, as [Cylc Rose suites](../access/cylc-rose-suites.md)
+shows. The figures are drawn from synthetic data, to show what each plot looks like and how to read it.
 
 ## The experiments of a scaling study
 

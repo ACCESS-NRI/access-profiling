@@ -232,8 +232,18 @@ class TestRoseSuiteConfiguration:
 
         Two nests sharing a threads variable, given two and one threads, would both run one.
         """
-        with pytest.raises(ValueError, match=r"reads the variables \['\w+'\] for more than one setting"):
+        with pytest.raises(ValueError, match=r"uses the variables \['\w+'\] for more than one setting"):
             RoseSuiteConfiguration(name="mock", model_name="Mock", components=components)
+
+    def test_the_walltime_variable_is_one_of_the_settings(self):
+        """A walltime written into a variable of the layout would overwrite the layout."""
+        with pytest.raises(ValueError, match=r"uses the variables \['NPROC'\] for more than one setting"):
+            RoseSuiteConfiguration(
+                name="mock",
+                model_name="Mock",
+                components=(RoseProcessGrid(name="UM", token="atm", variables=("NPROC",)),),
+                walltime_variable="NPROC",
+            )
 
     def test_a_rose_suite_declares_no_logs_in_an_output_directory(self, tmp_path):
         """Its logs are one per task per cycle, so they are found by walking the run directory, not named here."""

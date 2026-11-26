@@ -365,9 +365,12 @@ class RoseSuiteConfiguration(Application):
         core_sharing (CoreSharing): Whether the codes divide the cores between them (`CoreSharing.PARTITIONED`, the
             default), or each runs as a job of its own on the same number of cores (`CoreSharing.SHARED`).
         experiment_prefix (str): Prefix of the key of every layout of this configuration.
+        walltime_variable (str | None): The variable of `[jinja2:suite.rc]` stating the walltime of the job that runs
+            the layout, as an ISO 8601 duration, such as `MAIN_CLOCK` in ACCESS-AM3. None (the default) for a suite
+            that states it elsewhere, which a study then changes as a change of its own.
 
     Raises:
-        ValueError: If the name is empty, if the configuration runs no component, or if it reads one variable for
+        ValueError: If the name is empty, if the configuration runs no component, or if it uses one variable for
             two settings.
     """
 
@@ -377,6 +380,7 @@ class RoseSuiteConfiguration(Application):
     parsers: Mapping[str, ProfilingParser] = field(default_factory=dict)
     core_sharing: CoreSharing = CoreSharing.PARTITIONED
     experiment_prefix: str = "rose-layout"
+    walltime_variable: str | None = None
 
     def __post_init__(self) -> None:
         if not self.name:
@@ -388,11 +392,13 @@ class RoseSuiteConfiguration(Application):
         # A variable states one setting: two settings written into it would overwrite each other, and the layout
         # read back would not be the one written.
         names = [name for component in self.components for name in component.suite_variables]
+        if self.walltime_variable is not None:
+            names.append(self.walltime_variable)
         shared = sorted({name for name in names if names.count(name) > 1})
         if shared:
             raise ValueError(
-                f"{self.model_name} configuration {self.name!r} reads the variables {shared} for more than one "
-                "setting. Give each setting, of each component, a variable of its own."
+                f"{self.model_name} configuration {self.name!r} uses the variables {shared} for more than one "
+                "setting. Give each setting a variable of its own."
             )
 
     @property

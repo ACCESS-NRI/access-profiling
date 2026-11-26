@@ -122,4 +122,6 @@ This prints the spread in percent, with a row for each number of cores of the se
 
 A Rose suite always counts as a single run. If you want to see how much the timings of a suite vary, make copies
 of the suite, run them, register each copy as an experiment of its own, and compare them as in
-[Comparing experiments](comparing-experiments.md).
+[Comparing experiments](comparing-experiments.md). The copies are made by hand, as in
+[Suites prepared by hand](../access/cylc-rose-suites.md#suites-prepared-by-hand), since a study generates one
+experiment for each configuration.

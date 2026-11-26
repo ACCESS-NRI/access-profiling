@@ -35,7 +35,7 @@ This prints the name and the status of every experiment. The status always refer
 | NEW | The manager has not submitted the experiment, and the workflow engine has no record of a run. |
 | RUNNING | The experiment was submitted, and its latest run has not recorded an outcome yet. |
 | DONE | The latest run succeeded. Only DONE and ARCHIVED experiments are parsed. |
-| FAILED | The latest run failed, or its job ended before Payu could record an outcome. |
+| FAILED | The latest run failed, or its job ended before Payu could record an outcome. A Cylc suite fails as soon as one of its tasks fails. |
 | ARCHIVED | The experiment has been archived, and is read from its archive from then on. |
 
 The manager gets this information from the workflow engine. Payu keeps it in
@@ -96,7 +96,7 @@ that created, added or deleted experiments:
 | `access_profiling_version` | The version of the package that made the call. |
 | `manager`, `application` | The class of the manager, and the class and the name of the application. |
 | `control` | The control that the experiments were created from. |
-| `engine` | What the workflow engine adds. For Payu, this is the laboratory and the control options. |
+| `engine` | What the workflow engine adds. For Payu, this is the laboratory and the control options, and for Cylc, the control options. |
 | `experiments` | The names of the experiments that the call created, added or deleted. |
 
 Note that neither file holds a status. The status of an experiment changes, so the manager always reads it from the
@@ -177,7 +177,8 @@ workflow engine how each run went, so this also finds the experiments that faile
 that are running or that have finished are not touched. Note that an updated experiment keeps the status FAILED until it
 runs again. `run_experiments(retry_failed=True)` then submits the failed experiments, together with any new ones. See
 [Experiments with Payu](../access/payu.md#running-failed-experiments-again) to find out where Payu leaves the outputs of
-a failed run, and how it cleans up before running again.
+a failed run, and how it cleans up before running again. For a Rose suite, see
+[Cylc Rose suites](../access/cylc-rose-suites.md#running-failed-suites-again).
 
 If the failure had nothing to do with the experiment itself, such as a node failure, there is nothing to fix. In
 that case you only need `run_experiments(retry_failed=True)`.
@@ -231,7 +232,8 @@ manager.delete_experiments(all_experiments=True)
 The number of a deleted experiment is not given to another one. If you create its layout again, the new experiment
 gets the next number.
 
-See [Experiments with Payu](../access/payu.md#deleting-experiments) for what exactly is deleted with Payu.
+See [Experiments with Payu](../access/payu.md#deleting-experiments) for what exactly is deleted with Payu, and
+[Cylc Rose suites](../access/cylc-rose-suites.md#deleting-experiments) for a Rose suite.
 
 ## Troubleshooting
 

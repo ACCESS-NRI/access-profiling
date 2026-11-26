@@ -120,10 +120,11 @@ This prints the change of each region as a percentage, next to its name.
 
 ## Rose suites
 
-Rose suites are registered with
-[`add_rose_experiment`][access.profiling.cylc_manager.CylcRoseManager.add_rose_experiment], as
-[Cylc Rose suites](../access/cylc-rose-suites.md#registering-the-suites) shows, and compared in the same way.
-Their groups name logs such as `cylc_tasks`.
+Rose suites are generated with `generate_experiments` too, as
+[Cylc Rose suites](../access/cylc-rose-suites.md#the-changes-of-an-experiment) shows, and compared in the same way.
+A suite that you prepared yourself is registered with
+[`add_rose_experiment`][access.profiling.cylc_manager.CylcRoseManager.add_rose_experiment] instead. Their groups
+name logs such as `cylc_tasks`.
 
 Be aware that two runs of the same experiment never take exactly the same time. If the difference between two
 experiments is not larger than that, it does not tell you anything.
