@@ -228,17 +228,19 @@ blocks, one page per concept. A new module needs a block on the right page and a
   laboratory, so `PAYU_LAB_PATH` never reaches the PBS job: neither can replace the key. A set `PAYU_LAB_PATH` would
   override it on the login node only, so `_refuse_payu_lab_path` stops generating, running and deleting while it is set.
   `lab_dir` is needed to generate, not to read, archive or delete.
-- **A generated Cylc experiment is a copy of the control suite**, at `<work_dir>/<name>/<suite name>`, without
-  `.git` and `.svn` and with its links kept as links. The suite is named `<application name>-<8 hex digits of the
-  working directory>-<name>` (`_suite_name`), since `rose suite-run` names a suite after its directory and Cylc runs
-  every suite of a user in `~/cylc-run/<suite name>`, which is the experiment's `run_path`. `_edits` works out the
-  text of every file a call changes and writes nothing: it is what `_refuse_plans` checks and what
-  `_create_experiments` writes, so the two cannot disagree. A `.conf` file is edited with `RoseConfParser`
-  (`{section: {key: value}}`, `""` for no section, an ignored setting enabled), any other by text replacement,
-  refused where the text does not occur. A regenerated experiment's `.conf` files are edited in its copy, so that a
-  correction made there by hand survives, and its other files are taken from the control again, since replacing a
-  text twice can apply it twice. A plan's walltime goes into the application's `walltime_variable`, and is refused
-  where there is none.
+- **A generated Cylc experiment is a copy of the control suite**, at `<work_dir>/<name>/<suite name>`, without `.git`
+  and `.svn` and with its links kept as links, but for a link naming a changed file (AM3's `rose-suite.conf`): that file
+  is read through the link and written in its place, with the permissions of the file the control's link leads to, since
+  nothing is ever written through a link. A link to a directory on the way is refused (`_source_file`). The suite is
+  named `<application name>-<8 hex digits of the working directory>-<name>` (`_suite_name`), since `rose suite-run`
+  names a suite after its directory and Cylc runs every suite of a user in `~/cylc-run/<suite name>`, which is the
+  experiment's `run_path`. `_edits` works out the text of every file a call changes and writes nothing: it is what
+  `_refuse_plans` checks and what `_create_experiments` writes, so the two cannot disagree. A `.conf` file is edited
+  with `RoseConfParser` (`{section: {key: value}}`, `""` for no section, an ignored setting enabled), any other by text
+  replacement, refused where the text does not occur. A regenerated experiment's `.conf` files are edited in its copy,
+  so that a correction made there by hand survives, and its other files are taken from the control again, since
+  replacing a text twice can apply it twice. A plan's walltime goes into the application's `walltime_variable`, and is
+  refused where there is none.
 - **No status is stored.** A new manager finds the experiments of `work_dir` again from their records, as NEW, or
   DONE where the record says `complete`, and the tarballs in `archive_dir`, as ARCHIVED, an archive replacing the
   experiment found in `work_dir`. A tarball it cannot read is skipped with a warning. Every other status is read

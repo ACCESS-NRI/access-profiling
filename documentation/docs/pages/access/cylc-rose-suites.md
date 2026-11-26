@@ -233,11 +233,15 @@ Adapt the directory to your own project. In any other file, a text is replaced w
 made in this order: the control options, then the changes of the experiment, then its walltime. Each change is made
 in the file as the changes before it left it, so where two of them set the same setting, the later one wins.
 
+A file that you change can be a symbolic link, as `rose-suite.conf` is in the suites of ACCESS-AM3. The file is read
+through the link, and the copy has the changed file in place of the link, with the permissions of the file that the
+link leads to. That file is left as it was. This means that another name for it does not see the change.
+
 A change that cannot be made is refused before anything is written, and the study takes no number for it. This is
 the case for a section that the file does not have, for a value that is not one line of text, and for a text that
 does not occur. It is also the case for a file that is not in the suite, or that is reached through a symbolic
-link, since writing it would change the file that the link leads to. [Troubleshooting](#troubleshooting) lists the
-messages.
+link to a directory, since writing it would change a file in the directory that the link leads to.
+[Troubleshooting](#troubleshooting) lists the messages.
 
 ACCESS-rAM3 states the walltime of its jobs in `site/nci-gadi/suite-adds.rc`, and not in a variable of
 `rose-suite.conf`. `generate_scaling_experiments` therefore refuses to write a walltime for it. Instead, you
@@ -285,8 +289,8 @@ This is also why the name of an application has to be made of letters, digits, `
 
 The run directory of each experiment is `~/cylc-run/<suite>`, as for any suite. Where the suite sets a `root-dir`,
 Rose puts the run there, and makes `~/cylc-run/<suite>` a link to it. The copy leaves out the directories of the
-version control system, `.git` and `.svn`. It keeps the symbolic links of the suite as links, and the files keep
-their permissions.
+version control system, `.git` and `.svn`. It keeps the symbolic links of the suite as links, other than those of
+the files that the changes name, and the files keep their permissions.
 
 ## Running the suites
 
@@ -465,7 +469,7 @@ These are the messages you may see when you generate the experiments of a suite,
 | `... has no section [...] in use, ...` | The file has no such section, or ignores it. Check the name of the section in the file. |
 | `The changes to ... replace '...', which does not occur in it. ...` | The control writes the text in another way, or an earlier change has replaced it already. Copy the text from the file. |
 | `The changes set ... to ..., which is not a string. ...` | A value of a Rose configuration is given as a number. Give it as a string, as the file is to state it. |
-| `The changes name the file ..., which is reached through the symbolic link ...` | Writing the file would change the file that the link leads to. Name that file instead, if it is in the suite. |
+| `The changes name the file ..., which is reached through the symbolic link ... to a directory. ...` | Writing the file would change a file in the directory that the link leads to. Name the file through that directory instead, if it is in the suite. |
 | `The name of the application, '...', cannot begin the name of a suite, ...` | The name has a character that the name of a directory of a suite cannot have. Give the configuration another name. |
 
 ## Other suites

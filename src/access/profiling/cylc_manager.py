@@ -91,19 +91,21 @@ def _walltime_duration(hours: float) -> str:
 def _source_file(directory: Path, file: str) -> Path:
     """Returns the file of a suite that a change names, refusing one whose writing would reach outside the suite.
 
-    A copy of a suite keeps its symbolic links as links, so a file reached through one may be outside the copy, and
-    writing it would change whatever the link leads to, the control included.
+    The file may itself be a symbolic link, as `rose-suite.conf` is in the suites of ACCESS-AM3: it is read through
+    the link, and `_create_experiments` writes the changed file in place of the link. A symbolic link to a directory
+    on the way is refused instead. A copy of a suite keeps it as a link, so the file reached through it may be outside
+    the copy, and writing it would change whatever the link leads to, the control included.
 
     Args:
         directory (Path): The suite directory.
         file (str): The file, relative to the suite directory.
 
     Returns:
-        Path: The file.
+        Path: The file, which may be a symbolic link.
 
     Raises:
-        ValueError: If the path is absolute, leads out of the suite through `..`, passes through a symbolic link, or
-            is not a file the suite has.
+        ValueError: If the path is absolute, leads out of the suite through `..`, passes through a symbolic link to
+            a directory, or is not a file the suite has.
     """
     relative = Path(file)
     if relative.is_absolute() or ".." in relative.parts:
@@ -112,14 +114,15 @@ def _source_file(directory: Path, file: str) -> Path:
             "its directory, such as 'rose-suite.conf'."
         )
     path = directory
-    for part in relative.parts:
+    for part in relative.parts[:-1]:
         path = path / part
         if path.is_symlink():
             raise ValueError(
-                f"The changes name the file {file!r}, which is reached through the symbolic link {path}. Writing it "
-                "would change what the link leads to, which may be outside the experiment's copy of the suite. Name "
-                "the file the link leads to, where it is in the suite."
+                f"The changes name the file {file!r}, which is reached through the symbolic link {path} to a "
+                "directory. Writing it would change what the link leads to, which may be outside the experiment's "
+                "copy of the suite. Name the file through the directory the link leads to, where it is in the suite."
             )
+    path = directory / relative
     if not path.is_file():
         raise ValueError(f"The changes name the file {file!r}, which the suite {directory} does not have.")
     return path
@@ -295,7 +298,8 @@ class CylcRoseManager(ProfilingManager[RoseSuiteConfiguration]):
         This is both what `_refuse_plans` checks and what `_create_experiments` writes, so that the two cannot
         disagree. The changes are made in layers, each over the one before: the control options, the plan's changes,
         and its walltime. A file the same changes are made to for several experiments is edited once, since reading
-        a large Rose configuration takes seconds.
+        a large Rose configuration takes seconds. A file named by a symbolic link is read through it, and its text
+        is keyed by the name given, not by the file the link leads to.
 
         Args:
             control_dir (Path): The directory of the control suite.
@@ -377,8 +381,10 @@ class CylcRoseManager(ProfilingManager[RoseSuiteConfiguration]):
 
         A new experiment is a copy of the control suite at `<work_dir>/<experiment>/<suite name>`, as `_suite_name`
         names it, without the version control directories `.git` and `.svn`, and with its symbolic links kept as
-        links. Its run directory is `~/cylc-run/<suite name>`, where `rose suite-run` run in the copy installs the
-        suite. A plan being regenerated is written into the copy the experiment has already.
+        links. A file the changes name is the exception: where it is a link, the copy has the changed file in its
+        place, with the permissions of the file the control's link leads to. Its run directory is
+        `~/cylc-run/<suite name>`, where `rose suite-run` run in the copy installs the suite. A plan being regenerated
+        is written into the copy the experiment has already.
 
         The changes are the engine's words, keyed by the file of the suite they change, relative to its directory:
 
@@ -407,8 +413,8 @@ class CylcRoseManager(ProfilingManager[RoseSuiteConfiguration]):
             ValueError: If this manager has no control, if the control suite is not in its directory, if the
                 application's name cannot begin the name of a suite, if a plan states a walltime and the application
                 no `walltime_variable`, or if a change cannot be made: a file it names is not a file of the suite,
-                or is reached through a symbolic link, a section it names is not in the file, a value is not one
-                line of text, or a text to replace does not occur.
+                or is reached through a symbolic link to a directory, a section it names is not in the file, a value
+                is not one line of text, or a text to replace does not occur.
             OSError: If a copy cannot be made, as where its directory exists already.
         """
         control_dir = self._control_directory()
@@ -423,9 +429,18 @@ class CylcRoseManager(ProfilingManager[RoseSuiteConfiguration]):
                 run_path = Path.home() / "cylc-run" / suite_dir.name
                 created[plan.name] = ProfilingExperiment(path=suite_dir, run_path=run_path, layout=plan.layout)
                 logger.info(f"Created experiment {plan.name} as the suite '{suite_dir}', to run in '{run_path}'.")
-            # Written in place, which keeps the permissions of the file.
             for file, text in edits[plan.name].items():
-                (suite_dir / file).write_text(text)
+                path = suite_dir / file
+                if path.is_symlink():
+                    # Writing through the link would change what it leads to, which may be outside the copy, as an
+                    # absolute link leads to the control's own file. The permissions are taken through the control's
+                    # link, since a relative link that leads out of the suite leads elsewhere from the copy.
+                    path.unlink()
+                    path.write_text(text)
+                    shutil.copymode(control_dir / file, path)
+                else:
+                    # Written in place, which keeps the permissions of the file.
+                    path.write_text(text)
         return created
 
     def parse_ncpus(self, path: Path, run_path: Path | None = None) -> int:

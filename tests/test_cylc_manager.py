@@ -576,7 +576,7 @@ WHOLE_BUDGET = RootAllocation(subcomponents={"UM": FixedAllocation(core_fraction
 
 
 def write_control(directory: Path) -> Path:
-    """Writes a control suite: a rose-suite.conf, a UM app, a site file, a script, a link and version control."""
+    """Writes a control suite: a rose-suite.conf, a UM app, a site file, a script, links and version control."""
     for subdirectory in ("app/um", "site", "bin", ".git", ".svn"):
         (directory / subdirectory).mkdir(parents=True)
     (directory / "rose-suite.conf").write_text(CONTROL_SUITE_CONF)
@@ -585,6 +585,7 @@ def write_control(directory: Path) -> Path:
     (directory / "bin/run.sh").write_text("#!/bin/bash\n")
     (directory / "bin/run.sh").chmod(0o755)
     (directory / "site.rc").symlink_to("site/gadi.rc")
+    (directory / "sites").symlink_to("site")
     (directory / ".git/HEAD").write_text("ref: refs/heads/main\n")
     return directory
 
@@ -682,9 +683,17 @@ class TestGeneratingSuites:
         manager.generate_scaling_experiments([1.0], cores_per_node=4, walltime=2.0, allocations=WHOLE_BUDGET)
 
         suite = manager.experiments["exp-0001"].path
-        assert sorted(path.name for path in suite.iterdir()) == ["app", "bin", "rose-suite.conf", "site", "site.rc"]
+        assert sorted(path.name for path in suite.iterdir()) == [
+            "app",
+            "bin",
+            "rose-suite.conf",
+            "site",
+            "site.rc",
+            "sites",
+        ]
         assert (suite / "bin/run.sh").stat().st_mode & 0o777 == 0o755
         assert (suite / "site.rc").readlink() == Path("site/gadi.rc")
+        assert (suite / "sites").readlink() == Path("site")
         assert (suite / "app/um/rose-app.conf").read_text() == CONTROL_UM_APP_CONF
         assert (control / "rose-suite.conf").read_text() == CONTROL_SUITE_CONF
 
@@ -783,6 +792,54 @@ class TestGeneratingSuites:
         assert (suite / "rose-suite.conf").read_text() == CONTROL_SUITE_CONF
 
 
+class TestChangingAFileNamedByALink:
+    """A file named by a symbolic link is read through it, and the copy has the changed file in place of the link."""
+
+    def test_a_link_to_a_file_of_the_suite(self, tmp_path, home):
+        """As rose-suite.conf is a link to rose-suite.conf_nci_gadi in ACCESS-AM3's suites.
+
+        The file the link leads to is left as it was, in the copy and in the control: another name for the file does
+        not see the change.
+        """
+        manager = generating_manager(tmp_path)
+        control = manager.work_dir / "config"
+        (control / "rose-suite.conf").rename(control / "rose-suite.conf_nci_gadi")
+        (control / "rose-suite.conf").symlink_to("rose-suite.conf_nci_gadi")
+
+        manager.generate_scaling_experiments([1.0], cores_per_node=4, walltime=2.0, allocations=WHOLE_BUDGET)
+
+        for experiment in manager.experiments.values():
+            assert not (experiment.path / "rose-suite.conf").is_symlink()
+            assert read_section(experiment.path / "rose-suite.conf", "jinja2:suite.rc")["CLOCK"] == "'PT2H00M'"
+            assert (experiment.path / "rose-suite.conf_nci_gadi").read_text() == CONTROL_SUITE_CONF
+        assert (control / "rose-suite.conf").readlink() == Path("rose-suite.conf_nci_gadi")
+        assert (control / "rose-suite.conf_nci_gadi").read_text() == CONTROL_SUITE_CONF
+
+    @pytest.mark.parametrize("relative", [False, True], ids=["an absolute link", "a relative link"])
+    def test_a_link_out_of_the_suite_is_not_written_through(self, tmp_path, home, relative):
+        """The file it leads to is left as it was, and the copy's file has its permissions.
+
+        A copy of an absolute link leads to the very file the control's does. A relative one leads elsewhere from the
+        copy, so the permissions are those of the file the control's link leads to.
+        """
+        manager = generating_manager(tmp_path)
+        shared = tmp_path / "shared/gadi.rc"
+        shared.parent.mkdir()
+        shared.write_text(CONTROL_SITE_RC)
+        shared.chmod(0o755)
+        link = manager.work_dir / "config/site.rc"
+        link.unlink()
+        link.symlink_to(Path("../../shared/gadi.rc") if relative else shared)
+
+        manager.generate_experiments([ConfigurationChoice({"site.rc": {"3600": "7200"}})])
+
+        copy = manager.experiments["exp-0001"].path / "site.rc"
+        assert not copy.is_symlink()
+        assert copy.read_text() == CONTROL_SITE_RC.replace("3600", "7200")
+        assert copy.stat().st_mode & 0o777 == 0o755
+        assert shared.read_text() == CONTROL_SITE_RC
+
+
 class TestRefusedBeforeANumberIsTaken:
     """What cannot be written into a copy of the control is refused before anything is written."""
 
@@ -810,7 +867,10 @@ class TestRefusedBeforeANumberIsTaken:
             ({"site/gadi.rc": "walltime = 7200"}, r"The changes to site/gadi.rc are not a mapping"),
             ({"../gadi.rc": {"3600": "7200"}}, r"'../gadi.rc', which is not inside the suite"),
             ({"/etc/gadi.rc": {"3600": "7200"}}, r"'/etc/gadi.rc', which is not inside the suite"),
-            ({"site.rc": {"3600": "7200"}}, r"'site.rc', which is reached through the symbolic link"),
+            (
+                {"sites/gadi.rc": {"3600": "7200"}},
+                r"'sites/gadi.rc', which is reached through the symbolic link .*/config/sites to a directory\.",
+            ),
             ({"suite.rc": {"3600": "7200"}}, r"'suite.rc', which the suite .* does not have"),
         ],
         ids=[
@@ -826,7 +886,7 @@ class TestRefusedBeforeANumberIsTaken:
             "changes that are not a mapping",
             "a file outside the suite",
             "an absolute path",
-            "a file reached through a link",
+            "a file reached through a link to a directory",
             "a file the suite lacks",
         ],
     )
