@@ -447,6 +447,19 @@ def test_delete_experiments_dry_run_keeps_directories_and_manager_state(tmp_path
     assert f"Dry run: would delete experiment directory '{exp_path}' and run directory '{run_path}'." in caplog.text
 
 
+def test_a_dry_run_of_a_suite_without_a_run_directory(tmp_path, caplog):
+    """As a suite added without one has, rather than naming a run directory 'None'."""
+    manager = mock_manager(tmp_path / "work", tmp_path / "archive")
+    exp_path = tmp_path / "work/u-aa123"
+    exp_path.mkdir(parents=True)
+    manager.experiments["u-aa123"] = ProfilingExperiment(path=exp_path, run_path=None)
+
+    with caplog.at_level(logging.INFO):
+        manager.delete_experiments(experiments=["u-aa123"], dry_run=True)
+
+    assert f"would delete experiment directory '{exp_path}' and no run directory, since it has none." in caplog.text
+
+
 @mock.patch("access.profiling.cylc_manager.subprocess.run")
 def test_run_experiments_skips_when_no_new_experiments(mock_subprocess, caplog, manager):
     """run_experiments should do nothing when there are no NEW experiments."""
@@ -1144,6 +1157,23 @@ class TestDeletingThroughALink:
         assert not run_path.is_symlink()
         assert f"Deleting the link '{run_path}'." in caplog.text
         assert "Deleting run directory" not in caplog.text
+
+    def test_a_dry_run_names_where_the_link_leads(self, tmp_path, home, caplog):
+        """What the deletion would remove, on /scratch where Rose put the run, and not only the link in ~/cylc-run."""
+        manager = generating_manager(tmp_path)
+        manager.generate_experiments([ConfigurationChoice({})])
+        run_path = manager.experiments["exp-0001"].run_path
+        run = tmp_path / "scratch/cylc-run" / run_path.name
+        run.mkdir(parents=True)
+        run_path.parent.mkdir(parents=True)
+        run_path.symlink_to(run)
+
+        with caplog.at_level(logging.INFO):
+            manager.delete_experiments(experiments=["exp-0001"], dry_run=True)
+
+        assert f"and run directory '{run.resolve()}', which '{run_path}' links to, and then the link." in caplog.text
+        assert run.is_dir()
+        assert run_path.is_symlink()
 
 
 def test_a_generated_suite_is_archived_and_found_again(tmp_path, home):

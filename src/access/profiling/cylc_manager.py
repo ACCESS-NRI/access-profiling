@@ -681,7 +681,13 @@ class CylcRoseManager(ProfilingManager[RoseSuiteConfiguration]):
             exp_path = exp.path
             run_path = exp.run_path
             if dry_run:
-                logger.info(f"Dry run: would delete experiment directory '{exp_path}' and run directory '{run_path}'.")
+                if run_path is None:
+                    run = "no run directory, since it has none"
+                elif run_path.is_symlink():
+                    run = f"run directory '{run_path.resolve()}', which '{run_path}' links to, and then the link"
+                else:
+                    run = f"run directory '{run_path}'"
+                logger.info(f"Dry run: would delete experiment directory '{exp_path}' and {run}.")
                 continue
             if exp_path.is_dir():
                 logger.info(f"Deleting experiment directory '{exp_path}'.")
