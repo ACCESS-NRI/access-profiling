@@ -64,6 +64,8 @@ There are three things to note here:
 - The changes use the format of
   [experiment-generator](https://access-experiment-generator.access-hive.org.au/), which is what the Payu manager
   creates the experiments with. [Experiments with Payu](../access/payu.md#the-changes-of-a-choice) describes it.
+  The changes for a Rose suite have a format of their own, which
+  [Cylc Rose suites](../access/cylc-rose-suites.md#the-changes-of-an-experiment) describes.
 - A string of a Fortran namelist is given with its own quotes, as in `"'roundrobin'"`. Without them, the value is
   written into the namelist without quotes.
 - The walltime is one of the changes. It is the `walltime` of Payu's `config.yaml`, as a string. A choice that

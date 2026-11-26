@@ -11,14 +11,23 @@ couples through NUOPC, each given its ranks by a variable. All read their task l
 None of that is code, so no suite has any.
 """
 
+import re
 from pathlib import Path
 
+from access.config import RoseConfParser
 from access.config.parallel_component import CoreSharing
 from access.config.parallel_domain import Domain
 
 from access.profiling.control import GitControlSource
 from access.profiling.models.components import UM_CONSTRAINTS
-from access.profiling.rose_configuration import RoseProcessGrid, RoseRanks, RoseSuiteConfiguration, read_section
+from access.profiling.rose_configuration import (
+    SUITE_CONF,
+    SUITE_VARIABLES,
+    RoseProcessGrid,
+    RoseRanks,
+    RoseSuiteConfiguration,
+    read_section,
+)
 from access.profiling.um_parser import UMProfilingParser, UMTotalRuntimeParser
 
 UM_SUITE_PARSERS: dict = {
@@ -31,8 +40,11 @@ The UM writes one profiling log per task, read twice: once for its regions and o
 """
 
 # Where an ACCESS-AM3 suite states the UM's grid, relative to the suite directory, and the section and the settings
-# that state it there: the namelist the UM itself reads its sizes from.
+# that state it there: the namelist the UM itself reads its sizes from. The optional configuration of the UM app for
+# the suite's resolution, which the variable of rose-suite.conf names, changes them where the suite has one.
 _UM_APP_CONF: str = "app/um/rose-app.conf"
+_UM_OPT_CONF: str = "app/um/opt/rose-app-{}.conf"
+_UM_RESOLUTION_VARIABLE: str = "EXPT_HORIZ_ATM"
 _UM_SIZES: str = "namelist:nlsizes"
 _UM_GRID_SETTINGS: tuple[str, str] = ("global_row_length", "global_rows")
 
@@ -63,6 +75,7 @@ def _am3(name: str, grid: Domain) -> RoseSuiteConfiguration:
         ),
         parsers=UM_SUITE_PARSERS,
         experiment_prefix="am3-layout",
+        walltime_variable="MAIN_CLOCK",
     )
 
 
@@ -71,7 +84,7 @@ AM3_N96E: RoseSuiteConfiguration = _am3("n96e", Domain((192, 144)))
 
 Its `rose-suite.conf` names the two extents of the UM's process grid separately, adds the I/O server's ranks to their
 product, and multiplies the result by the OpenMP threads each rank runs. This is the arithmetic of the pbs_cpus macro
-in site/nci_gadi.rc: `cpus(x, y, i, nt) = (x*y + i)*nt`.
+in site/nci_gadi.rc: `cpus(x, y, i, nt) = (x*y + i)*nt`. The walltime of the UM's job is `MAIN_CLOCK`.
 """
 
 AM3_CONFIGS_REPOSITORY: str = "git@github.com:ACCESS-NRI/ACCESS-AM3-configs.git"
@@ -83,8 +96,8 @@ AM3_N96E_SOURCE: GitControlSource = GitControlSource(
 """The release `AM3_N96E` describes, as a control to profile it against.
 
 Cylc takes its control the same way Payu does - ACCESS-AM3's configurations are a git repository whose releases
-are tags - but nothing here clones it: the suite is expected to be in the working directory already, so this
-records what a study was run against rather than fetching it.
+are tags - but nothing here clones it: the suite is expected in the working directory already, under `config`, where
+generating a study copies it from, so this records what a study was run against rather than fetching it.
 """
 
 AM3_N512E: RoseSuiteConfiguration = _am3("n512e", Domain((1024, 768)))
@@ -102,8 +115,12 @@ def am3_from_control(directory: Path, name: str | None = None) -> RoseSuiteConfi
     """Returns the ACCESS-AM3 configuration a suite already checked out describes, read from its own files.
 
     The UM's grid is read from the sizes the UM itself reads, `global_row_length` and `global_rows` in the
-    `[namelist:nlsizes]` section of `app/um/rose-app.conf`. Everything else is what every ACCESS-AM3 suite states, so
-    the suites of the two releases give back `AM3_N96E` and `AM3_N512E`.
+    `[namelist:nlsizes]` section of `app/um/rose-app.conf`, as the optional configuration of the suite's resolution
+    changes them. The suite names its resolution in the variable `EXPT_HORIZ_ATM` of its `rose-suite.conf`, and has
+    the UM's task apply `app/um/opt/rose-app-<resolution>.conf` over `rose-app.conf` where that file exists. This is
+    where the N512e release states its grid, its `rose-app.conf` stating N96e's. The suite applies the optional
+    configurations other variables name too, but neither release states the grid in them. Everything else is what
+    every ACCESS-AM3 suite states, so the suites of the two releases give back `AM3_N96E` and `AM3_N512E`.
 
     Args:
         directory (Path): The suite directory, as `rosie checkout` or `git clone` left it.
@@ -114,21 +131,38 @@ def am3_from_control(directory: Path, name: str | None = None) -> RoseSuiteConfi
         RoseSuiteConfiguration: The configuration.
 
     Raises:
-        FileNotFoundError: If the suite has no `app/um/rose-app.conf`.
-        ValueError: If the file has no `[namelist:nlsizes]` section in use, or if the section does not state the two
-            sizes as positive whole numbers.
+        FileNotFoundError: If the suite has no `app/um/rose-app.conf` or no `rose-suite.conf`.
+        ValueError: If `app/um/rose-app.conf` has no `[namelist:nlsizes]` section in use, if `rose-suite.conf` has no
+            `[jinja2:suite.rc]` section in use or states `EXPT_HORIZ_ATM` as anything but a quoted string, or if the
+            sizes, with those the optional configuration changes, are not two positive whole numbers.
     """
     conf_path = directory / _UM_APP_CONF
     sizes = read_section(conf_path, _UM_SIZES)
+    source = str(conf_path)
+    suite_conf = directory / SUITE_CONF
+    resolution = read_section(suite_conf, SUITE_VARIABLES).get(_UM_RESOLUTION_VARIABLE)
+    if resolution is not None:
+        # A Jinja2 string: anything else is an expression, whose value, and so the file it selects, cannot be told.
+        quoted = re.fullmatch(r"""(['"])(.+)\1""", resolution)
+        if quoted is None:
+            raise ValueError(
+                f"{suite_conf} states {_UM_RESOLUTION_VARIABLE} as {resolution}, which is not a quoted string, so the "
+                "optional configuration of the UM it selects, which may state the UM's grid, cannot be told."
+            )
+        opt_path = directory / _UM_OPT_CONF.format(quoted.group(2))
+        # Rose skips an optional configuration the suite does not have, and one need not change the sizes.
+        if opt_path.is_file() and _UM_SIZES in RoseConfParser().parse(opt_path.read_text()):
+            sizes |= read_section(opt_path, _UM_SIZES)
+            source = f"{conf_path} with {opt_path}"
     missing = [setting for setting in _UM_GRID_SETTINGS if setting not in sizes]
     if missing:
-        raise ValueError(f"[{_UM_SIZES}] of {conf_path} states no {missing}, so the UM's grid cannot be read from it.")
+        raise ValueError(f"[{_UM_SIZES}] of {source} states no {missing}, so the UM's grid cannot be read from it.")
     try:
         grid = Domain(tuple(int(sizes[setting]) for setting in _UM_GRID_SETTINGS))
     except ValueError as error:
         stated = {setting: sizes[setting] for setting in _UM_GRID_SETTINGS}
         raise ValueError(
-            f"[{_UM_SIZES}] of {conf_path} states the UM's grid as {stated}, which are not two positive whole numbers."
+            f"[{_UM_SIZES}] of {source} states the UM's grid as {stated}, which are not two positive whole numbers."
         ) from error
     return _am3(name if name is not None else f"n{grid.shape[0] // 2}e", grid)
 
@@ -156,7 +190,8 @@ Each nest states both extents of its process grid in one comma-separated variabl
 `rg01_rs02_m01_nproc`, and runs one thread per rank with no I/O server. The nests run as tasks of their own, each a
 job of its own, so they share the cores rather than divide them: the suite occupies as many as the larger nest. Its
 suites are checked out by hand - `rosie checkout` after `mosrs-auth`, or `git clone` now that the configurations are
-moving to git - so a study supplies its own control rather than taking one from here.
+moving to git - so a study supplies its own control rather than taking one from here. It states the walltime of its
+jobs in `site/nci-gadi/suite-adds.rc` rather than in a variable, so it names no `walltime_variable`.
 """
 
 

@@ -3,12 +3,19 @@
 
 """Profiling studies of applications driven by a Cylc Rose suite, such as the ACCESS models ACCESS-AM3 and ACCESS-rAM3.
 
-`CylcRoseManager` is the manager for every rose suite: it runs experiments with `rose suite-run`, and reads back
-what the suite and Cylc recorded about each run - the CPUs its jobs occupied, the state its tasks reached and
-the profiling logs they wrote. Experiments are not generated for a suite: they are added from suites already
-in the working directory. What is being profiled arrives as a `RoseSuiteConfiguration`.
+`CylcRoseManager` is the manager for every rose suite: it generates experiments as copies of the control suite, with
+the changes of each written into its files, runs them with `rose suite-run`, and reads back what the suite and Cylc
+recorded about each run - the CPUs its jobs occupied, the state its tasks reached and the profiling logs they wrote.
+A suite prepared by hand is added with `add_rose_experiment` instead. What is being profiled arrives as a
+`RoseSuiteConfiguration`.
+
+The changes of an experiment are keyed by the file of the suite they change, relative to the suite directory, and
+take one of two shapes. A Rose configuration, whose name ends in `.conf`, is read and written with `RoseConfParser`,
+and takes the settings of each section. Any other file, such as a `suite.rc` or a site file, is a text the suite's
+own tools read in their own ways, so it takes texts to replace.
 """
 
+import hashlib
 import logging
 import re
 import shutil
@@ -17,8 +24,10 @@ import subprocess
 from contextlib import closing
 from pathlib import Path
 
+from access.config import RoseConfParser
 from access.config.parallel_component import ComponentLayout
 
+from access.profiling.control import ExistingDirectoryControlSource
 from access.profiling.cylc_parser import CylcDBReader, CylcProfilingParser
 from access.profiling.experiment import (
     ExperimentPlan,
@@ -27,7 +36,7 @@ from access.profiling.experiment import (
     ProfilingLog,
 )
 from access.profiling.manager import ProfilingManager
-from access.profiling.rose_configuration import SUITE_CONF, RoseSuiteConfiguration
+from access.profiling.rose_configuration import SUITE_CONF, SUITE_VARIABLES, RoseSuiteConfiguration
 
 logger = logging.getLogger(__name__)
 
@@ -35,58 +44,416 @@ logger = logging.getLogger(__name__)
 # other resources in the same list.
 _PBS_NCPUS = re.compile(r"^#PBS\s+-l\s+(?:[^\s,]+,)*ncpus=(?P<ncpus>\d+)\b", re.MULTILINE)
 
+# What the name of an application may be, since it begins the name of every suite of a study, and so the name of the
+# directory the suite is run from: letters, digits, '_', '.' and '-', beginning with a letter or a digit.
+_SUITE_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*")
+
+
+def _suite_name(application_name: str, work_dir: Path, experiment: str) -> str:
+    """Returns the name of the suite an experiment of a study runs as.
+
+    `rose suite-run` names a suite after the directory it is run from, and Cylc runs every suite of a user in
+    `~/cylc-run/<name>`. The name of an experiment alone, `exp-0001` in every study, would have two studies run in
+    one directory. The name is therefore made of the application's, a digest of the working directory and the
+    experiment's, as the Payu laboratory of a study is named: the same in every session of the study, and different
+    for another one.
+
+    Args:
+        application_name (str): The name of the application being profiled.
+        work_dir (Path): The working directory of the study.
+        experiment (str): The name of the experiment.
+
+    Returns:
+        str: The name, `<application name>-<8 hex digits>-<experiment>`.
+    """
+    digest = hashlib.sha256(str(work_dir.resolve()).encode()).hexdigest()[:8]
+    return f"{application_name}-{digest}-{experiment}"
+
+
+def _walltime_duration(hours: float) -> str:
+    """Returns a walltime in hours as the value of a suite variable stating it: an ISO 8601 duration, quoted.
+
+    The variables of `[jinja2:suite.rc]` are Jinja2 values, so a duration is a string with its quotes, as in
+    `MAIN_CLOCK='PT1H10M'`. The seconds are rounded, as for Payu, and written only where there are some.
+
+    Args:
+        hours (float): Walltime to request, in hours.
+
+    Returns:
+        str: The value, such as `'PT24H00M'`, or `'PT0H07M24S'` for 0.12345 hours.
+    """
+    hours_part, remainder = divmod(round(hours * 3600), 3600)
+    minutes, seconds = divmod(remainder, 60)
+    duration = f"PT{hours_part}H{minutes:02d}M" + (f"{seconds:02d}S" if seconds else "")
+    return f"'{duration}'"
+
+
+def _source_file(directory: Path, file: str) -> Path:
+    """Returns the file of a suite that a change names, refusing one whose writing would reach outside the suite.
+
+    The file may itself be a symbolic link, as `rose-suite.conf` is in the suites of ACCESS-AM3: it is read through
+    the link, and `_create_experiments` writes the changed file in place of the link. A symbolic link to a directory
+    on the way is refused instead. A copy of a suite keeps it as a link, so the file reached through it may be outside
+    the copy, and writing it would change whatever the link leads to, the control included.
+
+    Args:
+        directory (Path): The suite directory.
+        file (str): The file, relative to the suite directory.
+
+    Returns:
+        Path: The file, which may be a symbolic link.
+
+    Raises:
+        ValueError: If the path is absolute, leads out of the suite through `..`, passes through a symbolic link to
+            a directory, or is not a file the suite has.
+    """
+    relative = Path(file)
+    if relative.is_absolute() or ".." in relative.parts:
+        raise ValueError(
+            f"The changes name the file {file!r}, which is not inside the suite. Name a file of the suite relative to "
+            "its directory, such as 'rose-suite.conf'."
+        )
+    path = directory
+    for part in relative.parts[:-1]:
+        path = path / part
+        if path.is_symlink():
+            raise ValueError(
+                f"The changes name the file {file!r}, which is reached through the symbolic link {path} to a "
+                "directory. Writing it would change what the link leads to, which may be outside the experiment's "
+                "copy of the suite. Name the file through the directory the link leads to, where it is in the suite."
+            )
+    path = directory / relative
+    if not path.is_file():
+        raise ValueError(f"The changes name the file {file!r}, which the suite {directory} does not have.")
+    return path
+
+
+def _set_setting(settings: dict, key: str, value: object, where: str) -> None:
+    """Sets one setting of a Rose configuration, enabling it where the file ignores it.
+
+    Args:
+        settings (dict): The settings of the section, or of no section, as `RoseConfParser` reads them.
+        key (str): The setting.
+        value (object): Its value, which has to be one line of text with nothing to trim.
+        where (str): The section and the file, for a message.
+
+    Raises:
+        ValueError: If the value is not one line of text with nothing to trim, or if the key cannot be a setting
+            there, as a section's name cannot.
+    """
+    if not isinstance(value, str):
+        raise ValueError(
+            f"The changes set {key} in {where} to {value!r}, which is not a string. A Rose setting is given as the "
+            "file is to state it, such as '16', or \"'PT2H'\" for a Jinja2 string."
+        )
+    # A setting the file ignores, `!KEY` or `!!KEY`, is enabled, as `rose suite-run -D` overrides it. It cannot be
+    # given its value in place, since its marks are part of its key, and neither can a setting with nothing after its
+    # `=`, whose value has another type: both are written anew, at the end of the section.
+    replaced = [f"!{key}", f"!!{key}"]
+    if key in settings and settings[key] is None:
+        replaced.append(key)
+    for old in replaced:
+        if old in settings:
+            del settings[old]
+    try:
+        settings[key] = value
+    except (TypeError, ValueError) as error:
+        raise ValueError(f"Cannot set {key} in {where} to {value!r}: {error}") from error
+
+
+def _edit_conf(text: str, layers: list[dict], file: str) -> str:
+    """Returns the text of a Rose configuration with the changes of each layer made to it, one layer after another.
+
+    A layer gives the settings of each section, `{section: {setting: value}}`, with the settings of no section under
+    `""`. A value is a string, written as given: a Jinja2 string carries its quotes. A setting the section lacks is
+    added at its end, and so is a setting the file ignores, which is enabled. The rest of the file is kept as it is,
+    comments included.
+
+    Args:
+        text (str): The file.
+        layers (list[dict]): The changes, in the order they are made.
+        file (str): The file's path in the suite, for a message.
+
+    Returns:
+        str: The file with the changes made.
+
+    Raises:
+        ValueError: If a layer is not of that shape, if the file has no section a layer names, other than one it
+            ignores, or if a value is not one line of text with nothing to trim.
+    """
+    conf = RoseConfParser().parse(text)
+    for layer in layers:
+        for section, settings in layer.items():
+            if not isinstance(settings, dict):
+                raise ValueError(
+                    f"The changes to {file} give {settings!r} for {section!r}. A Rose configuration takes the "
+                    "settings of each section, {section: {setting: value}}, with those of no section under ''."
+                )
+            target = conf if section == "" else conf.get(section)
+            if not isinstance(target, dict):
+                raise ValueError(
+                    f"{file} has no section [{section}] in use, so its settings cannot be changed. Name a section the "
+                    "file has, without the brackets, such as 'jinja2:suite.rc'."
+                )
+            where = f"[{section}] of {file}" if section else file
+            for key, value in settings.items():
+                _set_setting(target, key, value, where)
+    return str(conf)
+
+
+def _replace_text(text: str, layers: list[dict], file: str) -> str:
+    """Returns the text of a file with the replacements of each layer made in it, one layer after another.
+
+    A layer maps a text to the text replacing it, `{old text: new text}`, and every occurrence is replaced, in the
+    text the replacements before it left. A text that does not occur is refused rather than passed over: the change
+    would otherwise be lost without a word, as where the control writes the text in another way.
+
+    Args:
+        text (str): The file.
+        layers (list[dict]): The replacements, in the order they are made.
+        file (str): The file's path in the suite, for a message.
+
+    Returns:
+        str: The file with the replacements made.
+
+    Raises:
+        ValueError: If a replacement is not a string, if a text to replace is empty, or if it does not occur.
+    """
+    for layer in layers:
+        for old, new in layer.items():
+            if not isinstance(new, str):
+                raise ValueError(
+                    f"The changes to {file} replace {old!r} by {new!r}, which is not a string. A file other than a "
+                    "Rose configuration takes texts to replace, {old text: new text}."
+                )
+            if not old:
+                raise ValueError(
+                    f"The changes to {file} replace an empty text, which occurs between every two characters. Give "
+                    "the text to replace."
+                )
+            if old not in text:
+                raise ValueError(
+                    f"The changes to {file} replace {old!r}, which does not occur in it. Give the text as the control "
+                    "writes it, after any change made before this one."
+                )
+            text = text.replace(old, new)
+    return text
+
 
 class CylcRoseManager(ProfilingManager[RoseSuiteConfiguration]):
     """Profiling of any application driven by a Cylc Rose suite, such as the ACCESS models.
 
     One class for every rose suite: what tells ACCESS-AM3 from ACCESS-rAM3 is the components they run, the
     variables of their `rose-suite.conf` that state the parallelism of each, and which parsers read their task
-    logs, all of which arrive as a RoseSuiteConfiguration. What is written here is the engine - `rose
-    suite-run`, the Cylc run directory and the suite database the scheduler writes - and none of it is any one
-    suite's.
+    logs, all of which arrive as a RoseSuiteConfiguration. What is written here is the engine - the copies of the
+    control suite, `rose suite-run`, the Cylc run directory and the suite database the scheduler writes - and none
+    of it is any one suite's.
 
     Args:
         work_dir (Path): Working directory where profiling experiments will be generated and run.
         archive_dir (Path): Directory where completed experiments will be archived.
         application (RoseSuiteConfiguration): The suite being profiled.
-        control (ControlSource | None): Where the control suite comes from. Recorded rather than acted on:
-            unlike the Payu side, nothing here clones or checks out, so the suite is expected to be in the
-            working directory already - `rosie checkout` or `git clone` having been run in a terminal, where
-            a credentials prompt can be answered. None (the default) records nothing.
+        control (ControlSource | None): Where the control suite comes from, which every generated experiment is a
+            copy of. Nothing here clones or checks it out: it is expected at the path of an
+            `ExistingDirectoryControlSource`, and otherwise at `<work_dir>/<control.directory>`, `git clone` or
+            `rosie checkout` having been run in a terminal, where a credentials prompt can be answered. None (the
+            default) is enough to add, read and plot suites, but not to generate any.
     """
 
-    def _refuse_plans(self, plans: list[ExperimentPlan], **runner_options) -> None:
-        """Refuses every plan, as `_create_experiments` does, before the study takes a number for it.
+    # The edits `_refuse_plans` worked out last, with the plans, the control options and the control directory they
+    # are of. `_generate` calls `_create_experiments` next with the same plans, which writes these rather than work
+    # them out again, since reading a large Rose configuration takes seconds: 20 for the UM app of ACCESS-AM3.
+    _checked: tuple[list[ExperimentPlan], dict | None, Path, dict[str, dict[str, str]]] | None = None
 
-        Args:
-            plans (list[ExperimentPlan]): Unused.
-            **runner_options: Ignored.
+    def _control_directory(self) -> Path:
+        """Returns the directory of the control suite, which every experiment is a copy of.
+
+        Returns:
+            Path: The path of an `ExistingDirectoryControlSource`, and otherwise `<work_dir>/<control.directory>`.
 
         Raises:
-            NotImplementedError: Always.
+            ValueError: If this manager has no control, or if the directory has no `rose-suite.conf`.
         """
-        self._create_experiments(plans, **runner_options)
+        # Bound once, and checked here: generating refuses a missing control before it gets this far, but the hooks
+        # that call this can be called on their own, and `control` is a settable property.
+        control = self.control
+        if control is None:
+            raise ValueError(
+                "Cannot create experiments without a control: every experiment is a copy of the control suite, so "
+                "there is nothing to copy. Pass a ControlSource to this manager."
+            )
+        if isinstance(control, ExistingDirectoryControlSource):
+            directory = control.path
+        else:
+            directory = self.work_dir / control.directory
+        if not (directory / SUITE_CONF).is_file():
+            revision = "" if control.start_point is None else f" at {control.start_point}"
+            raise ValueError(
+                f"The control suite is not in {directory}: there is no {SUITE_CONF} there. Nothing here fetches a "
+                f"suite, so check out {control.origin}{revision} into {directory} first, with `git clone` or `rosie "
+                "checkout`, and try again."
+            )
+        return directory
 
-    def _create_experiments(self, plans: list[ExperimentPlan], **runner_options) -> dict[str, ProfilingExperiment]:
-        """Raises NotImplementedError: experiments are not generated for Cylc Rose suites yet.
+    def _edits(
+        self, control_dir: Path, plans: list[ExperimentPlan], control_options: dict | None
+    ) -> dict[str, dict[str, str]]:
+        """Returns the text of every file each planned experiment changes, as it is to be written, writing nothing.
+
+        This is both what `_refuse_plans` checks and what `_create_experiments` writes, so that the two cannot
+        disagree. The changes are made in layers, each over the one before: the control options, the plan's changes,
+        and its walltime. A file the same changes are made to for several experiments is edited once, since reading
+        a large Rose configuration takes seconds. A file named by a symbolic link is read through it, and its text
+        is keyed by the name given, not by the file the link leads to.
 
         Args:
-            plans (list[ExperimentPlan]): Unused.
+            control_dir (Path): The directory of the control suite.
+            plans (list[ExperimentPlan]): The experiments to create.
+            control_options (dict | None): The changes made to every experiment before its own, or None.
+
+        Returns:
+            dict[str, dict[str, str]]: The text of each file, keyed by experiment and then by the file's path relative
+                to the suite directory.
+
+        Raises:
+            ValueError: If the application's name cannot begin the name of a suite, if a plan states a walltime and
+                the application no `walltime_variable`, or if a change cannot be made.
+        """
+        if _SUITE_NAME.fullmatch(self.application.name) is None:
+            raise ValueError(
+                f"The name of the application, {self.application.name!r}, cannot begin the name of a suite, which is "
+                "the name of the directory the suite is run from. Name the application with letters, digits, '_', "
+                "'.' and '-', beginning with a letter or a digit."
+            )
+        walltime_variable = self.application.walltime_variable
+        texts: dict[tuple[Path, str], str] = {}
+        edits = {}
+        for plan in plans:
+            layers = [control_options or {}, plan.changes]
+            if plan.walltime_hours is not None:
+                if walltime_variable is None:
+                    raise ValueError(
+                        f"{self.application.name} states its walltime in no variable of {SUITE_CONF}, so a walltime "
+                        "cannot be written for it. Generate the experiments with generate_experiments instead, with "
+                        "the layouts select_layouts returns and the walltime among the changes, in the file the "
+                        "suite states it in."
+                    )
+                walltime = _walltime_duration(plan.walltime_hours)
+                layers.append({SUITE_CONF: {SUITE_VARIABLES: {walltime_variable: walltime}}})
+            # The Rose configurations of an experiment being regenerated are edited where it has them, so that a
+            # correction made there by hand is kept, as on a Payu branch. Its other files are taken from the control
+            # again, since replacing a text a second time can apply it twice: 3600 would become 36000, then 360000.
+            conf_dir = self.experiments[plan.name].path if plan.regenerating else control_dir
+            files = {}
+            for file in dict.fromkeys(file for layer in layers for file in layer):
+                changes = [layer[file] for layer in layers if file in layer]
+                if not all(isinstance(change, dict) for change in changes):
+                    raise ValueError(
+                        f"The changes to {file} are not a mapping: a Rose configuration takes {{section: {{setting: "
+                        "value}}, and any other file {old text: new text}."
+                    )
+                is_conf = Path(file).suffix == ".conf"
+                source = _source_file(conf_dir if is_conf else control_dir, file)
+                key = (source, repr(changes))
+                if key not in texts:
+                    texts[key] = (_edit_conf if is_conf else _replace_text)(source.read_text(), changes, file)
+                files[file] = texts[key]
+            edits[plan.name] = files
+        return edits
+
+    def _refuse_plans(self, plans: list[ExperimentPlan], control_options: dict | None = None, **runner_options) -> None:
+        """Refuses the planned experiments whose changes could not be written into a copy of the control suite.
+
+        Everything `_create_experiments` would write is worked out, and nothing is written, so that a call refused
+        here takes no number. What is worked out is kept for `_create_experiments`, called next with the same plans.
+
+        Args:
+            plans (list[ExperimentPlan]): The experiments about to be created.
+            control_options (dict | None): The changes made to every experiment before its own. None (the default)
+                makes none.
             **runner_options: Ignored. Accepted so that this stays substitutable for the base method, whose
                 callers may pass options other runners take.
 
         Raises:
-            NotImplementedError: Always. generate_experiments gets here, through `_refuse_plans`, whenever it has an
-                experiment to create, and before the study takes a number for it. generate_scaling_experiments
-                gets here only once its layout search has found a layout, which takes as long as the search does.
-                Where the search finds none, it logs a warning and generates nothing, and for a configuration
-                whose components state no grid to search, as `CM3_O25KM`, it raises the `ValueError` of
-                `parallel_component` instead.
+            ValueError: For the reasons `_create_experiments` gives.
         """
-        raise NotImplementedError(
-            "Generating experiments is not supported for Cylc Rose suites yet: nothing here writes a change into "
-            "a rose-suite.conf. Add the suites of a study with add_rose_experiment instead."
-        )
+        control_dir = self._control_directory()
+        self._checked = (plans, control_options, control_dir, self._edits(control_dir, plans, control_options))
+
+    def _create_experiments(
+        self, plans: list[ExperimentPlan], control_options: dict | None = None, **runner_options
+    ) -> dict[str, ProfilingExperiment]:
+        """Creates the planned experiments as copies of the control suite, with their changes written into their files.
+
+        A new experiment is a copy of the control suite at `<work_dir>/<experiment>/<suite name>`, as `_suite_name`
+        names it, without the version control directories `.git` and `.svn`, and with its symbolic links kept as
+        links. A file the changes name is the exception: where it is a link, the copy has the changed file in its
+        place, with the permissions of the file the control's link leads to. Its run directory is
+        `~/cylc-run/<suite name>`, where `rose suite-run` run in the copy installs the suite. A plan being regenerated
+        is written into the copy the experiment has already.
+
+        The changes are the engine's words, keyed by the file of the suite they change, relative to its directory:
+
+        - a Rose configuration, whose name ends in `.conf`, takes the settings of each section, `{section: {setting:
+          value}}`, with those of no section under `""`. A value is a string, written as the file is to state it,
+          so a Jinja2 string carries its quotes. A setting the section lacks is added, and one the file ignores is
+          enabled. A section the file lacks is refused.
+        - any other file takes texts to replace, `{old text: new text}`. Every occurrence is replaced, and a text
+          that does not occur is refused.
+
+        The control options are made first, then the plan's changes, and then its walltime, which is written into the
+        application's `walltime_variable` as an ISO 8601 duration. What `_refuse_plans` worked out for these very
+        plans, with the same control options, is written as it is, and is otherwise worked out here.
+
+        Args:
+            plans (list[ExperimentPlan]): The experiments to create.
+            control_options (dict | None): The changes made to every experiment before its own, in the same shapes.
+                None (the default) makes none.
+            **runner_options: Ignored. Accepted so that this stays substitutable for the base method, whose
+                callers may pass options other runners take.
+
+        Returns:
+            dict[str, ProfilingExperiment]: The experiments new to this manager, keyed by name, each with its suite
+                directory, its run directory and the layout of its plan.
+
+        Raises:
+            ValueError: If this manager has no control, if the control suite is not in its directory, if the
+                application's name cannot begin the name of a suite, if a plan states a walltime and the application
+                no `walltime_variable`, or if a change cannot be made: a file it names is not a file of the suite,
+                or is reached through a symbolic link to a directory, a section it names is not in the file, a value
+                is not one line of text, or a text to replace does not occur.
+            OSError: If a copy cannot be made, as where its directory exists already.
+        """
+        control_dir = self._control_directory()
+        # Taken once, so that a later call with the same plans, the files having changed since, works them out again.
+        checked, self._checked = self._checked, None
+        if checked is not None and checked[0] is plans and checked[1:3] == (control_options, control_dir):
+            edits = checked[3]
+        else:
+            edits = self._edits(control_dir, plans, control_options)
+        created = {}
+        for plan in plans:
+            if plan.regenerating:
+                suite_dir = self.experiments[plan.name].path
+            else:
+                suite_dir = self.work_dir / plan.name / _suite_name(self.application.name, self.work_dir, plan.name)
+                shutil.copytree(control_dir, suite_dir, symlinks=True, ignore=shutil.ignore_patterns(".git", ".svn"))
+                run_path = Path.home() / "cylc-run" / suite_dir.name
+                created[plan.name] = ProfilingExperiment(path=suite_dir, run_path=run_path, layout=plan.layout)
+                logger.info(f"Created experiment {plan.name} as the suite '{suite_dir}', to run in '{run_path}'.")
+            for file, text in edits[plan.name].items():
+                path = suite_dir / file
+                if path.is_symlink():
+                    # Writing through the link would change what it leads to, which may be outside the copy, as an
+                    # absolute link leads to the control's own file. The permissions are taken through the control's
+                    # link, since a relative link that leads out of the suite leads elsewhere from the copy.
+                    path.unlink()
+                    path.write_text(text)
+                    shutil.copymode(control_dir / file, path)
+                else:
+                    # Written in place, which keeps the permissions of the file.
+                    path.write_text(text)
+        return created
 
     def parse_ncpus(self, path: Path, run_path: Path | None = None) -> int:
         """Parses the number of CPUs a given Cylc/Rose experiment occupied.
@@ -253,14 +620,19 @@ class CylcRoseManager(ProfilingManager[RoseSuiteConfiguration]):
     def run_experiments(self, retry_failed: bool = False) -> None:
         """Runs Rose Cylc experiments via `rose suite-run` for profiling data generation.
 
-        An experiment whose suite failed is run where retry_failed asks for it. Note that what it is offered
-        is the same `rose suite-run` as any other, not a restart: whether a suite that has already run
-        accepts that is the suite's own affair, and one that does not says so and stops this method rather
-        than being worked around here.
+        An experiment whose suite failed is run where retry_failed asks for it, with `rose suite-run --new`. This
+        removes its run directory first, as `rose suite-clean` does, logs and database included, so that the suite
+        starts over and its status is that of the new run. Rose refuses a suite that is still running, which a
+        failed one usually is, since Cylc keeps it going for its failed task to be triggered again: it has to be
+        stopped first, with `cylc stop --kill <suite>`, which nothing here runs.
 
         Args:
             retry_failed (bool): Whether to run the experiments whose suites failed as well as the new ones.
                 False (the default) runs only the new ones.
+
+        Raises:
+            subprocess.CalledProcessError: If `rose suite-run` fails, as for a failed suite still running, once what
+                Rose wrote is logged. The experiments after it are not run, and a later call runs them.
         """
 
         # An experiment is only new as far as this manager knows: a status does not outlive the session, so
@@ -278,9 +650,14 @@ class CylcRoseManager(ProfilingManager[RoseSuiteConfiguration]):
             return
 
         for name, exp in to_run.items():
-            logger.info(f"Running experiment '{name}' via rose suite-run in '{exp.path}'.")
+            # The database of a failed run records the task that failed, and a run over it would still read as
+            # failed.
+            command = ["rose", "suite-run"]
+            if exp.status == ProfilingExperimentStatus.FAILED:
+                command.append("--new")
+            logger.info(f"Running experiment '{name}' via {' '.join(command)} in '{exp.path}'.")
             try:
-                result = subprocess.run(["rose", "suite-run"], cwd=exp.path, check=True, capture_output=True, text=True)
+                result = subprocess.run(command, cwd=exp.path, check=True, capture_output=True, text=True)
             except subprocess.CalledProcessError as e:
                 for line in e.stdout.splitlines():
                     logger.info(f"[{name}] {line}")
@@ -296,6 +673,9 @@ class CylcRoseManager(ProfilingManager[RoseSuiteConfiguration]):
     def _delete_experiments(self, names: list[str], dry_run: bool, **kwargs) -> None:
         """Deletes the experiment and run directories of Rose Cylc experiments.
 
+        A run directory that is a symbolic link, as `rose suite-run` makes it where the suite states a `root-dir`, is
+        deleted where the link leads, and then the link.
+
         Args:
             names (list[str]): Names of the experiments to delete.
             dry_run (bool): If True, logs what would be deleted without making any changes.
@@ -307,7 +687,13 @@ class CylcRoseManager(ProfilingManager[RoseSuiteConfiguration]):
             exp_path = exp.path
             run_path = exp.run_path
             if dry_run:
-                logger.info(f"Dry run: would delete experiment directory '{exp_path}' and run directory '{run_path}'.")
+                if run_path is None:
+                    run = "no run directory, since it has none"
+                elif run_path.is_symlink():
+                    run = f"run directory '{run_path.resolve()}', which '{run_path}' links to, and then the link"
+                else:
+                    run = f"run directory '{run_path}'"
+                logger.info(f"Dry run: would delete experiment directory '{exp_path}' and {run}.")
                 continue
             if exp_path.is_dir():
                 logger.info(f"Deleting experiment directory '{exp_path}'.")
@@ -315,7 +701,14 @@ class CylcRoseManager(ProfilingManager[RoseSuiteConfiguration]):
             else:
                 logger.warning(f"Experiment directory '{exp_path}' does not exist. Skipping deletion.")
             if run_path is not None:
-                if run_path.is_dir():
+                if run_path.is_symlink():
+                    target = run_path.resolve()
+                    if target.is_dir():
+                        logger.info(f"Deleting run directory '{target}', which '{run_path}' links to.")
+                        shutil.rmtree(target)
+                    logger.info(f"Deleting the link '{run_path}'.")
+                    run_path.unlink()
+                elif run_path.is_dir():
                     logger.info(f"Deleting run directory '{run_path}'.")
                     shutil.rmtree(run_path)
                 else:
@@ -352,9 +745,13 @@ class CylcRoseManager(ProfilingManager[RoseSuiteConfiguration]):
     def parse_status(self, path: Path, run_path: Path | None = None) -> ProfilingExperimentStatus | None:
         """Parses the state the tasks of a Rose Cylc suite reached.
 
-        Cylc records a run status per task attempt in the task_jobs table of the suite database: 0 where the
-        task succeeded, non-zero where it failed, and nothing at all while it is still going. A suite is done
-        once every task it has recorded has succeeded, and failed as soon as any of them has not.
+        Cylc records the state of each task in the task_states table of the suite database, and a run status per
+        attempt at it in the task_jobs table: 0 where the attempt succeeded, non-zero where it failed, and nothing
+        while it is still going or where its job could not be submitted. A suite has failed as soon as Cylc gives up
+        on one of its tasks, whose state is then `failed` or `submit-failed`. It is done once the latest attempt at
+        every task it has recorded has succeeded, and still running otherwise. An attempt that failed therefore fails
+        the suite only where Cylc does not run the task again, as it does where the suite sets `execution retry
+        delays`, and not at all where a later attempt succeeds.
 
         Args:
             path (Path): Path to the experiment directory. Unused: the database lives with the run.
@@ -376,7 +773,10 @@ class CylcRoseManager(ProfilingManager[RoseSuiteConfiguration]):
         # A connection used as a context manager only ends a transaction, so it is closed explicitly.
         try:
             with closing(sqlite3.connect(f"file:{cylcdb}?mode=ro", uri=True)) as connection:
-                statuses = [row[0] for row in connection.execute("SELECT run_status FROM task_jobs")]
+                states = {row[0] for row in connection.execute("SELECT status FROM task_states")}
+                # SQLite takes a column that is not aggregated from the row holding the maximum: the latest attempt.
+                latest = "SELECT run_status, MAX(submit_num) FROM task_jobs GROUP BY cycle, name"
+                statuses = [row[0] for row in connection.execute(latest)]
         except sqlite3.Error as error:
             logger.debug(f"Could not read task statuses from {cylcdb}: {error}.")
             return None
@@ -385,9 +785,9 @@ class CylcRoseManager(ProfilingManager[RoseSuiteConfiguration]):
             logger.debug(f"The Cylc suite database at {cylcdb} records no task yet.")
             return None
 
-        if any(status is not None and status != 0 for status in statuses):
+        if states & {"failed", "submit-failed"}:
             return ProfilingExperimentStatus.FAILED
-        if any(status is None for status in statuses):
+        if any(status != 0 for status in statuses):
             return ProfilingExperimentStatus.RUNNING
         return ProfilingExperimentStatus.DONE
 

@@ -79,7 +79,7 @@ src/access/profiling/
                         FixedRanksConstraint, payu_model_stdout
   payu_manager.py       PayuManager: experiment-generator, experiment-runner and Payu's job files
   rose_configuration.py RoseSuiteConfiguration, RoseComponent, RoseProcessGrid, RoseRanks, read_section
-  cylc_manager.py       CylcRoseManager: rose suite-run and the Cylc suite database
+  cylc_manager.py       CylcRoseManager: copies of the control suite, rose suite-run and the Cylc suite database
 
   ── models/: the ACCESS models, as data ──
   cice.py               CICEPartitioning: CICE's block distribution, for ESM1.6, OM2 and OM3 alike
@@ -185,7 +185,7 @@ blocks, one page per concept. A new module needs a block on the right page and a
   onwards (`_NUMBERED_NAME`), and an added one keeps the name it is given, which must be the name of one directory
   and may not be of that form (`_refuse_added_name`). The name
   is still the key of `experiments`, the experiment's branch and directory under `work_dir`, Payu's `experiment`,
-  and the name of its tarball.
+  the end of its Cylc suite's name, and the name of its tarball.
 - **What an experiment is, is in its record**, `<work_dir>/<name>/access-profiling.json` (`RECORD_FILENAME`), written
   when it is created or added and put first in its archive, so that it is read without extracting the rest. Beside
   the version of its format, it holds only what differs between experiments: `path`, `run_path`, `complete`,
@@ -228,6 +228,20 @@ blocks, one page per concept. A new module needs a block on the right page and a
   laboratory, so `PAYU_LAB_PATH` never reaches the PBS job: neither can replace the key. A set `PAYU_LAB_PATH` would
   override it on the login node only, so `_refuse_payu_lab_path` stops generating, running and deleting while it is set.
   `lab_dir` is needed to generate, not to read, archive or delete.
+- **A generated Cylc experiment is a copy of the control suite**, at `<work_dir>/<name>/<suite name>`, without `.git`
+  and `.svn` and with its links kept as links, but for a link naming a changed file (AM3's `rose-suite.conf`): that file
+  is read through the link and written in its place, with the permissions of the file the control's link leads to, since
+  nothing is ever written through a link. A link to a directory on the way is refused (`_source_file`). The suite is
+  named `<application name>-<8 hex digits of the working directory>-<name>` (`_suite_name`), since `rose suite-run`
+  names a suite after its directory and Cylc runs every suite of a user in `~/cylc-run/<suite name>`, which is the
+  experiment's `run_path`. `_edits` works out the text of every file a call changes and writes nothing: it is what
+  `_refuse_plans` checks and what `_create_experiments` writes, so the two cannot disagree, and `_refuse_plans` keeps it
+  (`_checked`) for `_create_experiments` to write, since a large `.conf` takes seconds to read. A `.conf` file is edited
+  with `RoseConfParser` (`{section: {key: value}}`, `""` for no section, an ignored setting enabled), any other by text
+  replacement, refused where the text does not occur. A regenerated experiment's `.conf` files are edited in its copy,
+  so that a correction made there by hand survives, and its other files are taken from the control again, since
+  replacing a text twice can apply it twice. A plan's walltime goes into the application's `walltime_variable`, and is
+  refused where there is none.
 - **No status is stored.** A new manager finds the experiments of `work_dir` again from their records, as NEW, or
   DONE where the record says `complete`, and the tarballs in `archive_dir`, as ARCHIVED, an archive replacing the
   experiment found in `work_dir`. A tarball it cannot read is skipped with a warning. Every other status is read
@@ -296,8 +310,8 @@ blocks, one page per concept. A new module needs a block on the right page and a
   `RoseSuiteConfiguration` writes and reads the layout of every suite from them, so a suite is a value, never a
   class. Its `parse_layout` is a true inverse of `config_changes`, process grids included, where a component states
   its `grid`; one without a grid is read but not searched for (CM3). A component lists every variable it reads
-  (`suite_variables`), and a configuration refuses a variable read for two settings, which would overwrite each
-  other. Rose files are read with `RoseConfParser` from access-config-utils, through `read_section`, which leaves out
+  (`suite_variables`), and a configuration refuses a variable used for two settings, its `walltime_variable`
+  included, which would overwrite each other. Rose files are read with `RoseConfParser` from access-config-utils, through `read_section`, which leaves out
   what Rose ignores (`!KEY`, `!!KEY`) and refuses a setting written both in use and ignored.
 - **Presets are module-level values with a docstring on the line after**, which is what puts them in the API
   reference. A model ships a preset per distinct layout, and a control source per configuration, beside the presets
@@ -319,17 +333,23 @@ blocks, one page per concept. A new module needs a block on the right page and a
 ### Outside the package
 
 - **The only commands run are `payu sweep --hard`, `rose suite-run` and `qstat -x -f -F json <job>`**, through
-  `subprocess.run`, and nothing calls git or the Cylc CLI. PBS's view of a job is the `qstat -f -F json` record Payu
-  keeps in its job files; PBS itself is asked only about a latest run whose job file records no verdict, to tell a
-  run still going from one PBS killed (`PayuManager._job_is_over`). That call has a timeout, and any failure to make
-  it reads as the run still going.
+  `subprocess.run`, and nothing calls git or the Cylc CLI. A failed suite retried is run with `rose suite-run --new`,
+  which deletes its run directory first, since the database of the failed run would still read as failed. Rose refuses a
+  suite still running, as a failed one usually is, so the user stops it with `cylc stop --kill` first, which
+  `run_experiments` and the Cylc Rose suites page say: running it here would be a fourth command. PBS's view of a job is
+  the `qstat -f -F json` record Payu keeps in its job files; PBS itself is asked only about a latest run whose job file
+  records no verdict, to tell a run still going from one PBS killed (`PayuManager._job_is_over`). That call has a
+  timeout, and any failure to make it reads as the run still going.
 - **A control source never fetches anything**; it records where a control is. Fetching is left to the runner, which
   keeps credential prompts out of this package (the module docstring of `control.py`). `clone_control` in
   `payu_manager` is the one explicit fetch, through experiment-generator, and makes the clone generation would make,
-  so that generation reuses it.
+  so that generation reuses it. `CylcRoseManager` copies a control already on disk, at the path of an
+  `ExistingDirectoryControlSource` or at `<work_dir>/<control.directory>`, and refuses to generate where it has no
+  `rose-suite.conf` (`_control_directory`).
 - **`from_control` reads the application's own files, never the engine's**: `config.yaml` and the CICE namelist for
   the submodel models, `nuopc.runconfig`, `ice_in` and `MOM_input` for OM3, by the Payu model types the control
-  names, and `app/um/rose-app.conf` for `am3_from_control`. It reproduces the preset of the same control (the OM3
+  names, and `app/um/rose-app.conf` for `am3_from_control`, with the optional configuration that `EXPT_HORIZ_ATM`
+  in `rose-suite.conf` selects (N512e states its grid there). It reproduces the preset of the same control (the OM3
   readers after the blocks `replace`), which the tests check.
 - **Logging** is `logging.getLogger(__name__)` in each module that logs, with no handlers and no `warnings.warn`: a
   warning to the user is a `logger.warning`. Tests assert on `caplog.text`, so rewording a message can fail one.
@@ -366,8 +386,10 @@ same second leaves the mutant's `.pyc` loaded.
 - **Fake the engine, keep the rest real.** Faked: experiment-generator and experiment-runner (their classes in
   `payu_manager`), `subprocess.run`, and the plotting functions `manager` calls. Real: the layout search, files
   under `tmp_path`, including Payu's job files (`write_job_file` and `pbs_job_info` in `test_payu_manager.py`), Cylc
-  suite databases written with `sqlite3`, and tarballs. A manager that generates, adds or deletes experiments
-  writes records and the study file, so its working directory is under `tmp_path` too.
+  suite databases written with `sqlite3`, control suites copied with `shutil` (`write_control` in
+  `test_cylc_manager.py`), and tarballs. A manager that generates, adds or deletes experiments writes records and
+  the study file, so its working directory is under `tmp_path` too, and a Cylc one runs its suites under a home
+  patched into `tmp_path` (the `home` fixture, patching `access.profiling.cylc_manager.Path.home`).
 - A stand-in is `mock.Mock(spec=...)`, as `fake_parser` in `conftest.py` is. `MagicMock(autospec=True)` only sets
   an attribute named `autospec`.
 - **Sample logs are inline**, as triple-quoted strings in module-scoped fixtures; there is no `tests/data/`. Module

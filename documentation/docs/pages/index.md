@@ -96,7 +96,8 @@ The package comes with everything needed to profile the [ACCESS climate models](
 - [Payu](access/payu.md): `PayuManager` generates the experiments with
   [experiment-generator](https://access-experiment-generator.access-hive.org.au/), and runs them with
   [experiment-runner](https://access-experiment-runner.access-hive.org.au/).
-- [Cylc and Rose](access/cylc-rose-suites.md): `CylcRoseManager` runs suites that you have prepared by hand.
+- [Cylc and Rose](access/cylc-rose-suites.md): `CylcRoseManager` generates the experiments as copies of a control
+  suite, and runs them with `rose suite-run`.
 
 ### Log formats
 
@@ -115,8 +116,8 @@ for the records Payu and Cylc keep of each run.
 | ACCESS-rAM3 | `RAM3` | Cylc and Rose |
 | ACCESS-CM3 | `CM3_O25KM` | Cylc and Rose |
 
-For the four Payu models, the package generates the experiments for you. For the other three, you prepare the
-suites by hand. In both cases the profiling data is parsed, plotted and compared in the same way. If you want to
+For all seven models, the package generates the experiments for you, and the profiling data is parsed, plotted and
+compared in the same way. If you want to
 profile another configuration of one of these models, you do not need to write any code:
 [ACCESS models](access/index.md) describes each preset and shows how. The
 [access-model-scaling](https://github.com/ACCESS-NRI/access-model-scaling) repository holds the scaling studies of

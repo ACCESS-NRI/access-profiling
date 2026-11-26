@@ -303,9 +303,10 @@ The arguments are:
 - `walltime`: the walltime of each experiment in hours, as a number or as a function of the number of nodes.
 - `allocations`: the allocation strategy, or a function of the number of nodes returning one.
 
-Any other argument is passed on to the workflow engine of the manager. For the Payu manager, this is
+Any other argument is passed on to the workflow engine of the manager. For both managers of the package, this is
 `control_options`, which is described in more detail in
-[Experiments with Payu](../access/payu.md#generating-the-experiments).
+[Experiments with Payu](../access/payu.md#generating-the-experiments) and in
+[Cylc Rose suites](../access/cylc-rose-suites.md#the-changes-of-an-experiment).
 
 The experiments now exist, with the status NEW, but nothing has been submitted yet. Note that you can call
 `generate_scaling_experiments` again without any risk: the experiments that already exist are skipped. This is
