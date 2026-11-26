@@ -4,6 +4,7 @@
 import hashlib
 import json
 import logging
+import shutil
 import sqlite3
 import subprocess
 from contextlib import closing
@@ -872,6 +873,67 @@ class TestChangingAFileNamedByALink:
         assert copy.read_text() == CONTROL_SITE_RC.replace("3600", "7200")
         assert copy.stat().st_mode & 0o777 == 0o755
         assert shared.read_text() == CONTROL_SITE_RC
+
+
+class TestTheEditsAreWorkedOutOnce:
+    """What `_refuse_plans` works out is what `_create_experiments` writes, since a large Rose configuration takes
+    seconds to read, as long as it is of the same call."""
+
+    @staticmethod
+    def plans(changes):
+        return [ExperimentPlan(name="exp-0001", layout=None, changes=changes, walltime_hours=None)]
+
+    def test_once_for_a_call(self, tmp_path, home):
+        manager = generating_manager(tmp_path)
+
+        with mock.patch.object(CylcRoseManager, "_edits", autospec=True, side_effect=CylcRoseManager._edits) as edits:
+            manager.generate_scaling_experiments([1.0], cores_per_node=4, walltime=2.0, allocations=WHOLE_BUDGET)
+
+        assert edits.call_count == 1
+        for experiment in manager.experiments.values():
+            assert read_section(experiment.path / "rose-suite.conf", "jinja2:suite.rc")["CLOCK"] == "'PT2H00M'"
+
+    @pytest.mark.parametrize(
+        ("differs", "expected"),
+        [
+            ("plans", ["walltime = 1800", "per_cpu=4"]),
+            ("control options", ["walltime = 7200", "per_cpu=2"]),
+            ("control", ["walltime = 7200", "per_cpu=4", "# another control"]),
+        ],
+    )
+    def test_again_for_anything_else(self, tmp_path, home, differs, expected):
+        """The hook can be called on its own, with what `_refuse_plans` did not check."""
+        manager = generating_manager(tmp_path)
+        plans = self.plans({"site/gadi.rc": {"3600": "7200"}})
+        options = {"site/gadi.rc": {"per_cpu=2": "per_cpu=4"}}
+        manager._refuse_plans(plans, control_options=options)
+        if differs == "plans":
+            plans = self.plans({"site/gadi.rc": {"3600": "1800"}})
+        elif differs == "control options":
+            options = None
+        else:
+            other = write_control(tmp_path / "other")
+            (other / "site/gadi.rc").write_text(CONTROL_SITE_RC + "# another control\n")
+            manager.control = ExistingDirectoryControlSource(other)
+
+        created = manager._create_experiments(plans, control_options=options)
+
+        site = (created["exp-0001"].path / "site/gadi.rc").read_text()
+        assert all(text in site for text in expected), site
+
+    def test_again_for_a_second_call_with_the_same_plans(self, tmp_path, home):
+        """From the files as they are by then."""
+        manager = generating_manager(tmp_path)
+        plans = self.plans({"site/gadi.rc": {"3600": "7200"}})
+        manager._refuse_plans(plans)
+        suite = manager._create_experiments(plans)["exp-0001"].path
+        shutil.rmtree(suite)
+        control_site = manager.work_dir / "config/site/gadi.rc"
+        control_site.write_text(control_site.read_text() + "# 3600 seconds\n")
+
+        manager._create_experiments(plans)
+
+        assert (suite / "site/gadi.rc").read_text().endswith("# 7200 seconds\n")
 
 
 class TestRefusedBeforeANumberIsTaken:

@@ -235,7 +235,8 @@ blocks, one page per concept. A new module needs a block on the right page and a
   named `<application name>-<8 hex digits of the working directory>-<name>` (`_suite_name`), since `rose suite-run`
   names a suite after its directory and Cylc runs every suite of a user in `~/cylc-run/<suite name>`, which is the
   experiment's `run_path`. `_edits` works out the text of every file a call changes and writes nothing: it is what
-  `_refuse_plans` checks and what `_create_experiments` writes, so the two cannot disagree. A `.conf` file is edited
+  `_refuse_plans` checks and what `_create_experiments` writes, so the two cannot disagree, and `_refuse_plans` keeps it
+  (`_checked`) for `_create_experiments` to write, since a large `.conf` takes seconds to read. A `.conf` file is edited
   with `RoseConfParser` (`{section: {key: value}}`, `""` for no section, an ignored setting enabled), any other by text
   replacement, refused where the text does not occur. A regenerated experiment's `.conf` files are edited in its copy,
   so that a correction made there by hand survives, and its other files are taken from the control again, since

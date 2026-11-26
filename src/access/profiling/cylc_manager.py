@@ -260,6 +260,11 @@ class CylcRoseManager(ProfilingManager[RoseSuiteConfiguration]):
             default) is enough to add, read and plot suites, but not to generate any.
     """
 
+    # The edits `_refuse_plans` worked out last, with the plans, the control options and the control directory they
+    # are of. `_generate` calls `_create_experiments` next with the same plans, which writes these rather than work
+    # them out again, since reading a large Rose configuration takes seconds: 20 for the UM app of ACCESS-AM3.
+    _checked: tuple[list[ExperimentPlan], dict | None, Path, dict[str, dict[str, str]]] | None = None
+
     def _control_directory(self) -> Path:
         """Returns the directory of the control suite, which every experiment is a copy of.
 
@@ -360,7 +365,7 @@ class CylcRoseManager(ProfilingManager[RoseSuiteConfiguration]):
         """Refuses the planned experiments whose changes could not be written into a copy of the control suite.
 
         Everything `_create_experiments` would write is worked out, and nothing is written, so that a call refused
-        here takes no number.
+        here takes no number. What is worked out is kept for `_create_experiments`, called next with the same plans.
 
         Args:
             plans (list[ExperimentPlan]): The experiments about to be created.
@@ -372,7 +377,8 @@ class CylcRoseManager(ProfilingManager[RoseSuiteConfiguration]):
         Raises:
             ValueError: For the reasons `_create_experiments` gives.
         """
-        self._edits(self._control_directory(), plans, control_options)
+        control_dir = self._control_directory()
+        self._checked = (plans, control_options, control_dir, self._edits(control_dir, plans, control_options))
 
     def _create_experiments(
         self, plans: list[ExperimentPlan], control_options: dict | None = None, **runner_options
@@ -396,7 +402,8 @@ class CylcRoseManager(ProfilingManager[RoseSuiteConfiguration]):
           that does not occur is refused.
 
         The control options are made first, then the plan's changes, and then its walltime, which is written into the
-        application's `walltime_variable` as an ISO 8601 duration.
+        application's `walltime_variable` as an ISO 8601 duration. What `_refuse_plans` worked out for these very
+        plans, with the same control options, is written as it is, and is otherwise worked out here.
 
         Args:
             plans (list[ExperimentPlan]): The experiments to create.
@@ -418,7 +425,12 @@ class CylcRoseManager(ProfilingManager[RoseSuiteConfiguration]):
             OSError: If a copy cannot be made, as where its directory exists already.
         """
         control_dir = self._control_directory()
-        edits = self._edits(control_dir, plans, control_options)
+        # Taken once, so that a later call with the same plans, the files having changed since, works them out again.
+        checked, self._checked = self._checked, None
+        if checked is not None and checked[0] is plans and checked[1:3] == (control_options, control_dir):
+            edits = checked[3]
+        else:
+            edits = self._edits(control_dir, plans, control_options)
         created = {}
         for plan in plans:
             if plan.regenerating:
