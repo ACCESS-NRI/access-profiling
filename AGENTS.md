@@ -334,10 +334,12 @@ blocks, one page per concept. A new module needs a block on the right page and a
 
 - **The only commands run are `payu sweep --hard`, `rose suite-run` and `qstat -x -f -F json <job>`**, through
   `subprocess.run`, and nothing calls git or the Cylc CLI. A failed suite retried is run with `rose suite-run --new`,
-  which deletes its run directory first, since the database of the failed run would still read as failed. PBS's view of a job is the `qstat -f -F json` record Payu
-  keeps in its job files; PBS itself is asked only about a latest run whose job file records no verdict, to tell a
-  run still going from one PBS killed (`PayuManager._job_is_over`). That call has a timeout, and any failure to make
-  it reads as the run still going.
+  which deletes its run directory first, since the database of the failed run would still read as failed. Rose refuses a
+  suite still running, as a failed one usually is, so the user stops it with `cylc stop --kill` first, which
+  `run_experiments` and the Cylc Rose suites page say: running it here would be a fourth command. PBS's view of a job is
+  the `qstat -f -F json` record Payu keeps in its job files; PBS itself is asked only about a latest run whose job file
+  records no verdict, to tell a run still going from one PBS killed (`PayuManager._job_is_over`). That call has a
+  timeout, and any failure to make it reads as the run still going.
 - **A control source never fetches anything**; it records where a control is. Fetching is left to the runner, which
   keeps credential prompts out of this package (the module docstring of `control.py`). `clone_control` in
   `payu_manager` is the one explicit fetch, through experiment-generator, and makes the clone generation would make,

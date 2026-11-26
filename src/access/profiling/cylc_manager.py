@@ -622,11 +622,17 @@ class CylcRoseManager(ProfilingManager[RoseSuiteConfiguration]):
 
         An experiment whose suite failed is run where retry_failed asks for it, with `rose suite-run --new`. This
         removes its run directory first, as `rose suite-clean` does, logs and database included, so that the suite
-        starts over and its status is that of the new run.
+        starts over and its status is that of the new run. Rose refuses a suite that is still running, which a
+        failed one usually is, since Cylc keeps it going for its failed task to be triggered again: it has to be
+        stopped first, with `cylc stop --kill <suite>`, which nothing here runs.
 
         Args:
             retry_failed (bool): Whether to run the experiments whose suites failed as well as the new ones.
                 False (the default) runs only the new ones.
+
+        Raises:
+            subprocess.CalledProcessError: If `rose suite-run` fails, as for a failed suite still running, once what
+                Rose wrote is logged. The experiments after it are not run, and a later call runs them.
         """
 
         # An experiment is only new as far as this manager knows: a status does not outlive the session, so

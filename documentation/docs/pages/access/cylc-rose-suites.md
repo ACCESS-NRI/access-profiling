@@ -318,6 +318,19 @@ To run the failed suites again, use `run_experiments(retry_failed=True)`. A fail
 suite starts again from the beginning, and that the logs and the database of the failed run are lost. Look at them
 before you run the suite again.
 
+A suite whose task failed is usually still running: Cylc keeps it going, and waits for the task to be triggered
+again. Rose refuses to run such a suite again. `run_experiments` then logs the message of Rose, which says that the
+suite `appears to be running`, and raises `CalledProcessError`. The suites after it are not run either, and a later
+call runs them. So stop each failed suite first, and wait until `cylc scan` no longer lists it. For example, for the
+first suite of our study:
+
+```bash
+cylc stop --kill n96e-541dd259-exp-0001
+cylc scan
+```
+
+The `--kill` option also kills the jobs of the suite that are still queued or running.
+
 If a run failed because of one of its changes, such as a walltime that was too short, correct it and create the
 failed experiments again, as
 [Managing experiments](../user-guide/managing-experiments.md#running-failed-experiments-again) describes. For
@@ -465,7 +478,7 @@ what changes it has.
 
 ## Troubleshooting
 
-These are the messages you may see when you generate the experiments of a suite, and what they mean:
+These are the messages you may see when you generate and run the experiments of a suite, and what they mean:
 
 | Message | What it means |
 |---|---|
@@ -476,6 +489,7 @@ These are the messages you may see when you generate the experiments of a suite,
 | `The changes set ... to ..., which is not a string. ...` | A value of a Rose configuration is given as a number. Give it as a string, as the file is to state it. |
 | `The changes name the file ..., which is reached through the symbolic link ... to a directory. ...` | Writing the file would change a file in the directory that the link leads to. Name the file through that directory instead, if it is in the suite. |
 | `The name of the application, '...', cannot begin the name of a suite, ...` | The name has a character that the name of a directory of a suite cannot have. Give the configuration another name. |
+| `[exp-...] [FAIL] Suite "..." appears to be running` | Cylc is still running the failed suite that you asked to run again. Stop it with `cylc stop --kill`, as in [Running failed suites again](#running-failed-suites-again). |
 
 ## Other suites
 
