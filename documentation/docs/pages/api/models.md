@@ -3,7 +3,8 @@
 The ACCESS models this package knows, and the presets it ships for them. Each preset is a value of an
 [application](applications.md) type. For the models run with Payu, this is one of the configuration classes on this
 page, which are put together from the components of the codes they run. For the Rose suites, it is
-[`RoseSuiteConfiguration`][access.profiling.rose_configuration.RoseSuiteConfiguration].
+[`RoseSuiteConfiguration`][access.profiling.rose_configuration.RoseSuiteConfiguration], put together from the
+Rose components on the [Cylc and Rose](cylc-rose.md) page.
 
 ::: access.profiling.models
 

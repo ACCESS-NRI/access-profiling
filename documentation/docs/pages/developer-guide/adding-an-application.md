@@ -22,8 +22,8 @@ and the components of the ACCESS codes are in
 Note that you do not need to write any code for a new configuration of an application that the package already
 supports: see [ACCESS models](../access/index.md) for the ACCESS models. The same is true for a new Rose suite,
 which is a
-[`RoseSuiteConfiguration`][access.profiling.rose_configuration.RoseSuiteConfiguration] value, as shown in
-[Cylc Rose suites](../access/cylc-rose-suites.md#other-suites).
+[`RoseSuiteConfiguration`][access.profiling.rose_configuration.RoseSuiteConfiguration] value, put together from
+the Rose components of the package, as shown in [Cylc Rose suites](../access/cylc-rose-suites.md#other-suites).
 
 ## The component
 

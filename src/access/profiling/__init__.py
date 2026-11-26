@@ -52,7 +52,7 @@ from access.profiling.payu_configuration import (
 from access.profiling.payu_manager import PayuManager
 from access.profiling.payujson_parser import PayuJSONProfilingParser
 from access.profiling.plotting_utils import RegionGroup
-from access.profiling.rose_configuration import RoseSuiteConfiguration
+from access.profiling.rose_configuration import RoseComponent, RoseProcessGrid, RoseRanks, RoseSuiteConfiguration
 from access.profiling.um_parser import UMProfilingParser, UMTotalRuntimeParser
 
 __all__ = [
@@ -92,6 +92,9 @@ __all__ = [
     "ProfilingMetric",
     "ProfilingParser",
     "RegionGroup",
+    "RoseComponent",
+    "RoseProcessGrid",
+    "RoseRanks",
     "RoseSuiteConfiguration",
     "SubmodelsConfiguration",
     "UMComponent",

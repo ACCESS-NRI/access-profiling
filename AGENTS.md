@@ -78,17 +78,19 @@ src/access/profiling/
   payu_configuration.py PayuConfiguration, SubmodelsConfiguration, PayuComponent, PlainComponent, PayuSubmodel,
                         FixedRanksConstraint, payu_model_stdout
   payu_manager.py       PayuManager: experiment-generator, experiment-runner and Payu's job files
-  rose_configuration.py RoseSuiteConfiguration
+  rose_configuration.py RoseSuiteConfiguration, RoseComponent, RoseProcessGrid, RoseRanks, read_section
   cylc_manager.py       CylcRoseManager: rose suite-run and the Cylc suite database
 
   ── models/: the ACCESS models, as data ──
   cice.py               CICEPartitioning: CICE's block distribution, for ESM1.6, OM2 and OM3 alike
-  components.py         UMComponent, MOM5Component, CICEComponent: the codes the Payu models are put together from
+  components.py         UMComponent, MOM5Component, CICEComponent: the codes the Payu models are put together from;
+                        UM_CONSTRAINTS, which the Rose suites share
   esm15.py              ESM15Configuration, ESM15_PREINDUSTRIAL, ESM15_HISTORICAL and their control sources
   esm16.py              ESM16Configuration, ESM16_PI_CONTROL, ESM16_AMIP and the control source
   om2.py                OM2Configuration, OM2_1DEG, OM2_025DEG, OM2_01DEG
   om3.py                OM3Configuration, OM3_MC_25KM and its control source, and the development configurations
-  um_suites.py          AM3_N96E, AM3_N512E, RAM3, CM3_O25KM, their control sources and UM_SUITE_PARSERS
+  um_suites.py          AM3_N96E, AM3_N512E, RAM3, CM3_O25KM, their control sources, am3_from_control and
+                        UM_SUITE_PARSERS
 
 documentation/          The MkDocs site, published on Read the Docs: pages in docs/pages/, figures drawn by
                         scripts/generate_figures.py
@@ -271,18 +273,32 @@ blocks, one page per concept. A new module needs a block on the right page and a
   way Payu does, with Payu's defaults copied into `_PAYU_DEFAULT_NODE_SIZE` and `_PAYU_DEFAULT_NCPUS` because Payu
   exposes them nowhere. They have to follow Payu if it changes them.
 - `CylcRoseManager` reads the `#PBS -l ncpus=` requests in the job scripts Cylc submitted, and takes the smallest
-  that covers the layout; when no job asked for that many, it reports the layout's own count.
+  that covers the layout; when no job asked for that many, it reports the layout's own count. Its layout is read from
+  the same file (`_suite_conf`, through `_parse_layout`): the run's `log/rose-suite-run.conf`, else the suite's
+  `rose-suite.conf`, so the two never disagree. That count is
+  `RoseSuiteConfiguration.occupied_cpus`: the components' counts added up, or the largest of them where the
+  components share the cores (`CoreSharing.SHARED`, rAM3's nests, each a job of its own). A process grid counts its
+  I/O server, which is never part of a layout.
 
 ### Applications
 
 - **An application is a frozen, keyword-only dataclass that validates on construction**, in `__post_init__`.
-  `name` is required and an empty one is rejected; every other field has a default. A variant is made with
+  `name` is required and an empty one is rejected; every other field has a default, but for the `model_name` and
+  the `components` of a `RoseSuiteConfiguration`, which are what a suite is. A variant is made with
   `dataclasses.replace`, which validates it again.
 - **A Payu model is put together from components** (`PayuComponent`): a component states what its own code
   decomposes, writes and logs, once, in `models/components.py`, and a configuration arranges components, deriving
   them from its fields (`ESM16Configuration.submodels`). `SubmodelsConfiguration` writes and reads the layout of
   every model Payu couples as submodels, so a model adds no code for that. A component's `name` and `token` are
   user-facing: the first keys allocation strategies, the second appears in every layout key.
+- **A Rose suite is put together from components of its own** (`RoseComponent`: `RoseProcessGrid`, `RoseRanks`),
+  since what one knows is which variables of `[jinja2:suite.rc]` in `rose-suite.conf` state its layout.
+  `RoseSuiteConfiguration` writes and reads the layout of every suite from them, so a suite is a value, never a
+  class. Its `parse_layout` is a true inverse of `config_changes`, process grids included, where a component states
+  its `grid`; one without a grid is read but not searched for (CM3). A component lists every variable it reads
+  (`suite_variables`), and a configuration refuses a variable read for two settings, which would overwrite each
+  other. Rose files are read with `RoseConfParser` from access-config-utils, through `read_section`, which leaves out
+  what Rose ignores (`!KEY`, `!!KEY`) and refuses a setting written both in use and ignored.
 - **Presets are module-level values with a docstring on the line after**, which is what puts them in the API
   reference. A model ships a preset per distinct layout, and a control source per configuration, beside the presets
   rather than on them: at the configuration's latest release tag, or at its `dev-*` branch while it has no release,
@@ -313,8 +329,8 @@ blocks, one page per concept. A new module needs a block on the right page and a
   so that generation reuses it.
 - **`from_control` reads the application's own files, never the engine's**: `config.yaml` and the CICE namelist for
   the submodel models, `nuopc.runconfig`, `ice_in` and `MOM_input` for OM3, by the Payu model types the control
-  names, and it reproduces the preset of the same control (the OM3 readers after the blocks `replace`), which the
-  tests check.
+  names, and `app/um/rose-app.conf` for `am3_from_control`. It reproduces the preset of the same control (the OM3
+  readers after the blocks `replace`), which the tests check.
 - **Logging** is `logging.getLogger(__name__)` in each module that logs, with no handlers and no `warnings.warn`: a
   warning to the user is a `logger.warning`. Tests assert on `caplog.text`, so rewording a message can fail one.
 
@@ -359,8 +375,8 @@ same second leaves the mutant's `.pyc` loaded.
 - **`conftest.py` has one fixture**, `close_figures`, which closes the figures every test drew. The rest are
   helpers, imported with `from conftest import ...`: those that narrow an optional result with an assertion message
   rather than an `AttributeError` (`component_of`, `layout_of`, `decomposition_of`, `grid_of`, `legend_labels`), and
-  those more than one module needs (`fake_parser`, and `select_layouts` for a Payu application). The import works
-  because `tests/` has no `__init__.py`: don't add one.
+  those more than one module needs (`fake_parser`, `select_layouts` for a Payu application, and `write_suite_conf`
+  for the variables of a Rose suite). The import works because `tests/` has no `__init__.py`: don't add one.
 - Newer files group tests in `class Test<Behaviour>:` blocks with no base class and no setup, the class docstring
   stating the behaviour. `pytest.raises` gets a `match=`. A test's docstring says what is checked and, where it is
   not obvious, why. Tests carry no type annotations.
@@ -454,7 +470,7 @@ top as its reader would before calling a change done.
   (`_create_experiments`, `_delete_experiments`), except `_metrics`, which a parser sets as a class attribute or in
   `__init__`. `_`-prefixed names are left out of the API reference, so the contracts table of the developer guide
   lists them all. A hook whose default suits an engine with nothing to add is not abstract (`_engine_record`,
-  `_refuse_plans`).
+  `_refuse_plans`, `_parse_layout`).
 - `documentation/` comes from the ACCESS-NRI template,
   [documentation-infra](https://github.com/ACCESS-NRI/documentation-infra), and is kept so that it can be updated
   from there: `hooks/`, `overrides/`, `docs/css/`, `docs/js/`, `docs/fontello/`, `docs/assets/logos/`,

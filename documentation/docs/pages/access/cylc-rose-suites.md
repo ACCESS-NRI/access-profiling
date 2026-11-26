@@ -10,12 +10,15 @@ profile another suite, see [Other suites](#other-suites).
 ## What is supported
 
 With [`CylcRoseManager`][access.profiling.cylc_manager.CylcRoseManager] you can register suites that are already
-in the working directory, run them, read their logs, plot and compare them, and archive and delete them. Two
-things are not possible. The manager cannot create experiments, because the package cannot search for layouts in
-a `rose-suite.conf`, or write changes into one. Both `generate_scaling_experiments` and `generate_experiments`
-therefore raise a `NotImplementedError`. It also cannot make the component scaling plot, which needs the layout of
-every experiment. For the same reason, tables and plots cannot use a quantity of the layout as a coordinate. They
-can use the labels that you give the suites.
+in the working directory, run them, read their logs, plot and compare them, and archive and delete them. The
+package also reads the layout of each suite from its configuration. This means that the component scaling plot
+works, and that tables and plots can use a quantity of the layout as a coordinate, as well as the labels that you
+give the suites. The package can also search for the layouts of ACCESS-AM3 and ACCESS-rAM3.
+
+One thing is not possible: the manager cannot create experiments, because nothing in the package writes changes
+into a suite. `generate_experiments` therefore raises a `NotImplementedError` whenever it has an experiment to
+create. `generate_scaling_experiments` raises it too, but only once it has searched for the layouts, which can take
+a while for a large number of cores.
 
 The manager works with Cylc 7 suites that are run with `rose suite-run`. It expects to find a `cylc-suite.db`
 database, the suite log in `log/suite/log`, and the job logs of every task in
@@ -57,8 +60,9 @@ Then get the suite into the working directory of the study:
 
 Each experiment is a copy of the suite, with a different layout in its `rose-suite.conf`. In ACCESS-AM3, the
 process grid of the atmosphere is set with two variables, `MAIN_ATM_PROCX` and `MAIN_ATM_PROCY`, which are both 24
-in `release-n96e-3.0`. In ACCESS-rAM3, it is set with one variable, `rg01_rs01_m01_nproc`, as two numbers
-separated by a comma. We make three ACCESS-AM3 experiments, each with a different process grid:
+in `release-n96e-3.0`. ACCESS-rAM3 has two nests, and the process grid of each is set with one variable,
+`rg01_rs01_m01_nproc` and `rg01_rs02_m01_nproc`, as two numbers separated by a comma. We make three ACCESS-AM3
+experiments, each with a different process grid:
 
 ```python
 import shutil
@@ -79,6 +83,31 @@ for nx, ny in [(12, 12), (16, 16), (24, 24)]:
 
 Remember to set `work_dir` to your own working directory. If your study needs other changes, such as the project
 that the jobs are charged to or the length of the run, make them in the same way.
+
+## Reading a configuration from its control
+
+The presets describe the released suites. If your ACCESS-AM3 suite is on a branch or a fork that they do not
+describe, you can read its configuration from the suite itself with
+[`am3_from_control`][access.profiling.models.um_suites.am3_from_control]. It reads the grid of the UM from the
+sizes that the UM reads itself, `global_row_length` and `global_rows` in the `[namelist:nlsizes]` section of
+`app/um/rose-app.conf`. For example, we read the configuration of the release that we cloned above:
+
+```python
+from access.profiling.models.um_suites import am3_from_control
+
+application = am3_from_control(release)
+print(application.name, application.components[0].grid.shape)
+```
+
+This prints:
+
+```
+n96e (192, 144)
+```
+
+The configuration is named after its resolution, `n96e` for a grid of 192 longitudes, so the suite of a release
+gives back its preset. To give it another name, pass `name`, as in `am3_from_control(release, name="n96e-amip")`.
+Nothing is fetched: the suite has to be on disk already.
 
 ## Registering the suites
 
@@ -128,6 +157,55 @@ the suite, with the run directory you gave. You therefore register each suite on
 later session finds the suites again from their records.
 [Managing experiments](../user-guide/managing-experiments.md#what-the-manager-keeps-on-disk) describes the record.
 
+## Searching for layouts
+
+We chose the process grids of our three suites by hand. For the next suites of a study, you can let the manager
+search for them with [`select_layouts`][access.profiling.manager.ProfilingManager.select_layouts], as
+[Finding the best layout](../user-guide/best-layout.md) describes. The UM of ACCESS-AM3 needs an even number of
+processes along x, and subdomains no more than four times as long as they are wide. An allocation strategy that
+gives the UM every core then leaves the process grid as the only choice. We search for the process grids of 576
+cores:
+
+```python
+from access.config.parallel_allocation_strategies import FixedAllocation, RootAllocation
+
+allocations = RootAllocation(subcomponents={"UM": FixedAllocation(core_fraction=1.0)})
+layouts = manager.select_layouts(576, allocations=allocations)
+for layout in layouts:
+    print(manager.application.layout_key(layout))
+```
+
+This prints:
+
+```
+am3-layout_n96e_atm_16x36
+am3-layout_n96e_atm_18x32
+am3-layout_n96e_atm_24x24
+am3-layout_n96e_atm_32x18
+am3-layout_n96e_atm_36x16
+am3-layout_n96e_atm_48x12
+```
+
+Each key names the process grid of the UM, and its threads where it runs more than one a rank. To run the UM with
+two threads a rank, give the allocation `thread_range=(2, 2)`. The values to write into the copy of a suite are
+given by [`config_changes`][access.profiling.rose_configuration.RoseSuiteConfiguration.config_changes]:
+
+```python
+print(manager.application.config_changes(layouts[0]))
+```
+
+This prints:
+
+```
+{'rose-suite.conf': {'jinja2:suite.rc': {'MAIN_ATM_PROCX': '16', 'MAIN_ATM_PROCY': '36', 'MAIN_OMPTHR_ATM': '1'}}}
+```
+
+Write them into the `[jinja2:suite.rc]` section of the copy, as in [Preparing the suites](#preparing-the-suites),
+and register it. The ranks of the I/O server are never part of a layout, so the suite keeps those of its control.
+For ACCESS-rAM3, each of the two nests is a component of its own, `UM rs01` and `UM rs02`. Each nest runs as a job
+of its own, so each can take every core: give both a `WholeRangeAllocation()`. The layouts of ACCESS-CM3 cannot be
+searched for, since its preset does not state the grid of its UM.
+
 ## Running the suites
 
 [`run_experiments`][access.profiling.cylc_manager.CylcRoseManager.run_experiments] runs every NEW suite with
@@ -156,12 +234,15 @@ run directory:
 
 How many CPUs did each experiment use? As for Payu, the answer is the number of CPUs that the job requested from
 PBS. This includes the cores that are left idle to fill whole nodes. To find it, the manager first works out how
-many CPUs the layout needs, from the `rose-suite.conf` that the run used. This is the product of the layout
-variables, plus the ranks of the I/O server, times the OpenMP threads of each rank. The cores of any other
-component that the suite names are then added, such as those of the ocean and the sea ice of ACCESS-CM3. Next,
-the manager looks at the job scripts that Cylc submitted, `log/job/<cycle>/<task>/NN/job`, and takes the smallest
-`#PBS -l ncpus` request that is large enough for the layout. If no job requested that many CPUs, the number of CPUs
-of the layout is used.
+many CPUs the layout needs, from the `[jinja2:suite.rc]` section of the configuration that the run used. This is
+the copy that `rose suite-run` keeps in the run directory, `log/rose-suite-run.conf`, or the `rose-suite.conf` of
+the suite if there is no such copy. The layout of the suite is read from the same file. For
+the UM, this is the product of the two extents of its process grid, plus the ranks of the I/O server, times the
+OpenMP threads of each rank. The ranks of any other component that the suite runs are then added, such as those of
+the ocean and the sea ice of ACCESS-CM3. The two nests of ACCESS-rAM3 run as jobs of their own, so that suite needs
+the CPUs of the larger nest. Next, the manager looks at the job scripts that Cylc submitted,
+`log/job/<cycle>/<task>/NN/job`, and takes the smallest `#PBS -l ncpus` request that is large enough for the
+layout. If no job requested that many CPUs, the number of CPUs of the layout is used.
 
 The scaling plot then works as for any other manager, as described in
 [Scaling studies](../user-guide/scaling-studies.md). For example, we plot the time that the `atmos_main` task of
@@ -176,11 +257,26 @@ groups = [
     RegionGroup(
         "cylc_tasks",
         ["atmos_main_cycle19820101T0000Z"],
+        component="UM",
         relabel={"atmos_main_cycle19820101T0000Z": "UM"},
     )
 ]
 fig = manager.plot_scaling_data(groups, tmax, xlabel="Cores")
 ```
+
+The group names the component of its regions, the UM. The logs of a suite do not say which component they belong
+to, so only the group can say it. The scaling plot does not need it, but the component scaling plot does: it plots
+each region against the cores of its component, which the manager reads from the layout of each suite. We plot the
+same task against the cores of the UM:
+
+```python
+fig = manager.plot_component_scaling_data(groups, tmax, xlabel="Cores of the UM")
+```
+
+The UM is the only component of ACCESS-AM3, so the two plots differ only where a job asked PBS for more cores than
+the UM puts to work. This is the case for a suite with an I/O server, and for a job that asked for whole nodes.
+For example, the 256 cores of our 16 by 16 suite are not a whole number of Gadi's nodes, of 48 or 104 cores, so a
+job of that suite that asked for whole nodes asked for more.
 
 If several suites use the same number of CPUs, select the best one first with
 [`select_best_experiments`](../user-guide/scaling-studies.md#selecting-the-best-layouts), as for any other manager.
@@ -188,16 +284,19 @@ You can also compare suites that differ in something other than their layout, su
 their I/O server. Register them in the same way and compare them region by region, as in
 [Comparing experiments](../user-guide/comparing-experiments.md).
 
-The manager cannot read the layout of a suite, but it knows the labels of each suite. To plot the time against
-the ranks of the atmosphere, we pass the key of the label to
-[`plot_metric`][access.profiling.manager.ProfilingManager.plot_metric]:
+The manager also knows the labels of each suite. To plot the time against the ranks of the atmosphere, we pass the
+key of the label to [`plot_metric`][access.profiling.manager.ProfilingManager.plot_metric]:
 
 ```python
 fig = manager.plot_metric(groups, tmax, "ranks", xlabel="Ranks of the atmosphere")
 ```
 
+A quantity of the layout works in the same way, without a label. For example,
+[`component_cores("UM")`][access.profiling.manager.component_cores] in place of `"ranks"` plots the time against
+the cores of the UM.
+
 [Configuration choices](../user-guide/configuration-choices.md#plotting-against-a-setting) describes this plot, and
-the tables that [`gather`][access.profiling.manager.ProfilingManager.gather] makes from the same labels.
+the tables that [`gather`][access.profiling.manager.ProfilingManager.gather] makes from the same coordinates.
 
 ## Archiving
 
@@ -208,26 +307,56 @@ directory of the suite, or outside its run directory, is left out.
 
 ## Other suites
 
-You can profile other suites without writing any code. All the package needs to know is which variables of the
-`rose-suite.conf` set the layout, and which parsers read the logs of the tasks. This is given as a
-[`RoseSuiteConfiguration`][access.profiling.rose_configuration.RoseSuiteConfiguration]. For example, for a suite
-that sets its process grid with `ATM_PROCX` and `ATM_PROCY`, and its OpenMP threads with `ATM_OMPTHR`:
+You can profile other suites without writing any code. All the package needs to know is which codes the suite
+runs, which variables of its `rose-suite.conf` set the layout of each, and which parsers read the logs of its
+tasks. This is given as a [`RoseSuiteConfiguration`][access.profiling.rose_configuration.RoseSuiteConfiguration],
+put together from one component for each code. For example, for a suite that runs one UM over a grid of 192 by 144
+points, and sets its process grid with `ATM_PROCX` and `ATM_PROCY` and its OpenMP threads with `ATM_OMPTHR`:
 
 ```python
-from access.profiling import RoseSuiteConfiguration
+from access.config.parallel_domain import Domain
+
+from access.profiling import RoseProcessGrid, RoseSuiteConfiguration
+from access.profiling.models.components import UM_CONSTRAINTS
 from access.profiling.models.um_suites import UM_SUITE_PARSERS
 
 MY_SUITE = RoseSuiteConfiguration(
     name="my-suite",
-    layout_variable=("ATM_PROCX", "ATM_PROCY"),
+    model_name="My model",
+    components=(
+        RoseProcessGrid(
+            name="UM",
+            token="atm",
+            variables=("ATM_PROCX", "ATM_PROCY"),
+            grid=Domain((192, 144)),
+            threads_variable="ATM_OMPTHR",
+            local_constraints=UM_CONSTRAINTS,
+        ),
+    ),
     parsers=UM_SUITE_PARSERS,
-    cpus_per_proc_variable="ATM_OMPTHR",
 )
 ```
 
-`layout_variable` is either the names of the two variables that set the process grid, or the name of the single
-variable that sets both numbers, separated by a comma. If the suite has variables for the OpenMP threads and for
-the ranks of the I/O server, give their names as `cpus_per_proc_variable` and `io_server_variable`. If the suite
-runs other components beside the atmosphere, give the names of the variables with their cores as
-`extra_cpus_variables`, as [`CM3_O25KM`][access.profiling.models.um_suites.CM3_O25KM] does for the ocean and the
-sea ice of ACCESS-CM3.
+A [`RoseProcessGrid`][access.profiling.rose_configuration.RoseProcessGrid] is a code that divides a grid among its
+ranks along a process grid, as the UM does. Its fields are:
+
+- `name`, the name of the component in allocation strategies and in a `RegionGroup`;
+- `token`, its short name in the key of each layout, which identifies the experiments of a study, so do not change
+  it once a study has experiments;
+- `variables`, either the names of the two variables that set the process grid, or the name of the single variable
+  that sets both numbers, separated by a comma;
+- `grid`, the grid that the code divides. Without one, the layout of a suite is still read, but cannot be searched
+  for;
+- `threads_variable` and `io_server_variable`, the variables that set the OpenMP threads of each rank and the ranks
+  of the I/O server, if the suite has them. Without a threads variable, every rank runs one thread;
+- `local_constraints`, the rules that every layout of the code follows.
+  [`UM_CONSTRAINTS`][access.profiling.models.components.UM_CONSTRAINTS] are the UM's: an even number of processes
+  along x, and subdomains no more than four times as long as they are wide.
+
+A code that is given a number of ranks and nothing else is a
+[`RoseRanks`][access.profiling.rose_configuration.RoseRanks], with the name of its variable. This is how
+[`CM3_O25KM`][access.profiling.models.um_suites.CM3_O25KM] gives their cores to the ocean and the sea ice of
+ACCESS-CM3. The components of a suite run side by side, each on cores of its own, and their cores add up. If they
+run instead as jobs of their own, one after the other, they share the cores: pass
+`core_sharing=CoreSharing.SHARED`, with `CoreSharing` from `access.config.parallel_component`, as
+[`RAM3`][access.profiling.models.um_suites.RAM3] does for its two nests.

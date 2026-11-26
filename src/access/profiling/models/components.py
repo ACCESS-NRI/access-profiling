@@ -8,6 +8,9 @@ A component is one code as the ACCESS models configure it: the UM decomposing it
 ACCESS-ESM1.6 and ACCESS-OM2 share them, each pairing them with the submodels its control declares, and
 ACCESS-OM3 runs CICE6 through the same CICE component. What a component writes is what its own code reads,
 whichever model it is coupled into, which is why each is described once here rather than once per model.
+
+What every layout of the UM meets, `UM_CONSTRAINTS`, is stated here once too, and shared with the Rose suites of
+`access.profiling.models.um_suites`, which run the UM in components of their own.
 """
 
 from dataclasses import dataclass
@@ -33,6 +36,16 @@ MAX_SUBDOMAIN_ASPECT_RATIO: float = 4.0
 This bounds what counts as a reasonable layout at all, rather than the tolerances of any particular study.
 Constraints are cumulative and a caller can only tighten them, so it is set loosely: a study that wants near-square
 subdomains says so in its own allocation strategy.
+"""
+
+UM_CONSTRAINTS: tuple[LocalConstraint, ...] = (
+    ProcessGridDimEvenConstraint(dim=0),
+    SubdomainAspectRatioConstraint(max_ratio=MAX_SUBDOMAIN_ASPECT_RATIO),
+)
+"""What every layout of the UM meets, whichever engine runs it: an even number of processes along x, and subdomains
+no more elongated than `MAX_SUBDOMAIN_ASPECT_RATIO`.
+
+`UMComponent` states them for the Payu models, and the Rose suites of `access.profiling.models.um_suites` for theirs.
 """
 
 # Where Payu's drivers of the UM and of MOM5 read their files, relative to the control directory: the files are
@@ -88,10 +101,7 @@ class UMComponent(PayuComponent):
 
     @property
     def local_constraints(self) -> tuple[LocalConstraint, ...]:
-        return (
-            ProcessGridDimEvenConstraint(dim=0),
-            SubdomainAspectRatioConstraint(max_ratio=MAX_SUBDOMAIN_ASPECT_RATIO),
-        )
+        return UM_CONSTRAINTS
 
     @property
     def logs(self) -> tuple[LogSpec, ...]:

@@ -17,6 +17,8 @@ import subprocess
 from contextlib import closing
 from pathlib import Path
 
+from access.config.parallel_component import ComponentLayout
+
 from access.profiling.cylc_parser import CylcDBReader, CylcProfilingParser
 from access.profiling.experiment import (
     ExperimentPlan,
@@ -25,7 +27,7 @@ from access.profiling.experiment import (
     ProfilingLog,
 )
 from access.profiling.manager import ProfilingManager
-from access.profiling.rose_configuration import RoseSuiteConfiguration
+from access.profiling.rose_configuration import SUITE_CONF, RoseSuiteConfiguration
 
 logger = logging.getLogger(__name__)
 
@@ -37,9 +39,9 @@ _PBS_NCPUS = re.compile(r"^#PBS\s+-l\s+(?:[^\s,]+,)*ncpus=(?P<ncpus>\d+)\b", re.
 class CylcRoseManager(ProfilingManager[RoseSuiteConfiguration]):
     """Profiling of any application driven by a Cylc Rose suite, such as the ACCESS models.
 
-    One class for every rose suite: what tells ACCESS-AM3 from ACCESS-rAM3 is the names their
-    `rose-suite.conf` files give the variables stating their parallelism, and which parsers read their task
-    logs, both of which arrive as a RoseSuiteConfiguration. What is written here is the engine - `rose
+    One class for every rose suite: what tells ACCESS-AM3 from ACCESS-rAM3 is the components they run, the
+    variables of their `rose-suite.conf` that state the parallelism of each, and which parsers read their task
+    logs, all of which arrive as a RoseSuiteConfiguration. What is written here is the engine - `rose
     suite-run`, the Cylc run directory and the suite database the scheduler writes - and none of it is any one
     suite's.
 
@@ -74,9 +76,12 @@ class CylcRoseManager(ProfilingManager[RoseSuiteConfiguration]):
                 callers may pass options other runners take.
 
         Raises:
-            NotImplementedError: Always. generate_experiments gets here, through `_refuse_plans`, with choices
-                that have no layout. generate_scaling_experiments does not, the configuration refusing the
-                layout search first.
+            NotImplementedError: Always. generate_experiments gets here, through `_refuse_plans`, whenever it has an
+                experiment to create, and before the study takes a number for it. generate_scaling_experiments
+                gets here only once its layout search has found a layout, which takes as long as the search does.
+                Where the search finds none, it logs a warning and generates nothing, and for a configuration
+                whose components state no grid to search, as `CM3_O25KM`, it raises the `ValueError` of
+                `parallel_component` instead.
         """
         raise NotImplementedError(
             "Generating experiments is not supported for Cylc Rose suites yet: nothing here writes a change into "
@@ -107,7 +112,8 @@ class CylcRoseManager(ProfilingManager[RoseSuiteConfiguration]):
 
         Raises:
             FileNotFoundError: If neither configuration file exists.
-            ValueError: If a variable the configuration names is not set in the file that was found.
+            ValueError: If the file that was found has no `[jinja2:suite.rc]` section, or if a variable the
+                configuration names is not set in it.
         """
         layout_cpus = self._layout_ncpus(path, run_path)
         if run_path is None:
@@ -154,31 +160,60 @@ class CylcRoseManager(ProfilingManager[RoseSuiteConfiguration]):
 
         Raises:
             FileNotFoundError: If neither configuration file exists.
-            ValueError: If a variable the configuration names is not set in the file that was found.
+            ValueError: If the file that was found has no `[jinja2:suite.rc]` section, or if a variable the
+                configuration names is not set in it.
         """
-        # both the run and original config will store cpu information
+        return self.application.occupied_cpus(self._suite_conf(path, run_path))
+
+    def _parse_layout(self, path: Path, run_path: Path | None) -> ComponentLayout | None:
+        """Returns the layout a suite ran, from the same file as its CPU count.
+
+        That is the configuration the run recorded, where there is one, since it says what the run used, with the
+        values `rose suite-run` was given and the optional configurations it applied. Otherwise it is the suite's
+        own `rose-suite.conf`. The layout and the CPU count of a suite therefore never disagree.
+
+        Args:
+            path (Path): Path to the experiment directory.
+            run_path (Path | None): Optional path to a separate runs directory, whose run configuration is
+                preferred.
+
+        Returns:
+            ComponentLayout | None: The layout, or None if the variables give no component any cores.
+
+        Raises:
+            FileNotFoundError: If neither configuration file exists.
+            ValueError: If the file that was found has no `[jinja2:suite.rc]` section, or if a variable the
+                configuration names is not set in it.
+        """
+        return self.application.read_layout(self._suite_conf(path, run_path))
+
+    @staticmethod
+    def _suite_conf(path: Path, run_path: Path | None) -> Path:
+        """Returns the file the variables of a suite are read from.
+
+        Both the run and the suite state them: `log/rose-suite-run.conf`, which `rose suite-run` writes into the run
+        directory, is preferred, being what the run used.
+
+        Args:
+            path (Path): Path to the experiment directory.
+            run_path (Path | None): Optional path to a separate runs directory.
+
+        Returns:
+            Path: The run's configuration, if it is there, or else the suite's `rose-suite.conf`.
+
+        Raises:
+            FileNotFoundError: If neither configuration file exists.
+        """
         config_paths = []
         if run_path is not None:
             config_paths.append(run_path / "log/rose-suite-run.conf")
-        config_paths.append(path / "rose-suite.conf")
+        config_paths.append(path / SUITE_CONF)
 
         config_path = next((candidate for candidate in config_paths if candidate.is_file()), None)
         if config_path is None:
             tried = ", ".join(str(p) for p in config_paths)
             raise FileNotFoundError(f"Could not find suitable config file. Tried: {tried}")
-
-        return self.application.occupied_cpus(self._parse_rose_conf(config_path), source=str(config_path))
-
-    # TODO: use "real" parser from access-config-utils once implemented.
-    @staticmethod
-    def _parse_rose_conf(config_path: Path) -> dict[str, str]:
-        """Parses a rose-suite.conf-style file into a dict mapping variable name to its raw string value."""
-        config = {}
-        for line in config_path.read_text().splitlines():
-            if not line.startswith("!!") and "=" in line:
-                key, value = line.split("=", 1)
-                config[key.strip()] = value.strip()
-        return config
+        return config_path
 
     def add_rose_experiment(self, rose: str, run_path: Path | None = None, labels: dict | None = None) -> None:
         """Adds the given rose as an experiment to this manager.
