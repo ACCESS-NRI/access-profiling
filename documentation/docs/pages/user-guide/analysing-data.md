@@ -151,7 +151,7 @@ import matplotlib.pyplot as plt
 
 fig, (left, right) = plt.subplots(1, 2, figsize=(16, 6))
 two.plot_bar_chart(regions[0], ax=left)
-two.plot_bar_chart(regions[1:], ax=right)
+two.plot_bar_chart(regions[1:], ax=right);
 ```
 
 The scaling plot is the exception. It draws the speedup, the efficiency and a table of the timings on a figure of

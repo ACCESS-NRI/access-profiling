@@ -1896,6 +1896,18 @@ class TestScalingSeries:
         ):
             study.plot_scaling_data(Region("component", "Region 1"), series="blocks", metric=tavg)
 
+    def test_the_hint_for_a_quantity_of_the_layout_works(self):
+        """per= reads a string as the key of a label, so the hint names the coordinate itself, which works."""
+        study = self.study_of_two_settings()
+        for name in study.experiments:
+            study.experiments[name].layout = layout_with(component=24)
+        series = component_cores("component")
+
+        with pytest.raises(ValueError, match="per=\\['ncpus', series\\], series being the coordinate given to this"):
+            study.plot_scaling_data(Region("component", "Region 1"), series=series, metric=tavg)
+        best = study.select_best_experiments(by=Region("component", "Region 1"), per=["ncpus", series], metric=tavg)
+        assert list(best.experiments) == ["exp-0003", "exp-0004"]
+
     @mock.patch("matplotlib.pyplot.show", autospec=True)
     def test_it_returns_the_axes_of_the_speedup_and_of_the_efficiency(self, mock_show):
         speedup, efficiency = self.study_of_two_settings().plot_scaling_data(

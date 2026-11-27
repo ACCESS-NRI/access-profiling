@@ -794,8 +794,9 @@ class ProfilingResults:
         Raises:
             ValueError: If these results hold no experiments, if one has no data for the log, the region or the
                 metric of a region, if two regions have the same label, if the profiling data still has a 'run'
-                dimension, if two values of `series` are shown alike, or if several of the experiments of one
-                series use the same number of CPUs.
+                dimension, if an experiment has no such label as `series` or the label is a list or a mapping, if an
+                experiment's layout cannot be told or does not have the quantity, if two values of `series` are shown
+                alike, or if several of the experiments of one series use the same number of CPUs.
         """
         listed = _region_list(regions)
         exp_names = self._names()
@@ -813,7 +814,14 @@ class ProfilingResults:
             duplicated_ncpus = sorted({n for n in cpu_counts if cpu_counts.count(n) > 1})
             if duplicated_ncpus:
                 within = "" if series is None else f" with '{_coordinate_name(series)}' {key}"
-                per = "" if series is None else f", with per=['ncpus', {_coordinate_name(series)!r}]"
+                # A label is named by its key, which per= takes as it is; a quantity of the layout is named by the
+                # coordinate itself, since per= reads a string as the key of a label.
+                if series is None:
+                    per = ""
+                elif isinstance(series, str):
+                    per = f", with per=['ncpus', {series!r}]"
+                else:
+                    per = ", with per=['ncpus', series], series being the coordinate given to this plot"
                 raise ValueError(
                     f"Several experiments{within} use the same number of CPUs {duplicated_ncpus}, which makes speedup "
                     "and efficiency ill-defined. Use select_best_experiments() to keep only the best performing "
