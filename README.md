@@ -81,7 +81,7 @@ cores it has in the release, on five nodes of 104 cores:
 ```python
 from pathlib import Path
 
-from access.config.parallel_allocation_strategies import FixedAllocation, RootAllocation
+from access.config import FixedAllocation, RootAllocation
 
 from access.profiling import PayuManager
 from access.profiling.models.esm16 import ESM16_PI_CONTROL, ESM16_PI_CONTROL_CORES, ESM16_PI_CONTROL_SOURCE

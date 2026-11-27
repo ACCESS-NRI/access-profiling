@@ -115,17 +115,9 @@ First we need the layout. We take the one of the control, which gives the ocean 
 the data atmosphere, the sea ice and the data runoff take turns on 24 more:
 
 ```python
-from access.config.parallel_allocation_strategies import FixedAllocation, RootAllocation, WholeRangeAllocation
+from access.config import FixedAllocation, RootAllocation
 
-released = RootAllocation(
-    subcomponents={
-        "ocn": FixedAllocation(288),
-        "shared": FixedAllocation(
-            24,
-            subcomponents={name: WholeRangeAllocation() for name in ("cpl", "atm", "ice", "rof")},
-        ),
-    }
-)
+released = RootAllocation(subcomponents={"ocn": FixedAllocation(288), "shared": FixedAllocation(24)})
 (layout,) = manager.select_layouts(3 * 104, allocations=released)
 print(manager.application.layout_key(layout))
 ```

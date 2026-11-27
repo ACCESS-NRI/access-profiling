@@ -15,7 +15,7 @@ regions](analysing-data.md#choosing-the-regions). The figure is drawn from synth
     fixed, so the only thing that changes from one layout to the next is the process grid of each component:
 
     ```python
-    from access.config.parallel_allocation_strategies import FixedAllocation, RootAllocation
+    from access.config import FixedAllocation, RootAllocation
 
     from access.profiling.models.esm16 import ESM16_PI_CONTROL_CORES
 

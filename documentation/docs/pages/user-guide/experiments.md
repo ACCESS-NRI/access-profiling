@@ -107,8 +107,7 @@ strategy usually works for all the sizes of a study. These are the strategies we
 === "ACCESS-ESM1.6"
 
     ```python
-    from access.config.parallel_allocation_strategies import FreeAllocation, RootAllocation
-    from access.config.parallel_constraints import SubdomainAspectRatioConstraint
+    from access.config import FreeAllocation, RootAllocation, SubdomainAspectRatioConstraint
 
     from access.profiling.models.esm16 import ESM16_PI_CONTROL_CORES
 
@@ -144,8 +143,12 @@ strategy usually works for all the sizes of a study. These are the strategies we
 === "ACCESS-OM3"
 
     ```python
-    from access.config.parallel_allocation_strategies import FreeAllocation, RootAllocation, WholeRangeAllocation
-    from access.config.parallel_constraints import MaxWastedCoreFractionConstraint, RankRatioGroupConstraint
+    from access.config import (
+        FreeAllocation,
+        MaxWastedCoreFractionConstraint,
+        RankRatioGroupConstraint,
+        RootAllocation,
+    )
 
 
     def allocations(num_nodes):
@@ -154,16 +157,7 @@ strategy usually works for all the sizes of a study. These are the strategies we
         return RootAllocation(
             subcomponents={
                 "ocn": FreeAllocation(min_core_fraction=0.85, core_step=step),
-                "shared": FreeAllocation(
-                    min_core_fraction=0.05,
-                    core_step=step,
-                    subcomponents={
-                        "cpl": WholeRangeAllocation(),
-                        "atm": WholeRangeAllocation(),
-                        "ice": WholeRangeAllocation(),
-                        "rof": WholeRangeAllocation(),
-                    },
-                ),
+                "shared": FreeAllocation(min_core_fraction=0.05, core_step=step),
             },
             local_constraints=(MaxWastedCoreFractionConstraint(max_fraction=0.01),),
             group_constraints=(
@@ -176,7 +170,9 @@ strategy usually works for all the sizes of a study. These are the strategies we
     In ACCESS-OM3, the mediator, the data atmosphere, the sea ice and the data runoff take turns on the same
     cores, which are called `shared` here. The ocean runs next to them on cores of its own. With this strategy,
     the ocean gets at least 85% of the cores, and nine to ten times as many as the shared components. Each shared
-    component uses all the shared cores, and at most 1% of the cores are left idle. `core_step` only allows
+    component uses all the shared cores, and at most 1% of the cores are left idle. The shared components need no
+    strategy of their own for this: a component that the strategy leaves out takes all the cores of a shared
+    parent, and any number of the cores of another parent. `core_step` only allows
     numbers of cores that are multiples of 2, 5 or 15, which reduces the number of layouts for the larger sizes.
     Note that the step depends on the number of nodes, which is why the strategy is a function.
 

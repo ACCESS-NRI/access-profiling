@@ -143,7 +143,7 @@ gives the UM every core then leaves the process grid as the only choice. We sear
 cores:
 
 ```python
-from access.config.parallel_allocation_strategies import FixedAllocation, RootAllocation
+from access.config import FixedAllocation, RootAllocation
 
 allocations = RootAllocation(subcomponents={"UM": FixedAllocation(core_fraction=1.0)})
 layouts = manager.select_layouts(576, allocations=allocations)
@@ -178,8 +178,9 @@ This prints:
 
 The ranks of the I/O server are never part of a layout, so every copy keeps those of the control. For ACCESS-rAM3,
 each of the two nests is a component of its own, `UM rs01` and `UM rs02`. Each nest runs as a job of its own, so
-each can take every core: give both a `WholeRangeAllocation()`. The layouts of ACCESS-CM3 cannot be searched for,
-since its preset does not state the grid of its UM.
+each can take every core. A strategy that leaves both out gives them every core, which is the default for the
+components of a parent whose components share its cores. The layouts of ACCESS-CM3 cannot be searched for, since its
+preset does not state the grid of its UM.
 
 ## Generating the experiments
 
@@ -260,8 +261,6 @@ returns. The walltime is then a text to replace, among the control options. For 
 as in [Getting the control suite](#getting-the-control-suite):
 
 ```python
-from access.config.parallel_allocation_strategies import WholeRangeAllocation
-
 from access.profiling import ConfigurationChoice, ExistingDirectoryControlSource
 from access.profiling.models.um_suites import RAM3
 
@@ -272,8 +271,7 @@ ram3 = CylcRoseManager(
     control=ExistingDirectoryControlSource(Path.home() / "roses" / "u-by395"),
     control_options={"site/nci-gadi/suite-adds.rc": {"-l walltime = 3600": "-l walltime = 6:0:0"}},
 )
-allocations = RootAllocation(subcomponents={"UM rs01": WholeRangeAllocation(), "UM rs02": WholeRangeAllocation()})
-layouts = ram3.select_layouts(576, allocations=allocations)
+layouts = ram3.select_layouts(576, allocations=RootAllocation())
 ram3.generate(ram3.plan_experiments([ConfigurationChoice(layout=layout) for layout in layouts]))
 ```
 

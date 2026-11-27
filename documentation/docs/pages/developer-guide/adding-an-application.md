@@ -161,8 +161,7 @@ setup:
 ```python
 from pathlib import Path
 
-from access.config.parallel_allocation_strategies import FreeAllocation, RootAllocation
-from access.config.parallel_constraints import SubdomainAspectRatioConstraint
+from access.config import FreeAllocation, RootAllocation, SubdomainAspectRatioConstraint
 
 from access.profiling import GitControlSource, PayuManager
 

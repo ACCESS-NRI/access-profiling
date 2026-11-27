@@ -99,8 +99,7 @@ in the release, to within 5%, or 25% for the sea ice. We also ask for the subdom
 to be close to square:
 
 ```python
-from access.config.parallel_allocation_strategies import FreeAllocation, RootAllocation
-from access.config.parallel_constraints import SubdomainAspectRatioConstraint
+from access.config import FreeAllocation, RootAllocation, SubdomainAspectRatioConstraint
 
 from access.profiling.models.esm16 import ESM16_PI_CONTROL_CORES
 

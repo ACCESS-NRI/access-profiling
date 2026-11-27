@@ -47,8 +47,7 @@ project.
 The first cell imports what the notebook uses, and records the versions it runs with:
 
 ```python
-from access.config.parallel_allocation_strategies import FreeAllocation, RootAllocation, WholeRangeAllocation
-from access.config.parallel_constraints import MaxWastedCoreFractionConstraint, RankRatioGroupConstraint
+from access.config import FreeAllocation, MaxWastedCoreFractionConstraint, RankRatioGroupConstraint, RootAllocation
 
 from access.profiling import PayuManager, Region, show_versions
 from access.profiling.models.om3 import OM3_MC_100KM, OM3_MC_100KM_JRA_RYF_SOURCE
@@ -71,17 +70,15 @@ manager = PayuManager(
 manager
 ```
 
-The allocation strategy says how many cores each component may get, and which layouts to leave out:
+The allocation strategy says how many cores each component may get, and which layouts to leave out. A component
+that it leaves out takes all the cores of a shared parent, as the components under `shared` do here, and any number
+of the cores of another parent:
 
 ```python
 allocations = RootAllocation(
     subcomponents={
         "ocn": FreeAllocation(min_core_fraction=0.85, core_step=8),
-        "shared": FreeAllocation(
-            min_core_fraction=0.05,
-            core_step=8,
-            subcomponents={name: WholeRangeAllocation() for name in ("cpl", "atm", "ice", "rof")},
-        ),
+        "shared": FreeAllocation(min_core_fraction=0.05, core_step=8),
     },
     local_constraints=(MaxWastedCoreFractionConstraint(max_fraction=0.01),),
     group_constraints=(RankRatioGroupConstraint(name_a="ocn", name_b="shared", min_ratio=9.0),),
