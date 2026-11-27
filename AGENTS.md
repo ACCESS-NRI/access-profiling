@@ -186,20 +186,21 @@ blocks, one page per concept. A new module needs a block on the right page and a
   shown alike are refused. Where several experiments share a point, it keeps the fastest of them, region by region,
   passing over NaN, and reports them at INFO, as `plot_component_scaling_data` does. It has linear axes and no ideal
   line, since x need not be a number of cores.
-- **`table` pivots what `gather` collects, and never picks between experiments.** Its rows are sorted, as
-  `plot_metric` sorts x, and its columns keep the order of the group and of the experiments, as `plot_metric` orders
-  its series. Two experiments in one cell raise, naming them, rather than one being kept, and so do two regions of
-  the group with one label. The column of values is keyed by the metric, which no coordinate's name can equal. A
-  table holds numbers, not quantities, so it names the units of the metric in `attrs["units"]`.
+- **`table` pivots what `gather` collects, and never picks between experiments.** Its rows are sorted, as `plot_metric`
+  sorts x, and its columns keep the order of the regions and of the experiments, as `plot_metric` orders its series. Two
+  experiments in one cell raise, naming them, rather than one being kept, and so do two regions with one label. The
+  column of values is keyed by the metric, which no coordinate's name can equal. A table holds numbers, not quantities,
+  so it names the units of the metric in `attrs["units"]`.
 - **A reader is given `Region`s, one or several, never names.** A region is one region of one log, under a label
   that is its name unless it is given one, and the regions of one reader must have labels of their own
   (`_region_list`). Regions of several logs are read together, keeping the metrics every one of their logs has
   (`_region_data`), and a reader of one metric names the log that lacks it. The metric is `tmax` unless one is given.
 - **Experiments are picked out and named by coordinates too.** `select_experiments` returns results holding, of the
   experiments of the results, those with one of some values of a coordinate, in the order of the results, and
-  `select_best_experiments` the best of each value of `per`. No reader takes a list of names. An experiment without
-  the label is not one of them, but a label that none of them has is refused. `plot_bar_chart(label=...)` names each experiment's bars
-  `<name> <value>`, as `plot_metric` names its series, and refuses two experiments with the same value, whose bars
+  `select_best_experiments` the best of each value of `per`, ranked by one `Region`. No reader takes a list of names,
+  and a name the results do not hold is refused, saying why where it was not parsed. An experiment without the label is
+  not one of them, but a label that none of them has is refused. `plot_bar_chart(label=...)` names each experiment's
+  bars `<name> <value>`, as `plot_metric` names its series, and refuses two experiments with the same value, whose bars
   would otherwise replace one another.
 
 ### Experiments
@@ -215,7 +216,9 @@ blocks, one page per concept. A new module needs a block on the right page and a
   `layout`, `changes`, `labels` and `ncpus`. What is true of the whole study goes in the study file instead
   (`STUDY_FILENAME`): the highest number given, and one history entry per call that created, added or deleted
   experiments. Don't add to the record what is the same for every experiment of a call. Labels are JSON values:
-  `ProfilingExperiment` refuses those a record would not give back as they were, NaN included.
+  `ProfilingExperiment` refuses those a record would not give back as they were, NaN included. A label of a key
+  reserved since its record was written (`RESERVED_LABELS`) is read under `"<key> (label)"`, with a warning
+  (`from_record`), so that an older study still opens.
 - **The records, the study file and the archives are written whole**: to a temporary file beside the target, which
   then replaces it (`_write_whole`, and `ProfilingExperiment.archive` for a tarball). A record cut short stops the
   study being opened, and an archive cut short still has its record readable, being its first member.
