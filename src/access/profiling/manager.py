@@ -1072,13 +1072,14 @@ class ProfilingManager(ABC, Generic[AppT]):
             if exp.status == ProfilingExperimentStatus.DONE:
                 # The run is over, so the count can no longer change. Kept in the archive's record, it is not
                 # read out of the tarball again. A count that cannot be read now is left to be read from the
-                # tarball when it is needed, rather than stopping the other experiments being archived.
+                # tarball when the experiment is parsed, rather than stopping the other experiments being archived,
+                # whatever the reader raised: a Rose or a YAML parser raises errors of its own.
                 try:
                     self._ncpus(branch)
-                except (OSError, ValueError) as error:
+                except Exception as error:
                     logger.warning(
                         f"The number of CPUs of experiment '{branch}' could not be read ({error}), so the record in "
-                        "its archive leaves it null. It is read from the archive when a selection or a plot needs it."
+                        "its archive leaves it null. It is read from the archive when the experiment is parsed."
                     )
             exp.archive(
                 self.archive_dir / branch,
@@ -1218,6 +1219,32 @@ class ProfilingManager(ABC, Generic[AppT]):
             del self.experiments[name]
         self._log("delete_experiments", names_to_delete)
 
+    @staticmethod
+    def _parse_optional(log: ProfilingLog) -> xr.Dataset | None:
+        """Parses an optional log, or says why it was skipped.
+
+        Args:
+            log (ProfilingLog): The log, which a run need not have written.
+
+        Returns:
+            xr.Dataset | None: The parsed log, or None if it was skipped.
+        """
+        try:
+            return log.parse()
+        except FileNotFoundError:
+            logger.info(f"Optional profiling log '{log.filepath}' not found. Skipping.")
+        except ValueError as e:
+            # A parser raises ValueError on a log not in its format, which an optional log often is: a Rose suite hands
+            # every parser the log of every task, and a run may be configured not to write the timers its log holds.
+            logger.info(f"Optional profiling log '{log.filepath}' is not in the format of its parser: {e} Skipping.")
+        except Exception as e:
+            # A warning, unlike a log that is not there or not in the parser's format: the parser failed in a way it
+            # does not mean to, which is one to look into before the log is missed from a plot.
+            logger.warning(
+                f"Failed to parse optional profiling log '{log.filepath}' with exception:\n    {e}\nSkipping."
+            )
+        return None
+
     def parse_profiling_data(self) -> ProfilingResults:
         """Parses the profiling logs of every finished experiment, and returns them as results.
 
@@ -1287,22 +1314,10 @@ class ProfilingManager(ABC, Generic[AppT]):
             datasets: dict[int, xr.Dataset] = {}
             for run, log in run_logs.items():
                 logger.info(f"Parsing {log_name} profiling log for run {run}: {log.filepath}. ")
-                if log.optional:
-                    try:
-                        datasets[run] = log.parse()
-                    except FileNotFoundError:
-                        logger.info(f"Optional profiling log '{log.filepath}' not found. Skipping.")
-                        continue
-                    except Exception as e:
-                        # A warning, unlike a log that is not there: the run wrote it, and a parser that cannot read
-                        # it is one to look into before the log is missed from a plot.
-                        logger.warning(
-                            f"Failed to parse optional profiling log '{log.filepath}' with exception:\n"
-                            f"    {e}\nSkipping."
-                        )
-                        continue
-                else:
-                    datasets[run] = log.parse()
+                dataset = self._parse_optional(log) if log.optional else log.parse()
+                if dataset is None:
+                    continue
+                datasets[run] = dataset
                 logger.info(" Done.")
             # A single run is stored as is; several runs are concatenated along a new 'run' dimension.
             if len(datasets) == 1:
@@ -1329,7 +1344,9 @@ class ProfilingManager(ABC, Generic[AppT]):
         if experiment.ncpus is None:
             try:
                 experiment.ncpus = self.parse_ncpus(exp_path, run_path)
-            except (OSError, ValueError) as error:
+            # Whatever the reader raises: a Rose or a YAML parser raises errors of its own, and one experiment whose
+            # count cannot be read stops no other analysis, the reason being raised by the reader that needs it.
+            except Exception as error:
                 return str(error)
         return None
 
@@ -1352,7 +1369,8 @@ class ProfilingManager(ABC, Generic[AppT]):
         if experiment.layout is None:
             try:
                 experiment.layout = self._parse_layout(exp_path, run_path)
-            except (OSError, ValueError) as error:
+            # Whatever the reader raises, as for the count of CPUs.
+            except Exception as error:
                 return str(error)
         return None
 

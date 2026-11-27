@@ -175,8 +175,8 @@ To extend the package, you implement one of these abstract classes:
 | [`RoseComponent`][access.profiling.rose_configuration.RoseComponent] | For one code of a Rose suite: `suite_variables`, `leaf`, `variable_changes`, `read_layout` and `occupied_cpus`, and the `name` and `token` attributes | [Cylc Rose suites](../access/cylc-rose-suites.md#other-suites) |
 
 To support a new workflow engine, you write a new subclass of `ProfilingManager`. Most of the work is already
-done by the base class: choosing which experiments to create, selecting the best ones and plotting them are the
-same for every workflow engine. The subclass only has to deal with what is specific to its engine. This is where
+done elsewhere: the base class chooses which experiments to create and parses their logs, and the results that
+parsing returns select the best experiments and plot them, the same way for every workflow engine. The subclass only has to deal with what is specific to its engine. This is where
 the logs are, how many CPUs a job used, what the status of a run is, and how experiments are created, run and
 deleted. The layout of an experiment that was given none is read from the files of the experiment directory by
 default. An engine that keeps a copy of the configuration a run used overrides `_parse_layout`, so that the layout

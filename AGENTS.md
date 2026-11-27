@@ -155,14 +155,15 @@ blocks, one page per concept. A new module needs a block on the right page and a
 - **A `run` dimension appears only where it is needed.** `parse_profiling_data` gives a log one only when more than
   one run produced it, and selection, tables and plotting refuse it, naming the experiments, until `select_best_run`
   or `aggregate_runs` has returned results without it (`_selected_experiments`).
-- **Nothing changes a `ProfilingResults`.** Its mappings are read-only and its experiments' labels are copied whole;
-  a selection or a reduction returns new results (`_with_data`), and `parse_profiling_data` returns new ones at every
-  call. A notebook's cells then give the same answer whichever ran first, so don't add a method that changes the
-  results it is called on.
+- **Nothing changes a `ProfilingResults`.** Its mappings are read-only and its experiments' labels are copied whole; a
+  selection or a reduction returns new results (`_with_data`), with datasets of their own, and `parse_profiling_data`
+  returns new ones at every call. A notebook's cells then give the same answer whichever ran first, so don't add a
+  method that changes the results it is called on.
 - **Parsing reads what tells the experiments apart, once.** While an experiment's directory is open,
-  `parse_profiling_data` reads its CPUs and, where it was given none, its layout, and keeps both on the experiment.
-  One that cannot be read (`OSError`, `ValueError`, as for archiving) is kept as `ncpus_error` or `layout_error`, and
-  raised with the experiment's name by the reader that needs it, so one unreadable count stops no other analysis.
+  `parse_profiling_data` reads its CPUs and, where it was given none, its layout, and keeps both on the experiment. One
+  that cannot be read, whatever the reader raises (a Rose or a YAML parser raises errors of its own), is kept as
+  `ncpus_error` or `layout_error`, as archiving keeps going past it, and raised with the experiment's name by the reader
+  that needs it, so one unreadable count stops no other analysis.
 - **`select_best_run` keeps a run that took place; `aggregate_runs` does not.** The first picks one run by one metric
   and keeps it in every log; the second reduces each region and metric on its own, so its minimum can mix runs.
   They answer different questions, so don't substitute one for the other. `split_runs` answers a third, by making

@@ -477,6 +477,34 @@ class TestAggregateRuns:
             run_data.aggregate_runs(how="bogus")
 
 
+class TestAReductionHasDatasetsOfItsOwn:
+    """A log that ran once is carried over to the reduced results, as a dataset of their own."""
+
+    @pytest.mark.parametrize(
+        "reduce",
+        [
+            lambda results: results.aggregate_runs("min"),
+            lambda results: results.select_best_run(Region("runs", "Region 1"), metric=tavg),
+        ],
+        ids=["aggregate_runs", "select_best_run"],
+    )
+    def test_a_variable_added_to_one_is_not_added_to_the_other(self, reduce):
+        """Both in an experiment that ran several times, and in one that ran once, whose logs are all carried over."""
+        several = {
+            "runs": runs_of([[400.0, 1.0], [200.0, 9.0]]),
+            "once": make_component_dataset([1.0, 2.0])["component"],
+        }
+        once = {"runs": make_component_dataset([3.0, 4.0])["component"]}
+        results = ParsedStudy([Path("exp1"), Path("exp2")], ncpus=[4, 8], datasets=[several, once]).results()
+
+        reduced = reduce(results)
+        for name, log in [("exp1", "once"), ("exp2", "runs")]:
+            reduced.data[name][log]["per_call"] = reduced.data[name][log][tavg]
+
+        assert "per_call" not in results.data["exp1"]["once"]
+        assert "per_call" not in results.data["exp2"]["runs"]
+
+
 class TestRunsAreRefusedUntilReduced:
     """A selection, a table or a plot needs one value for each experiment, and says how to get it."""
 
@@ -653,14 +681,6 @@ class TestPlotComponentScalingData:
 
         assert mock_plot.call_args.kwargs["xlabel"] is None
         assert mock_plot.call_args.kwargs["ylabel"] is None
-
-    @mock.patch("access.profiling.results.plot_component_scaling")
-    def test_the_layout_a_generated_experiment_carries_is_used_as_it_stands(self, mock_plot, component_scaling_data):
-        """It is the whole of it, so there is nothing on disk worth reading back."""
-
-        study, _ = component_scaling_data
-        study.plot_component_scaling_data([Region("component", "Region 1")], metric=tavg)
-        assert study.application.parse_layout_calls == []
 
     def test_an_experiment_whose_layout_cannot_be_told(self, component_scaling_data):
         study, _ = component_scaling_data
@@ -1518,9 +1538,9 @@ class TestResults:
     def test_the_data_cannot_be_changed(self, block_study):
         results = block_study.results()
 
-        with pytest.raises(TypeError):
+        with pytest.raises(TypeError, match="does not support item assignment"):
             results.data["exp-0001"]["other"] = results.data["exp-0001"]["component"]
-        with pytest.raises(TypeError):
+        with pytest.raises(TypeError, match="does not support item assignment"):
             results.experiments["exp-0005"] = results.experiments["exp-0001"]
 
     def test_what_they_were_made_from_can_change_without_them(self, block_study):

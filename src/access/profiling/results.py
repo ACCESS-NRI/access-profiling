@@ -8,9 +8,10 @@ with what tells each experiment from the others, its labels, its layout and the 
 when the experiment is parsed, while its directory is open, so that nothing is extracted from an archive again, and
 the results need no manager to be read.
 
-Nothing changes a `ProfilingResults` once it is made. A selection or a reduction returns new results, and leaves the
-ones it was called on as they were. A notebook can therefore keep the runs of a study, their best run and their mean
-side by side, and a cell gives the same answer whichever cells ran before it.
+Nothing changes a `ProfilingResults` once it is made. A selection or a reduction returns new results, with datasets of
+their own, and leaves the ones it was called on as they were. A notebook can therefore keep the runs of a study, their
+best run and their mean side by side, and a cell gives the same answer whichever cells ran before it. The datasets in
+`data` are the results' own, so a dataset to be changed, by adding a variable for example, is copied first.
 
 A `run` dimension appears only where more than one run produced a log, and the selections, tables and plots refuse
 it until `select_best_run` or `aggregate_runs` has removed it. The two answer different questions: the first keeps,
@@ -615,12 +616,16 @@ class ProfilingResults:
         data = {}
         for exp_name, logs in self.data.items():
             values = ranking[exp_name][metric].isel(region=0).pint.dequantify()
+            # Each log is a dataset of its own in the new results, even one without runs, so that a variable added to
+            # one is not added to the other.
             if "run" not in values.dims:
-                data[exp_name] = logs
+                data[exp_name] = {name: ds.copy() for name, ds in logs.items()}
                 continue
             run = int(values.run.values[int(values.argmin("run"))])
             logger.info(f"Keeping run {run} of experiment '{exp_name}'.")
-            data[exp_name] = {name: ds.sel(run=run, drop=True) if "run" in ds.dims else ds for name, ds in logs.items()}
+            data[exp_name] = {
+                name: ds.sel(run=run, drop=True) if "run" in ds.dims else ds.copy() for name, ds in logs.items()
+            }
         return self._with_data(data)
 
     def aggregate_runs(self, how: str = "min") -> "ProfilingResults":
@@ -634,8 +639,8 @@ class ProfilingResults:
         different runs. Use "min" to estimate the best achievable timings, "max" the worst, and "mean" or "median"
         to describe the typical ones. Integer metrics, such as call counts, become floats.
 
-        Datasets without a 'run' dimension are kept as they are. The results this is called on are left as they
-        were, so the minimum and the maximum of the same results measure the spread of the runs.
+        Datasets without a 'run' dimension are kept as they are, as copies of their own. The results this is called on
+        are left as they were, so the minimum and the maximum of the same results measure the spread of the runs.
 
         Args:
             how (str): Statistic to compute over the runs. One of "min", "max", "mean" or "median". Defaults to
@@ -650,7 +655,9 @@ class ProfilingResults:
         _check_run_statistic(how)
         return self._with_data(
             {
-                exp_name: {name: getattr(ds, how)("run") if "run" in ds.dims else ds for name, ds in logs.items()}
+                exp_name: {
+                    name: getattr(ds, how)("run") if "run" in ds.dims else ds.copy() for name, ds in logs.items()
+                }
                 for exp_name, logs in self.data.items()
             }
         )
