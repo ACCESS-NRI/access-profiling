@@ -11,9 +11,10 @@ the results need no manager to be read.
 The plots return the axes they drew on, and show nothing themselves: a notebook shows the figure at the end of the
 cell, and the axes are what a notebook customises, as `ax.set(yscale="log")` does. A plot given axes draws on them.
 
-Nothing changes a `ProfilingResults` once it is made. A selection or a reduction returns new results, and leaves the
-ones it was called on as they were. A notebook can therefore keep the runs of a study, their best run and their mean
-side by side, and a cell gives the same answer whichever cells ran before it.
+Nothing changes a `ProfilingResults` once it is made. A selection or a reduction returns new results, with datasets of
+their own, and leaves the ones it was called on as they were. A notebook can therefore keep the runs of a study, their
+best run and their mean side by side, and a cell gives the same answer whichever cells ran before it. The datasets in
+`data` are the results' own, so a dataset to be changed, by adding a variable for example, is copied first.
 
 A `run` dimension appears only where more than one run produced a log, and the selections, tables and plots refuse
 it until `select_best_run` or `aggregate_runs` has removed it. The two answer different questions: the first keeps,
@@ -74,7 +75,9 @@ class Region:
         log (str): Name of the profiling log the region comes from, as the application names it, such as "ESMF" or
             "payu".
         name (str): Name of the region, as the log names it, such as "[OCN] RunPhase1".
-        label (str | None): What a table or a plot calls the region. None (the default) is its name.
+        label (str | None): What a table or a plot calls the region. None (the default) is its name. A copy made
+            with `dataclasses.replace` keeps the label of the region it copies, so give it a label of its own when
+            it names another region.
         component (str | None): The component whose cores the region is read against, named as the layout names it.
             None (the default) takes the component the application declares for the log, and failing that the name
             of the log, which is enough for a log that is one component's alone.
@@ -96,6 +99,22 @@ class Region:
             )
         if self.label is None:
             object.__setattr__(self, "label", self.name)
+
+
+def _refuse_regions_to_rank_by(by: object) -> None:
+    """Refuses anything but one region to rank experiments or runs by, since a ranking reads one value of each.
+
+    Args:
+        by (object): What a selection was given to rank by.
+
+    Raises:
+        TypeError: If it is not a Region.
+    """
+    if not isinstance(by, Region):
+        raise TypeError(
+            f"Experiments and runs are ranked by one region, given as a Region, such as Region('ESMF', "
+            f"'[ensemble] RunPhase1'). Got {by!r}."
+        )
 
 
 def _region_list(regions: Region | Sequence[Region]) -> list[Region]:
@@ -477,8 +496,8 @@ class ProfilingResults:
                 if log is None or log_name == log:
                     for region in ds.coords["region"].values.tolist():
                         counts[(log_name, region)] = counts.get((log_name, region), 0) + 1
-        if log is not None and not counts:
-            held = list(dict.fromkeys(name for logs in self.data.values() for name in logs))
+        held = list(dict.fromkeys(name for logs in self.data.values() for name in logs))
+        if log is not None and log not in held:
             raise ValueError(f"None of the experiments has a log '{log}'. Their logs are {held}.")
         return pd.DataFrame(
             [(log_name, region, n) for (log_name, region), n in counts.items()],
@@ -495,7 +514,9 @@ class ProfilingResults:
         The experiments of one study need not have the same labels, as those generated from different kinds of
         choice do not, so an experiment without the label is not one of those with the value. A label that none of
         them has is refused instead, as a misspelt key would be. Every layout of a study has the quantities of
-        its components, so a layout without the quantity is refused too.
+        its components, so a layout without the quantity is refused too. A name that these results do not hold is
+        refused as well, saying why where the experiment was not parsed, so that a plot is never drawn without an
+        experiment it was asked for.
 
         Args:
             coordinate (ExperimentCoordinate | str): The key of a label, a quantity of the layout, "ncpus" or
@@ -503,17 +524,19 @@ class ProfilingResults:
             *values (Hashable): The values the experiments may have, at least one.
 
         Returns:
-            ProfilingResults: The experiments with one of the values, in the order these results hold them. None, if
-                none has one of them.
+            ProfilingResults: The experiments with one of the values, in the order these results hold them, which
+                hold none where no experiment has one of them.
 
         Raises:
-            ValueError: If no value is given, if these results hold no experiments, if none of the experiments has
-                the label or the label of one is a list or a mapping, or if an experiment's layout cannot be told or
-                does not have the quantity.
+            ValueError: If no value is given, if these results hold no experiments, if one of the names is not that of
+                an experiment these results hold, if none of the experiments has the label or the label of one is a
+                list or a mapping, or if an experiment's layout cannot be told or does not have the quantity.
         """
         if not values:
             raise ValueError(f"Give at least one value of '{_coordinate_name(coordinate)}' to select experiments by.")
         exp_names = self._names(refuse_runs=False)
+        if coordinate == "experiment":
+            self._refuse_names_not_held(values)
         if isinstance(coordinate, str) and coordinate not in BUILT_IN_COORDINATES:
             labelled = [exp_name for exp_name in exp_names if coordinate in self.experiments[exp_name].labels]
             if not labelled:
@@ -523,6 +546,27 @@ class ProfilingResults:
                 )
             exp_names = labelled
         return self._only(exp_name for exp_name in exp_names if self._coordinate_value(exp_name, coordinate) in values)
+
+    def _refuse_names_not_held(self, names: Sequence[Hashable]) -> None:
+        """Refuses the names of experiments these results do not hold, saying why for those that were not parsed.
+
+        Args:
+            names (Sequence[Hashable]): The names asked for.
+
+        Raises:
+            ValueError: If one of the names is not that of an experiment these results hold.
+        """
+        missing = [name for name in names if not isinstance(name, str) or name not in self.experiments]
+        if missing:
+            why = "".join(
+                f" '{name}' was not parsed: {self.skipped[name]}."
+                for name in missing
+                if isinstance(name, str) and name in self.skipped
+            )
+            raise ValueError(
+                f"These results hold no experiment named {missing}.{why} They hold {list(self.experiments)}. Give "
+                "each name as a value of its own, not a list of them."
+            )
 
     def select_best_experiments(
         self,
@@ -558,10 +602,12 @@ class ProfilingResults:
             ProfilingResults: The best experiment of each group, in the order these results hold them.
 
         Raises:
+            TypeError: If `by` is not one Region.
             ValueError: If these results hold no experiments, if one of them has no data for the log, the region or
                 the metric, if the profiling data still has a 'run' dimension, or if a coordinate cannot be read
                 for an experiment.
         """
+        _refuse_regions_to_rank_by(by)
         coordinates = [per] if isinstance(per, str | ExperimentCoordinate) else list(per)
         exp_names = self._names()
         ranking = self._region_data(_region_list(by), exp_names, metric)
@@ -608,22 +654,28 @@ class ProfilingResults:
             ProfilingResults: The results of the best run of each experiment.
 
         Raises:
+            TypeError: If `by` is not one Region.
             ValueError: If these results hold no experiments, or if one of them has no data for the log, the region
                 or the metric.
             KeyError: If the chosen run is missing from one of the logs of that experiment.
         """
+        _refuse_regions_to_rank_by(by)
         exp_names = self._names(refuse_runs=False)
         ranking = self._region_data(_region_list(by), exp_names, metric)
 
         data = {}
         for exp_name, logs in self.data.items():
             values = ranking[exp_name][metric].isel(region=0).pint.dequantify()
+            # Each log is a dataset of its own in the new results, even one without runs, so that a variable added to
+            # one is not added to the other.
             if "run" not in values.dims:
-                data[exp_name] = logs
+                data[exp_name] = {name: ds.copy() for name, ds in logs.items()}
                 continue
             run = int(values.run.values[int(values.argmin("run"))])
             logger.info(f"Keeping run {run} of experiment '{exp_name}'.")
-            data[exp_name] = {name: ds.sel(run=run, drop=True) if "run" in ds.dims else ds for name, ds in logs.items()}
+            data[exp_name] = {
+                name: ds.sel(run=run, drop=True) if "run" in ds.dims else ds.copy() for name, ds in logs.items()
+            }
         return self._with_data(data)
 
     def aggregate_runs(self, how: str = "min") -> "ProfilingResults":
@@ -637,8 +689,8 @@ class ProfilingResults:
         different runs. Use "min" to estimate the best achievable timings, "max" the worst, and "mean" or "median"
         to describe the typical ones. Integer metrics, such as call counts, become floats.
 
-        Datasets without a 'run' dimension are kept as they are. The results this is called on are left as they
-        were, so the minimum and the maximum of the same results measure the spread of the runs.
+        Datasets without a 'run' dimension are kept as they are, as copies of their own. The results this is called on
+        are left as they were, so the minimum and the maximum of the same results measure the spread of the runs.
 
         Args:
             how (str): Statistic to compute over the runs. One of "min", "max", "mean" or "median". Defaults to
@@ -653,7 +705,9 @@ class ProfilingResults:
         _check_run_statistic(how)
         return self._with_data(
             {
-                exp_name: {name: getattr(ds, how)("run") if "run" in ds.dims else ds for name, ds in logs.items()}
+                exp_name: {
+                    name: getattr(ds, how)("run") if "run" in ds.dims else ds.copy() for name, ds in logs.items()
+                }
                 for exp_name, logs in self.data.items()
             }
         )
@@ -672,6 +726,10 @@ class ProfilingResults:
 
         Returns:
             ProfilingResults: The results of every run.
+
+        Raises:
+            ValueError: If the name of a run is already that of another experiment, as one added under the name
+                "<experiment> run <run>" would be.
         """
         experiments = {}
         for exp_name, experiment in self.experiments.items():
@@ -680,12 +738,18 @@ class ProfilingResults:
                 experiments[exp_name] = experiment
                 continue
             for run in runs:
+                run_name = f"{exp_name} run {run}"
+                if run_name in self.experiments or run_name in experiments:
+                    raise ValueError(
+                        f"Run {run} of experiment '{exp_name}' would be named '{run_name}', which is already the name "
+                        "of another experiment. Select the experiments to split with select_experiments first."
+                    )
                 data = {
                     log: ds.sel(run=run, drop=True)
                     for log, ds in experiment.data.items()
                     if "run" in ds.dims and run in ds["run"].values
                 }
-                experiments[f"{exp_name} run {run}"] = ParsedExperiment(
+                experiments[run_name] = ParsedExperiment(
                     data,
                     {**experiment.labels, "run": run},
                     experiment.layout,

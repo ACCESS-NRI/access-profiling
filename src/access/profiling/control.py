@@ -132,7 +132,7 @@ class ExistingDirectoryControlSource(ControlSource):
     acted on, so that a study can still say which control it used.
 
     Args:
-        path (Path): The control directory, which must already exist when a study runs. Its name is the
+        path (Path | str): The control directory, which must already exist when a study runs. Its name is the
             control's `directory`.
         label (str | None): A short identifier for this control. Defaults to the directory's own name. An empty
             label is kept as it is.
@@ -156,7 +156,8 @@ class ExistingDirectoryControlSource(ControlSource):
 
     # Written out rather than generated, so that the label can default to the directory's name, which a field
     # default cannot refer to. Equality, hashing and the repr are still generated from the fields.
-    def __init__(self, path: Path, label: str | None = None, revision: str | None = None):
+    def __init__(self, path: Path | str, label: str | None = None, revision: str | None = None):
+        path = Path(path)
         if not path.is_absolute():
             raise ValueError(
                 f"ExistingDirectoryControlSource.path must be absolute, got {str(path)!r}. The control is "

@@ -357,8 +357,8 @@ What tells the experiments apart is given as a list of coordinates. A coordinate
 - `"ncpus"` is the number of CPUs that the job of each experiment occupied, and `"experiment"` is its name. Every
   experiment has these two, so no label can be named as one of them, nor as `"run"`.
 
-The dataset has the experiments along a dimension named `experiment`, and the regions along `region`, under the
-labels of the group. Each coordinate has one value for each experiment. We print them next to the times:
+The dataset has the experiments along a dimension named `experiment`, and the regions along `region`, under their
+labels. Each coordinate has one value for each experiment. We print them next to the times:
 
 ```python
 times = gathered[tmax].sel(region="CICE6").pint.dequantify()

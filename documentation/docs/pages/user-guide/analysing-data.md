@@ -21,10 +21,11 @@ statuses and then reads the logs of every DONE and ARCHIVED experiment. It retur
 results = manager.parse_profiling_data()
 ```
 
-Printing `results` lists the experiments it holds, with their logs and labels. It also lists the experiments that
-were not parsed, with the reason, such as a status of RUNNING. The results do not change once they are made. A
-method that selects experiments or reduces their runs returns new results, and leaves `results` as it was. To read
-the experiments that have finished since, parse them again.
+Printing `results` lists the experiments it holds, with their logs and labels. It also lists the experiments that were
+not parsed, with the reason, such as a status of RUNNING. The results do not change once they are made. A method that
+selects experiments or reduces their runs returns new results, and leaves `results` as it was. To read the experiments
+that have finished since, parse them again. The datasets in `results.data` belong to the results, so copy a dataset
+before you change it, for example with `ds.copy()`.
 
 The data is in `results.data`, with one dataset for each log of each experiment. Take a look at the logs of one
 experiment, and at the regions of one of them:
@@ -38,8 +39,9 @@ print(results.data[name]["MOM5"].region.values)
 This prints the names of the logs, and then the regions of the MOM5 timers. An ACCESS-ESM1.6 experiment has five
 logs: `payu`, Payu's timings of the whole job, and `UM`, `UM_Total_Walltime`, `MOM5` and `CICE5`, the timers of its
 components. An ACCESS-OM3 experiment has `payu`, `MOM6`, `CICE6` and `ESMF`, each of the last three only if the run
-wrote it. Note that an optional log that is missing is skipped, with an INFO message. An optional log that the run
-wrote but that cannot be read is skipped too, with a warning that gives the reason.
+wrote it. Note that an optional log that is missing, or that is not in the format of its parser, is skipped with an
+INFO message. An optional log that its parser fails on in any other way is skipped too, with a warning that gives the
+reason.
 
 ## Repeated runs
 

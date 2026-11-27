@@ -152,9 +152,7 @@ def test_scaling_data_of_a_selection_matching_no_experiment(scaling_data):
     study = ParsedStudy(paths, ncpus, datasets)
 
     with pytest.raises(ValueError, match="These results hold no experiments.*a selection keeps those of them"):
-        study.select_experiments("experiment", "missing_exp").plot_scaling_data(
-            [Region("component", "Region 1")], metric=tavg
-        )
+        study.select_experiments("ncpus", 9999).plot_scaling_data([Region("component", "Region 1")], metric=tavg)
 
 
 @mock.patch("access.profiling.results.plot_bar_metrics")
@@ -476,6 +474,34 @@ class TestAggregateRuns:
             run_data.aggregate_runs(how="bogus")
 
 
+class TestAReductionHasDatasetsOfItsOwn:
+    """A log that ran once is carried over to the reduced results, as a dataset of their own."""
+
+    @pytest.mark.parametrize(
+        "reduce",
+        [
+            lambda results: results.aggregate_runs("min"),
+            lambda results: results.select_best_run(Region("runs", "Region 1"), metric=tavg),
+        ],
+        ids=["aggregate_runs", "select_best_run"],
+    )
+    def test_a_variable_added_to_one_is_not_added_to_the_other(self, reduce):
+        """Both in an experiment that ran several times, and in one that ran once, whose logs are all carried over."""
+        several = {
+            "runs": runs_of([[400.0, 1.0], [200.0, 9.0]]),
+            "once": make_component_dataset([1.0, 2.0])["component"],
+        }
+        once = {"runs": make_component_dataset([3.0, 4.0])["component"]}
+        results = ParsedStudy([Path("exp1"), Path("exp2")], ncpus=[4, 8], datasets=[several, once]).results()
+
+        reduced = reduce(results)
+        for name, log in [("exp1", "once"), ("exp2", "runs")]:
+            reduced.data[name][log]["per_call"] = reduced.data[name][log][tavg]
+
+        assert "per_call" not in results.data["exp1"]["once"]
+        assert "per_call" not in results.data["exp2"]["runs"]
+
+
 class TestRunsAreRefusedUntilReduced:
     """A selection, a table or a plot needs one value for each experiment, and says how to get it."""
 
@@ -556,8 +582,8 @@ class TestPlotComponentScalingData:
         assert list(stat["region"].values) == ["Region 1", "Region 2"]
 
     @mock.patch("access.profiling.results.plot_component_scaling")
-    def test_a_region_is_labelled_with_the_log_it_came_from(self, mock_plot, component_scaling_data):
-        """Region names are only unique within one log, so two components may each have a "Total"."""
+    def test_a_region_is_labelled_with_its_label_alone(self, mock_plot, component_scaling_data):
+        """Not with its log as well: two regions of one name are told apart by labels of their own."""
 
         study, _ = component_scaling_data
         study.plot_component_scaling_data([Region("component", "Region 1")], metric=tavg)
@@ -653,14 +679,6 @@ class TestPlotComponentScalingData:
         assert mock_plot.call_args.kwargs["xlabel"] is None
         assert mock_plot.call_args.kwargs["ylabel"] is None
 
-    @mock.patch("access.profiling.results.plot_component_scaling")
-    def test_the_layout_a_generated_experiment_carries_is_used_as_it_stands(self, mock_plot, component_scaling_data):
-        """It is the whole of it, so there is nothing on disk worth reading back."""
-
-        study, _ = component_scaling_data
-        study.plot_component_scaling_data([Region("component", "Region 1")], metric=tavg)
-        assert study.application.parse_layout_calls == []
-
     def test_an_experiment_whose_layout_cannot_be_told(self, component_scaling_data):
         study, _ = component_scaling_data
         study.experiments["small"].layout = None
@@ -729,7 +747,7 @@ class TestPlotComponentScalingData:
     def test_a_selection_matching_no_experiment(self, component_scaling_data):
         study, _ = component_scaling_data
         with pytest.raises(ValueError, match="These results hold no experiments"):
-            study.select_experiments("experiment", "nothing").plot_component_scaling_data(
+            study.select_experiments("ncpus", 9999).plot_component_scaling_data(
                 [Region("component", "Region 1")], metric=tavg
             )
 
@@ -993,7 +1011,7 @@ class TestGather:
 
     def test_a_selection_matching_no_experiment(self, block_study):
         with pytest.raises(ValueError, match="These results hold no experiments"):
-            block_study.select_experiments("experiment", "nothing").gather(BLOCK_STUDY_GROUP)
+            block_study.select_experiments("ncpus", 9999).gather(BLOCK_STUDY_GROUP)
 
     def test_a_region_that_is_not_there(self, block_study):
         with pytest.raises(ValueError, match="Regions \\['Region 3'\\] not found"):
@@ -1159,6 +1177,23 @@ class TestSelectExperiments:
 
     def test_by_the_cpus_the_job_occupied(self, block_study):
         assert list(block_study.select_experiments("ncpus", 120).experiments) == ["exp-0002", "exp-0004"]
+
+    def test_a_name_the_results_do_not_hold_is_refused(self, block_study):
+        """Rather than a chart drawn without the experiment it was asked for, as with a misspelt name."""
+        with pytest.raises(ValueError, match=r"These results hold no experiment named \['exp-0009'\]\. They hold"):
+            block_study.select_experiments("experiment", "exp-0002", "exp-0009")
+
+    def test_one_that_was_not_parsed_is_refused_with_the_reason(self, block_study):
+        results = block_study.results()
+        results = ProfilingResults(results.application, results.experiments, {"modified": "status RUNNING"})
+
+        with pytest.raises(ValueError, match="'modified' was not parsed: status RUNNING"):
+            results.select_experiments("experiment", "exp-0002", "modified")
+
+    def test_a_list_of_names_is_refused(self, block_study):
+        """Each name is a value of its own, which a list given as one value is not."""
+        with pytest.raises(ValueError, match="Give each name as a value of its own, not a list of them"):
+            block_study.select_experiments("experiment", ["exp-0002", "exp-0004"])
 
     def test_selections_put_together(self, block_study):
         """A selection returns results, which can be selected from in turn."""
@@ -1483,9 +1518,7 @@ class TestPlotMetric:
 
     def test_a_selection_matching_no_experiment(self, block_study):
         with pytest.raises(ValueError, match="These results hold no experiments"):
-            block_study.select_experiments("experiment", "nothing").plot_metric(
-                BLOCK_STUDY_GROUP, "blocks", metric=tavg
-            )
+            block_study.select_experiments("ncpus", 9999).plot_metric(BLOCK_STUDY_GROUP, "blocks", metric=tavg)
 
     def test_data_still_holding_several_runs(self, block_study):
         """A plot takes no runs, so the message offers the methods that reduce them."""
@@ -1509,9 +1542,9 @@ class TestResults:
     def test_the_data_cannot_be_changed(self, block_study):
         results = block_study.results()
 
-        with pytest.raises(TypeError):
+        with pytest.raises(TypeError, match="does not support item assignment"):
             results.data["exp-0001"]["other"] = results.data["exp-0001"]["component"]
-        with pytest.raises(TypeError):
+        with pytest.raises(TypeError, match="does not support item assignment"):
             results.experiments["exp-0005"] = results.experiments["exp-0001"]
 
     def test_what_they_were_made_from_can_change_without_them(self, block_study):
@@ -1581,6 +1614,24 @@ class TestResults:
 
         with pytest.raises(ValueError, match="The layout of experiment 'exp-0002' could not be read: no rose-suite"):
             block_study.gather(BLOCK_STUDY_GROUP, [component_cores("component")])
+
+
+class TestOneRegionToRankBy:
+    """A ranking reads one value of each experiment or run, so it is given one region."""
+
+    @pytest.mark.parametrize(
+        "select",
+        [
+            lambda results, by: results.select_best_experiments(by=by, metric=tavg),
+            lambda results, by: results.select_best_run(by, metric=tavg),
+        ],
+        ids=["select_best_experiments", "select_best_run"],
+    )
+    def test_a_list_of_regions_is_refused(self, block_study, select):
+        regions = [Region("component", "Region 2"), Region("component", "Region 1")]
+
+        with pytest.raises(TypeError, match="ranked by one region, given as a Region"):
+            select(block_study.results(), regions)
 
 
 class TestSelectionsAreChecked:
@@ -1691,6 +1742,11 @@ class TestRegions:
 
         assert block_study.regions("other")["region"].tolist() == ["Region 1", "Region 2"]
 
+    def test_a_log_that_holds_no_regions(self, block_study):
+        block_study.data["exp-0002"]["empty"] = block_study.data["exp-0002"]["component"].isel(region=[])
+
+        assert block_study.regions("empty").empty
+
     def test_a_log_no_experiment_has(self, block_study):
         with pytest.raises(
             ValueError, match="None of the experiments has a log 'ESMF'. Their logs are \\['component'\\]"
@@ -1750,6 +1806,14 @@ class TestSelectBestExperimentsPerSeveralCoordinates:
 
 class TestSplitRuns:
     """Each run of an experiment as an experiment of its own, so that runs are compared by the label "run"."""
+
+    def test_a_run_named_as_another_experiment_is_refused(self):
+        """Rather than one replacing the other, as an experiment added under the name of a run would be."""
+        data = [{"component": runs_of([[400.0, 1.0], [200.0, 9.0]])}, make_component_dataset([1.0, 2.0])]
+        study = ParsedStudy([Path("exp1"), Path("exp1 run 3")], ncpus=[4, 4], datasets=data)
+
+        with pytest.raises(ValueError, match="would be named 'exp1 run 3', which is already the name of another"):
+            study.split_runs()
 
     def test_each_run_is_an_experiment_labelled_with_its_run(self, run_data):
         runs = run_data.split_runs()
