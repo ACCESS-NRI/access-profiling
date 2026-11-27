@@ -633,9 +633,10 @@ class ProfilingManager(ABC, Generic[AppT]):
             total_cores (int): Total number of cores the layouts must distribute among the application's
                 components.
             allocations (RootAllocation | None): Allocation strategy deciding how many cores each component may
-                receive, and any further constraints the layouts must satisfy. None (the default) leaves every
-                component unconstrained, which is rarely what is wanted: the number of valid layouts grows very
-                quickly with the number of cores.
+                receive, and any further constraints the layouts must satisfy. None (the default) states nothing,
+                so every component takes the default of the search: any number of cores where the cores are
+                divided among the components, and all of them where they share the cores. This is rarely what is
+                wanted: the number of valid layouts grows very quickly with the number of cores.
             max_layouts (int | None): Maximum number of layouts to enumerate. None (the default) enumerates all of
                 them. Note that this bounds the *enumeration*, so the returned layouts are the first ones found and
                 not necessarily those with the fewest idle cores. Without lower bounds on the components or a limit
@@ -700,7 +701,7 @@ class ProfilingManager(ABC, Generic[AppT]):
             cores_per_node (int): Number of cores available on each node.
             walltime (float | Callable[[float], float]): Walltime in hours, or a function of the node count.
             allocations (RootAllocation | Callable[[float], RootAllocation] | None): Allocation strategy, or a
-                function of the node count, or None to leave every component unconstrained.
+                function of the node count, or None to give every component the default of the search.
             max_layouts (int | None): Maximum number of layouts to enumerate for each number of nodes.
             regenerate_failed (bool): Whether to plan an experiment this manager already holds again when its
                 run failed.
@@ -828,7 +829,8 @@ class ProfilingManager(ABC, Generic[AppT]):
                 allocation may be written as fractions of the total core count, which resolve to a different
                 number of cores at every size in the study. Pass a function only where a bound cannot be
                 expressed that way; note that allocation bounds are in cores, so it typically multiplies by
-                cores_per_node itself. None (the default) leaves every component unconstrained.
+                cores_per_node itself. None (the default) gives every component the default of the search, as
+                select_layouts describes.
             max_layouts (int | None): Maximum number of layouts to enumerate for each number of nodes. None
                 (the default) enumerates all of them.
             regenerate_failed (bool): Whether to plan an experiment this manager already holds again when its run

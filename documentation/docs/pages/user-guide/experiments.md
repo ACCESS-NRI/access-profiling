@@ -171,9 +171,9 @@ strategy usually works for all the sizes of a study. These are the strategies we
     cores, which are called `shared` here. The ocean runs next to them on cores of its own. With this strategy,
     the ocean gets at least 85% of the cores, and nine to ten times as many as the shared components. Each shared
     component uses all the shared cores, and at most 1% of the cores are left idle. The shared components need no
-    strategy of their own for this: a component that the strategy leaves out takes all the cores of a shared
-    parent, and any number of the cores of another parent. `core_step` only allows
-    numbers of cores that are multiples of 2, 5 or 15, which reduces the number of layouts for the larger sizes.
+    strategy of their own for this, since a component under `shared` that the strategy does not name takes all the
+    shared cores. `core_step` only allows numbers of cores that are multiples of 2, 5 or 15, which reduces the
+    number of layouts for the larger sizes.
     Note that the step depends on the number of nodes, which is why the strategy is a function.
 
 The models set no limit of their own on the number of cores a layout leaves idle. If you want one, add a
