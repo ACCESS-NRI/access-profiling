@@ -25,7 +25,7 @@ def main(arguments: list[str]) -> int:
     if arguments != ["guide"]:
         print(_USAGE, file=sys.stderr)
         return 2
-    print(files("access.profiling").joinpath("guide.md").read_text(), end="")
+    print(files("access.profiling").joinpath("guide.md").read_text(encoding="utf-8"), end="")
     return 0
 
 

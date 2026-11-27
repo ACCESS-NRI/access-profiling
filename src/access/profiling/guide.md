@@ -14,11 +14,15 @@ else is the package's to work out. In particular:
 - Write no experiment name, such as `exp-0003`. The experiments are numbered, so their names say nothing about them.
   Pick experiments out by a coordinate instead, with `select_experiments` and `select_best_experiments`. A
   coordinate is a label, `"ncpus"`, or a quantity of the parallelisation layout, such as `component_cores("ocn")`.
-- Write no path under the working directory. The manager finds the experiments of a study again from their records.
+  The names of the experiments to delete, such as those that failed, are taken from the table of `status`.
+- Write no path to an experiment that the manager generated, since it finds them again from their records. The one
+  path under the working directory that a notebook names is that of an experiment run some other way, which it adds
+  with `add_experiment_from_directory`.
 - Set no attribute of the manager in a cell of its own. What a call needs is an argument of that call, such as the
   `nruns` of `run_experiments`, or of the manager, such as its `control_options`.
-- Configure no logging, and use no `%autoreload` and no loop that waits for jobs. The calls return what they did,
-  warnings are shown without any configuration, and `manager.status()` says how the runs are going whenever you ask.
+- Configure no logging, and use no `%autoreload` and no loop that waits for jobs. Generating, running and archiving
+  return a table of the experiments they acted on, warnings are shown without any configuration, and
+  `manager.status()` says how the runs are going whenever you ask.
 - Do not repeat a change that the application already makes to the control. Printing the manager shows these
   changes, and the control options win where both change the same setting.
 
@@ -57,7 +61,8 @@ show_versions()
 ```
 
 The manager states the application, its control, the directories and the control options. Ending the cell with
-`manager` shows them, with the changes that the application makes to the control itself:
+`manager` shows the application, the control, the working and archive directories and the control options, with the
+changes that the application makes to the control itself:
 
 ```python
 manager = PayuManager(
@@ -70,6 +75,9 @@ manager = PayuManager(
 )
 manager
 ```
+
+The control sources of the package name their repositories by SSH, which needs an SSH key registered with GitHub.
+Without one, give a `GitControlSource` with the repository's HTTPS URL instead.
 
 The allocation strategy says how many cores each component may get, and which layouts to leave out:
 
@@ -102,11 +110,13 @@ plan = manager.plan_scaling_experiments(
 plan
 ```
 
-Generating the plan creates its experiments, and running them submits their jobs. Each is a cell of its own:
+Generating the plan creates its experiments, in a cell of its own:
 
 ```python
 manager.generate(plan)
 ```
+
+Running them submits their jobs, in a cell of its own too:
 
 ```python
 manager.run_experiments()
@@ -128,8 +138,8 @@ ocean = Region("ESMF", "[OCN] RunPhase1", label="MOM6", component="ocn")
 sea_ice = Region("ESMF", "[ICE] RunPhase1", label="CICE6", component="ice")
 ```
 
-Parsing returns the results, which never change: a selection returns new results. Each table and each plot is then a
-cell of its own:
+Parsing returns the results, which never change: a selection returns new results. Here the cell keeps the fastest
+experiment of each size, and shows the times of the regions:
 
 ```python
 results = manager.parse_profiling_data()
@@ -137,9 +147,13 @@ best = results.select_best_experiments(by=whole)
 best.table([whole, ocean, sea_ice], "ncpus")
 ```
 
+Each plot is then a cell of its own. The scaling plot draws the speedup and the efficiency of the whole model:
+
 ```python
 best.plot_scaling_data(whole, xlabel="Cores occupied by the job");
 ```
+
+The component plot draws each region against the cores of its own component:
 
 ```python
 ax = best.plot_component_scaling_data([whole, ocean, sea_ice])
@@ -163,6 +177,7 @@ can be run again whenever more runs have finished.
 
 ## Cells that act on the study
 
-Generating, running, archiving and deleting act on the study: they submit jobs that are charged to a project, or
-write and delete files. An agent writes these cells, and leaves running them to a person, unless it is asked to run
-them. Planning, the status, parsing, the tables and the plots change nothing, so they can be run at any time.
+Generating, running, archiving, adding, forgetting and deleting act on the study: they submit jobs that are charged to
+a project, or write and delete files. An agent writes these cells, and leaves running them to a person, unless it is
+asked to run them. Planning, the status, parsing, the tables and the plots change nothing, so they can be run at any
+time.

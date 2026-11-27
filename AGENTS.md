@@ -134,11 +134,12 @@ from the docstrings, on pages in `documentation/docs/pages/api/` that are each a
 blocks, one page per concept. A new module needs a block on the right page and a row in the table of
 `api/index.md`; a new page needs an entry in the `nav` of `mkdocs.yml`, or the strict build fails.
 
-**The guide to writing a notebook** is `guide.md`, package data that `python -m access.profiling guide` prints, so
-that an agent reads the version installed. The page `user-guide/writing-a-notebook.md` includes the file whole, with
+**The guide to writing a notebook** is `guide.md`, package data that `python -m access.profiling guide` prints, so that
+an agent reads the version installed. The page `user-guide/writing-a-notebook.md` includes the file whole, with
 include-markdown, so the guide has no links but absolute ones. `test_guide.py` runs its code cells in order, with the
-engine faked, so a change to a name, a method or an argument that the guide uses fails there: update the guide with
-the change.
+engine faked and the analysis cells on real results made from the layouts of the guide's plan, and checks every API name
+its prose gives in backticks. A change to a name, a method, an argument, a component or a region that the guide uses
+therefore fails there: update the guide with the change.
 
 ## Invariants
 
@@ -429,7 +430,7 @@ the change.
 | `test_components.py` | `models/components.py`, the components the Payu models are put together from |
 | `test_esm15.py`, `test_esm16.py`, `test_om2.py`, `test_om3.py` | their model, and `PayuManager` driving it end to end |
 | `test_init.py` | `__init__.py`: that `__all__` lists exactly what the package imports |
-| `test_guide.py` | `__main__.py`, and `guide.md`, whose code cells it runs in order with the engine faked |
+| `test_guide.py` | `__main__.py`, and `guide.md`, whose code cells it runs in order and whose API names it checks |
 
 Coverage is **100% of lines** across `access.profiling`, and a change keeps it there, error paths included. Nothing
 enforces it (there is no `fail-under`), so read the report for the files you changed:
