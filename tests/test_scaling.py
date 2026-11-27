@@ -416,10 +416,18 @@ class TestPlotComponentScaling:
         """Which is how it shares a figure with another plot, whose layout it leaves alone."""
 
         fig, (left, right) = plt.subplots(1, 2)
+        before = [ax.get_position().bounds for ax in fig.axes]
 
         assert plot_component_scaling(component_scaling_data, tavg, ax=right) is right
         assert len(left.lines) == 0 and len(right.lines) == 6
+        assert [ax.get_position().bounds for ax in fig.axes] == before
         plt.close(fig)
+
+    def test_it_lays_out_a_figure_of_its_own(self, component_scaling_data):
+        fig = plot_component_scaling(component_scaling_data, tavg).figure
+        default = plt.subplots(figsize=fig.get_size_inches())[0]
+
+        assert fig.axes[0].get_position().bounds != default.axes[0].get_position().bounds
 
     def test_one_log_read_twice_keeps_both(self, component_scaling_data):
         """A log holding two components' regions is read once per component, and neither is dropped."""

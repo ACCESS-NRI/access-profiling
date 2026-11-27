@@ -1843,7 +1843,7 @@ class TestLaboratory:
                 new_callable=mock.PropertyMock,
                 return_value={"config.yaml": {"laboratory": "/scratch/tm70/elsewhere"}},
             ),
-            pytest.raises(ValueError, match="name a Payu laboratory"),
+            pytest.raises(ValueError, match="The control changes of the application 'mock' name a Payu laboratory"),
         ):
             self.generate(manager, {})
         mock_experiment_generator.assert_not_called()
@@ -2227,6 +2227,50 @@ class TestPlans:
 
         with pytest.raises(ValueError, match="regenerates experiment exp-0002, which this study no longer holds"):
             manager.generate(plan)
+
+    @mock.patch("access.profiling.payu_manager.ExperimentGenerator")
+    def test_an_experiment_run_again_since_the_plan_is_not_rewritten(self, mock_experiment_generator, manager, caplog):
+        """Its job may be running, so the engine is asked again, and only what is still FAILED is regenerated."""
+        manager.generate(self.plan(manager))
+        manager.experiments["exp-0002"].status = ProfilingExperimentStatus.FAILED
+        plan = self.plan(manager, regenerate_failed=True)
+        mock_experiment_generator.reset_mock()
+        failed = manager.experiments["exp-0002"].path
+        write_job_file(failed, 0, {"stage": "archive", "payu_run_status": 0})
+
+        with caplog.at_level(logging.INFO):
+            created = manager.generate(plan)
+
+        mock_experiment_generator.assert_not_called()
+        assert created.empty
+        assert "Experiment exp-0002 is DONE now, not FAILED, so it is left as it is." in caplog.text
+
+    def test_the_plan_of_another_study_is_refused(self, manager, tmp_path):
+        """Its changes are what another application, or another study's, comes to."""
+        other = PayuManager(
+            tmp_path / "other", tmp_path / "other-archive", MockPayuConfiguration(), MOCK_CONTROL, lab_dir=tmp_path
+        )
+
+        with pytest.raises(ValueError, match="The plan was made by the study of MockPayuConfiguration 'mock' in"):
+            manager.generate(self.plan(other))
+
+    def test_a_label_named_as_a_column_of_the_plan_has_a_column_of_its_own(self, manager):
+        plan = self.plan(manager, labels={"cores": "all of them"})
+
+        assert set(plan.table["cores"]) == {4}
+        assert set(plan.table["cores (label)"]) == {"all of them"}
+
+    @mock.patch("access.profiling.payu_manager.ExperimentGenerator")
+    def test_an_experiment_found_again_keeps_its_labels_with_a_warning(
+        self, mock_experiment_generator, manager, caplog
+    ):
+        manager.generate(self.plan(manager))
+
+        with caplog.at_level(logging.WARNING):
+            plan = self.plan(manager, labels={"dt": 900})
+
+        assert plan.held == ("exp-0001", "exp-0002", "exp-0003", "exp-0004")
+        assert "Experiment exp-0001 keeps the labels it has, {}, and not those of the plan" in caplog.text
 
     def test_an_added_experiment_says_nothing_of_the_managers_control(self, manager):
         """It was not made from that control, nor in the study's laboratory, so the history does not claim either."""

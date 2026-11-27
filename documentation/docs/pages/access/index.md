@@ -204,10 +204,11 @@ size is chosen from the number of ranks.
 
 To run a layout, a few files are changed. `config.yaml` requests the total number of cores as `ncpus`, the
 `PELAYOUT_attributes` of `nuopc.runconfig` get the cores of each component, and `ice_in` gets the grid and the
-block size. MOM6 chooses its own decomposition, so there is no process grid for the ocean and `MOM_input` is not
-changed. Note, however, that the 25 km release, the 8 km configuration and the pan-Antarctic ones fix a `LAYOUT`
-and a `MASKTABLE` in `MOM_input`. A study has to remove them with its control options, as shown in [Generating the
-experiments](../user-guide/experiments.md#generating-the-experiments).
+block size. MOM6 chooses its own decomposition, so there is no process grid for the ocean. Instead, every layout
+sets `AUTO_MASKTABLE` in `MOM_input`, and removes the `LAYOUT`, the `IO_LAYOUT` and the `MASKTABLE` that the 25 km
+release, the 8 km configuration and the pan-Antarctic ones fix there. Removing a setting that a control does not
+have changes nothing. The application also turns on the ESMF profiling summary in the control of every study, as
+[Creating the manager](../user-guide/experiments.md#creating-the-manager) describes.
 
 | Log | Parser | Component | Read from |
 |---|---|---|---|

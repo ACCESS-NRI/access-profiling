@@ -28,7 +28,7 @@ import re
 import shutil
 import tarfile
 from abc import ABC, abstractmethod
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
@@ -150,6 +150,22 @@ def _merge_changes(
         else:
             merged[key] = value
     return merged
+
+
+def _with_labels(row: dict, labels: Mapping) -> dict:
+    """Returns a row of a table with the labels as columns of their own, beside those of the table.
+
+    A label named as a column of the table, such as `status` or `layout`, is shown as "<key> (label)", so that neither
+    replaces the other.
+
+    Args:
+        row (dict): The columns of the table, for one row.
+        labels (Mapping): The labels of the experiment of the row.
+
+    Returns:
+        dict: The row, with the labels.
+    """
+    return row | {f"{key} (label)" if key in row else key: value for key, value in labels.items()}
 
 
 class ProfilingManager(ABC, Generic[AppT]):
@@ -733,6 +749,11 @@ class ProfilingManager(ABC, Generic[AppT]):
                 ):
                     logger.info(f"Experiment {name} already exists for layout {key}. Skipping addition.")
                     held_now.append(name)
+                    if existing.labels != choice.labels:
+                        logger.warning(
+                            f"Experiment {name} keeps the labels it has, {existing.labels}, and not those of the plan "
+                            f"it was found for, {choice.labels}."
+                        )
                     continue
                 if existing is not None:
                     logger.info(f"Regenerating experiment {name}, whose run failed.")
@@ -749,12 +770,13 @@ class ProfilingManager(ABC, Generic[AppT]):
                     )
                 )
                 row = {"nodes": num_nodes, "cores": total_cores, "layout": key, "walltime (hours)": walltime_hrs}
-                row |= choice.labels
                 if existing is not None:
                     row["regenerates"] = name
-                rows.append(row)
+                rows.append(_with_labels(row, choice.labels))
 
-        return StudyPlan("plan_scaling_experiments", tuple(plans), pd.DataFrame(rows), tuple(held_now))
+        return StudyPlan(
+            "plan_scaling_experiments", tuple(plans), pd.DataFrame(rows), tuple(held_now), self._study_identity()
+        )
 
     def plan_scaling_experiments(
         self,
@@ -927,18 +949,27 @@ class ProfilingManager(ABC, Generic[AppT]):
                 )
             )
             rows.append(
-                {"layout": key, "cores": None if choice.layout is None else choice.layout.n_cores} | choice.labels
+                _with_labels(
+                    {"layout": key, "cores": None if choice.layout is None else choice.layout.n_cores}, choice.labels
+                )
             )
 
-        return StudyPlan("plan_experiments", tuple(plans), pd.DataFrame(rows), tuple(held_now))
+        return StudyPlan("plan_experiments", tuple(plans), pd.DataFrame(rows), tuple(held_now), self._study_identity())
 
     def generate(self, plan: StudyPlan) -> pd.DataFrame:
         """Creates the experiments of a plan, numbering them, and returns them.
 
         The experiments are numbered, `exp-0001` onwards, in the order of the plan, on from the highest number the
-        study has given. The plan is checked against what the study holds by then: an experiment the study has
-        come to have since the plan was made, in this session or another, is left out. Generating a plan twice
-        therefore creates nothing twice.
+        study has given. The plan is checked against what this manager holds by then: an experiment it has come to
+        hold since the plan was made, as by generating this plan or another, is left out. Generating a plan twice
+        therefore creates nothing twice. A manager does not see what another manager of the same study creates
+        after it was built, so a study is generated from one manager at a time.
+
+        An experiment the plan regenerates is regenerated only if its run is still FAILED, which the workflow engine
+        is asked again: one run again since the plan was made, or running now, is left as it is.
+
+        A plan is the plan of the study that made it, whose application it was worked out for, so the plan of
+        another study, as that of another manager in the same notebook, is refused.
 
         Experiments become known to this manager only once the engine has created them, since an experiment
         it holds is one that can be run, archived and deleted. A generation that fails therefore registers
@@ -958,10 +989,20 @@ class ProfilingManager(ABC, Generic[AppT]):
             pd.DataFrame: The experiments created or regenerated, one row each, as status() shows them.
 
         Raises:
-            ValueError: If this manager has no control, or if an experiment the plan regenerates is no longer held.
+            ValueError: If this manager has no control, if the plan was made by another study, or if an experiment the
+                plan regenerates is no longer held.
             Exception: Whatever the workflow engine raises, unchanged. No experiment is registered when it does.
         """
         self._refuse_no_control()
+        if plan.study != self._study_identity():
+            raise ValueError(
+                f"The plan was made by the study of {plan.study}, and this manager's is that of "
+                f"{self._study_identity()}. A plan holds what its own application comes to, so generate it with the "
+                "manager that made it, or make the plan again with this one."
+            )
+        if any(planned.regenerating for planned in plan.experiments):
+            # A run may have been retried since the plan was made, and one running now is not to be rewritten.
+            self.update_statuses()
         held = self._held_identities()
         number = self._last_number()
         named: list[ExperimentPlan] = []
@@ -972,6 +1013,10 @@ class ProfilingManager(ABC, Generic[AppT]):
                         f"The plan regenerates experiment {planned.name}, which this study no longer holds. Make the "
                         "plan again."
                     )
+                status = self.experiments[planned.name].status
+                if status != ProfilingExperimentStatus.FAILED:
+                    logger.info(f"Experiment {planned.name} is {status.name} now, not FAILED, so it is left as it is.")
+                    continue
                 named.append(planned)
                 continue
             key = None if planned.layout is None else self.application.layout_key(planned.layout)
@@ -982,6 +1027,14 @@ class ProfilingManager(ABC, Generic[AppT]):
             number += 1
             named.append(dataclasses.replace(planned, name=f"exp-{number:04d}"))
         return self._table(self._generate(f"generate({plan.call})", named))
+
+    def _study_identity(self) -> str:
+        """Returns what tells this study from another: its application and its working directory.
+
+        Returns:
+            str: The class and the name of the application, and the working directory, resolved.
+        """
+        return f"{type(self.application).__name__} '{self.application.name}' in '{self.work_dir.resolve()}'"
 
     def _refuse_no_control(self) -> None:
         """Refuses to generate experiments for a manager that was given no control.
@@ -1149,13 +1202,14 @@ class ProfilingManager(ABC, Generic[AppT]):
             if exp.status == ProfilingExperimentStatus.DONE:
                 # The run is over, so the count can no longer change. Kept in the archive's record, it is not
                 # read out of the tarball again. A count that cannot be read now is left to be read from the
-                # tarball when it is needed, rather than stopping the other experiments being archived.
+                # tarball when the experiment is parsed, rather than stopping the other experiments being archived,
+                # whatever the reader raised: a Rose or a YAML parser raises errors of its own.
                 try:
                     self._ncpus(branch)
-                except (OSError, ValueError) as error:
+                except Exception as error:
                     logger.warning(
                         f"The number of CPUs of experiment '{branch}' could not be read ({error}), so the record in "
-                        "its archive leaves it null. It is read from the archive when a selection or a plot needs it."
+                        "its archive leaves it null. It is read from the archive when the experiment is parsed."
                     )
             exp.archive(
                 self.archive_dir / branch,
@@ -1299,6 +1353,32 @@ class ProfilingManager(ABC, Generic[AppT]):
             del self.experiments[name]
         self._log("delete_experiments", names_to_delete)
 
+    @staticmethod
+    def _parse_optional(log: ProfilingLog) -> xr.Dataset | None:
+        """Parses an optional log, or says why it was skipped.
+
+        Args:
+            log (ProfilingLog): The log, which a run need not have written.
+
+        Returns:
+            xr.Dataset | None: The parsed log, or None if it was skipped.
+        """
+        try:
+            return log.parse()
+        except FileNotFoundError:
+            logger.info(f"Optional profiling log '{log.filepath}' not found. Skipping.")
+        except ValueError as e:
+            # A parser raises ValueError on a log not in its format, which an optional log often is: a Rose suite hands
+            # every parser the log of every task, and a run may be configured not to write the timers its log holds.
+            logger.info(f"Optional profiling log '{log.filepath}' is not in the format of its parser: {e} Skipping.")
+        except Exception as e:
+            # A warning, unlike a log that is not there or not in the parser's format: the parser failed in a way it
+            # does not mean to, which is one to look into before the log is missed from a plot.
+            logger.warning(
+                f"Failed to parse optional profiling log '{log.filepath}' with exception:\n    {e}\nSkipping."
+            )
+        return None
+
     def parse_profiling_data(self) -> ProfilingResults:
         """Parses the profiling logs of every finished experiment, and returns them as results.
 
@@ -1368,22 +1448,10 @@ class ProfilingManager(ABC, Generic[AppT]):
             datasets: dict[int, xr.Dataset] = {}
             for run, log in run_logs.items():
                 logger.info(f"Parsing {log_name} profiling log for run {run}: {log.filepath}. ")
-                if log.optional:
-                    try:
-                        datasets[run] = log.parse()
-                    except FileNotFoundError:
-                        logger.info(f"Optional profiling log '{log.filepath}' not found. Skipping.")
-                        continue
-                    except Exception as e:
-                        # A warning, unlike a log that is not there: the run wrote it, and a parser that cannot read
-                        # it is one to look into before the log is missed from a plot.
-                        logger.warning(
-                            f"Failed to parse optional profiling log '{log.filepath}' with exception:\n"
-                            f"    {e}\nSkipping."
-                        )
-                        continue
-                else:
-                    datasets[run] = log.parse()
+                dataset = self._parse_optional(log) if log.optional else log.parse()
+                if dataset is None:
+                    continue
+                datasets[run] = dataset
                 logger.info(" Done.")
             # A single run is stored as is; several runs are concatenated along a new 'run' dimension.
             if len(datasets) == 1:
@@ -1410,7 +1478,9 @@ class ProfilingManager(ABC, Generic[AppT]):
         if experiment.ncpus is None:
             try:
                 experiment.ncpus = self.parse_ncpus(exp_path, run_path)
-            except (OSError, ValueError) as error:
+            # Whatever the reader raises: a Rose or a YAML parser raises errors of its own, and one experiment whose
+            # count cannot be read stops no other analysis, the reason being raised by the reader that needs it.
+            except Exception as error:
                 return str(error)
         return None
 
@@ -1433,7 +1503,8 @@ class ProfilingManager(ABC, Generic[AppT]):
         if experiment.layout is None:
             try:
                 experiment.layout = self._parse_layout(exp_path, run_path)
-            except (OSError, ValueError) as error:
+            # Whatever the reader raises, as for the count of CPUs.
+            except Exception as error:
                 return str(error)
         return None
 
@@ -1506,7 +1577,7 @@ class ProfilingManager(ABC, Generic[AppT]):
             except ValueError:
                 key = f"not a layout of {self.application.name}"
             row = {"experiment": name, "status": experiment.status.name, "ncpus": experiment.ncpus, "layout": key}
-            rows.append(row | experiment.labels)
+            rows.append(_with_labels(row, experiment.labels))
         return pd.DataFrame(rows, columns=["experiment", "status", "ncpus", "layout"] if not rows else None).set_index(
             "experiment"
         )
