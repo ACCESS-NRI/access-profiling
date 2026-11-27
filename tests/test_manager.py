@@ -165,7 +165,8 @@ def single_exp_manager():
 def test_repr():
     """Test the __repr__ method of ProfilingManager.
 
-    It holds no parsed data, which the results of parse_profiling_data hold, so parsing changes nothing in it.
+    It holds no parsed data, which the results of parse_profiling_data hold. Parsing keeps only the count of CPUs on
+    each experiment, which this manager cannot read, so its repr is the same before and after.
     """
 
     manager = MockProfilingManager(paths=[Path("/fake/work_dir")], datasets=[make_component_dataset([1.0, 2.0])])
@@ -664,6 +665,10 @@ def test_parse_profiling_data_errors_outside_the_swallowed_set_propagate(single_
     assert failed == [], f"{type(error).__name__} should not be caught and logged as a swallowed failure."
 
 
+class GrammarError(Exception):
+    """An error of a parser's own, as lark raises on a Rose configuration it cannot read."""
+
+
 class TestParsingReadsWhatTellsTheExperimentsApart:
     """Parsing reads the CPUs and the layout of each experiment while its directory is open, once."""
 
@@ -719,6 +724,22 @@ class TestParsingReadsWhatTellsTheExperimentsApart:
         assert results.experiments["expt"].layout is None
         assert results.experiments["expt"].layout_error is None
         assert manager.experiments["expt"].layout is None
+
+    @pytest.mark.parametrize("error", [FileNotFoundError("no config.yaml"), GrammarError("unexpected character")])
+    def test_whatever_the_readers_raise_stops_nothing(self, error):
+        """A missing configuration file, or one a parser of its own cannot read, is kept as the reason."""
+        manager = MockProfilingManager([Path("expt")], ncpus=[8], datasets=[make_component_dataset([1.0, 2.0])])
+
+        with (
+            mock.patch.object(manager, "parse_ncpus", side_effect=error),
+            mock.patch.object(manager.application, "parse_layout", side_effect=error),
+        ):
+            results = manager.parse_profiling_data()
+
+        assert (results.experiments["expt"].ncpus_error, results.experiments["expt"].layout_error) == (
+            str(error),
+            str(error),
+        )
 
     def test_a_layout_that_cannot_be_read_stops_nothing(self):
         manager = MockProfilingManager([Path("expt")], ncpus=[8], datasets=[make_component_dataset([1.0, 2.0])])
@@ -1155,10 +1176,13 @@ class TestArchivedRecords:
         assert found._ncpus("release") == 4
         assert found._parse_ncpus_calls == [], "the record states it"
 
-    @pytest.mark.parametrize("error", [FileNotFoundError("config.yaml"), ValueError("NPROC is not set")])
+    @pytest.mark.parametrize(
+        "error", [FileNotFoundError("config.yaml"), ValueError("NPROC is not set"), GrammarError("unexpected")]
+    )
     def test_a_count_that_cannot_be_read_stops_nothing(self, tmp_path, caplog, error):
         """The other experiments are archived, the study file is copied, and the record leaves the count null. Payu's
-        parse_ncpus raises the first without a config.yaml, and Cylc's the second for a variable it cannot find."""
+        parse_ncpus raises the first without a config.yaml, Cylc's the second for a variable it cannot find, and the
+        Rose parser an error of its own for a line it cannot read."""
         manager = added(tmp_path)
         (manager.work_dir / "second").mkdir()
         manager.add_experiment_from_directory("second", Path("second"))

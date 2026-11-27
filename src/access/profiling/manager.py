@@ -1072,13 +1072,14 @@ class ProfilingManager(ABC, Generic[AppT]):
             if exp.status == ProfilingExperimentStatus.DONE:
                 # The run is over, so the count can no longer change. Kept in the archive's record, it is not
                 # read out of the tarball again. A count that cannot be read now is left to be read from the
-                # tarball when it is needed, rather than stopping the other experiments being archived.
+                # tarball when the experiment is parsed, rather than stopping the other experiments being archived,
+                # whatever the reader raised: a Rose or a YAML parser raises errors of its own.
                 try:
                     self._ncpus(branch)
-                except (OSError, ValueError) as error:
+                except Exception as error:
                     logger.warning(
                         f"The number of CPUs of experiment '{branch}' could not be read ({error}), so the record in "
-                        "its archive leaves it null. It is read from the archive when a selection or a plot needs it."
+                        "its archive leaves it null. It is read from the archive when the experiment is parsed."
                     )
             exp.archive(
                 self.archive_dir / branch,
@@ -1343,7 +1344,9 @@ class ProfilingManager(ABC, Generic[AppT]):
         if experiment.ncpus is None:
             try:
                 experiment.ncpus = self.parse_ncpus(exp_path, run_path)
-            except (OSError, ValueError) as error:
+            # Whatever the reader raises: a Rose or a YAML parser raises errors of its own, and one experiment whose
+            # count cannot be read stops no other analysis, the reason being raised by the reader that needs it.
+            except Exception as error:
                 return str(error)
         return None
 
@@ -1366,7 +1369,8 @@ class ProfilingManager(ABC, Generic[AppT]):
         if experiment.layout is None:
             try:
                 experiment.layout = self._parse_layout(exp_path, run_path)
-            except (OSError, ValueError) as error:
+            # Whatever the reader raises, as for the count of CPUs.
+            except Exception as error:
                 return str(error)
         return None
 

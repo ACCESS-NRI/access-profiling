@@ -23,8 +23,9 @@ results = manager.parse_profiling_data()
 
 Printing `results` lists the experiments it holds, with their logs and labels. It also lists the experiments that
 were not parsed, with the reason, such as a status of RUNNING. The results do not change once they are made. A
-method that selects experiments or reduces their runs returns new results, and leaves `results` as it was. To read
-the experiments that have finished since, parse them again.
+method that reduces their runs returns new results, and leaves `results` as it was. To read the experiments that have
+finished since, parse them again. The datasets in `results.data` belong to the results, so copy a dataset before you
+change it, for example with `ds.copy()`.
 
 The data is in `results.data`, with one dataset for each log of each experiment. Take a look at the logs of one
 experiment, and at the regions of one of them:
