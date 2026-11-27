@@ -23,6 +23,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from access.config.parallel_domain import Domain
+from payu.access_models import ACCESS_OM2
 
 from access.profiling.control import GitControlSource
 from access.profiling.models.cice import CICEPartitioning
@@ -114,8 +115,8 @@ class OM2Configuration(SubmodelsConfiguration):
     ocean: Domain
     sea_ice: CICEPartitioning
     sea_ice_executable: str | None = "cice_auscom.exe"
-    model_type: str = "access-om2"
-    model_name: str = "ACCESS-OM2"
+    model_type: str = ACCESS_OM2.workflow.model
+    model_name: str = ACCESS_OM2.name
     experiment_prefix: str = "om2-layout"
 
     @property
@@ -153,10 +154,11 @@ class OM2Configuration(SubmodelsConfiguration):
                 `control_options`.
         """
         types = sorted(submodel.model for submodel in read_submodels(directory))
-        if types != ["cice5", "mom", "yatm"]:
+        expected = [submodel.model for submodel in ACCESS_OM2.workflow.submodels]
+        if types != sorted(expected):
             raise ValueError(
-                f"The control at {directory} declares submodels of types {types}, where ACCESS-OM2 runs yatm, mom "
-                "and cice5."
+                f"The control at {directory} declares submodels of types {types}, where ACCESS-OM2 runs "
+                f"{', '.join(expected)}."
             )
         try:
             sea_ice = CICEPartitioning.from_control(directory, "ice/cice_in.nml")
@@ -198,7 +200,7 @@ OM2_01DEG: OM2Configuration = OM2Configuration(name="01deg", ocean=OM2_01DEG_GRI
 OM2_01DEG_CORES: dict[str, int] = {OM2_YATM_NAME: 1, OM2_MOM5_NAME: 4358, OM2_CICE5_NAME: 722}
 """Cores each component receives in release-01deg_jra55_ryf-4.1, keyed by component name; the ocean's is masked."""
 
-OM2_CONFIGS_REPOSITORY: str = "git@github.com:ACCESS-NRI/access-om2-configs.git"
+OM2_CONFIGS_REPOSITORY: str = ACCESS_OM2.configs_ssh_url
 """The repository holding the released ACCESS-OM2 configurations."""
 OM2_1DEG_JRA55_RYF_SOURCE: GitControlSource = GitControlSource(
     repository=OM2_CONFIGS_REPOSITORY,

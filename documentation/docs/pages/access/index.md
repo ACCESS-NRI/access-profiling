@@ -118,7 +118,7 @@ the total number of cores of the layout as `ncpureq`. The decompositions of the 
 | `UM` | `UMProfilingParser` | `UM7` | The UM's standard output, `atmosphere/<UM_STDOUT_FILE>0` |
 | `UM_Total_Walltime` | `UMTotalRuntimeParser` | `UM7` | The same file |
 | `MOM5` | `FMSProfilingParser(has_hits=False)` | `MOM5` | The model's standard output, `access.out` |
-| `CICE4` | `CICE5ProfilingParser` | `CICE4` | `ice/ice_diag.d`, which CICE4 writes in CICE5's format |
+| `CICE4` | `CICE5ProfilingParser` | `CICE4` | `ice/ice_diag.d`, which CICE4 writes in CICE5's format. Payu puts it in `ice/logfiles.tar.gz` when it archives a run, unless `archive: compress_logs` is off, and it is then read from the tarball |
 | `payu` | `PayuJSONProfilingParser` | | Payu's job file of each run |
 
 ## ACCESS-OM2

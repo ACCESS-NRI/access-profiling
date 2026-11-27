@@ -8,6 +8,8 @@ from access.config.parallel_component import ComponentLayout
 from access.config.parallel_constraints import ProcessGridDimEvenConstraint, SubdomainAspectRatioConstraint
 from access.config.parallel_domain import Domain, DomainDecompositionSpec
 from access.config.parallel_mpi_grid import MPICartesianGrid
+from conftest import written_setting
+from payu.access_models import ACCESS_ESM15, ACCESS_ESM16, ACCESS_OM2
 
 from access.profiling.cice5_parser import CICE5ProfilingParser
 from access.profiling.fms_parser import FMSProfilingParser
@@ -184,3 +186,25 @@ class TestCICEComponent:
 
         with mock.patch.object(CICEPartitioning, "namelist_changes", return_value={}):
             assert silent.config_changes(_undecomposed("ice", 24)) == {}
+
+
+class TestPayusDescription:
+    """The UM and MOM5 write a layout where Payu's description of the ACCESS models says their controls state it."""
+
+    @pytest.mark.parametrize("model", [ACCESS_ESM15, ACCESS_ESM16], ids=lambda model: model.name)
+    def test_the_um_writes_its_process_grid_into_its_environment(self, model):
+        grid = model.component(UMComponent.name).parallelism
+
+        changes = UMComponent(N96).config_changes(_decomposed("UM7", N96, (16, 12)))
+
+        assert (written_setting(changes, grid.x), written_setting(changes, grid.y)) == ("16", "12")
+
+    @pytest.mark.parametrize("model", [ACCESS_ESM15, ACCESS_ESM16, ACCESS_OM2], ids=lambda model: model.name)
+    def test_mom5_writes_its_layout_into_its_namelist(self, model):
+        """MOM5 states both extents in one entry, `layout`."""
+
+        grid = model.component(MOM5Component.name).parallelism
+
+        changes = MOM5Component(ONE_DEGREE).config_changes(_decomposed("MOM5", ONE_DEGREE, (16, 15)))
+
+        assert (written_setting(changes, grid.x), grid.y) == ("16, 15", None)

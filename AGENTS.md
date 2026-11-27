@@ -11,11 +11,14 @@ application and the engine, and ships implementations for the ACCESS climate mod
 ACCESS-OM2 and ACCESS-OM3 run with Payu, and the UM suites of ACCESS-AM3, ACCESS-rAM3 and ACCESS-CM3 run with Cylc
 and Rose.
 
-Python >= 3.11.4, which the `filter="data"` tarball extraction in `experiment.py` needs; CI covers 3.11–3.13. The
-layout search (`ParallelComponent`, `iter_layouts`, the allocation strategies and the constraints) and the parsers of
-configuration files (`YAMLParser`, `NUOPCParser`, ...) come from
+Python >= 3.11.4, which the `filter="data"` tarball extraction in `experiment.py` and `payu_configuration.py` needs; CI
+covers 3.11–3.13. The layout search (`ParallelComponent`, `iter_layouts`, the allocation strategies and the constraints)
+and the parsers of configuration files (`YAMLParser`, `NUOPCParser`, ...) come from
 [access-config-utils](https://github.com/ACCESS-NRI/access-config-utils). The Payu manager creates experiments with
-experiment-generator and runs them with experiment-runner.
+experiment-generator and runs them with experiment-runner. What the ACCESS models are (their names, components, Payu
+submodels and Cylc tasks, the settings that state a layout, the repositories of their configurations) comes from Payu's
+description of them, `payu.access_models`, which Payu's drivers share, and where Payu puts what a run writes from
+`payu.conventions`.
 
 The package is built on two axes. A **manager** (`ProfilingManager`) drives one workflow engine: it generates,
 runs, archives and parses experiments, and reads what the engine and the scheduler wrote. An **application**
@@ -76,7 +79,7 @@ src/access/profiling/
 
   ── the workflow engines ──
   payu_configuration.py PayuConfiguration, SubmodelsConfiguration, PayuComponent, PlainComponent, PayuSubmodel,
-                        FixedRanksConstraint, payu_model_stdout
+                        FixedRanksConstraint, payu_model_stdout, payu_submodel_log
   payu_manager.py       PayuManager: experiment-generator, experiment-runner and Payu's job files
   rose_configuration.py RoseSuiteConfiguration, RoseComponent, RoseProcessGrid, RoseRanks, read_section
   cylc_manager.py       CylcRoseManager: copies of the control suite, rose suite-run and the Cylc suite database
@@ -107,7 +110,9 @@ Four boundaries in that graph are load-bearing:
   value a manager is handed, not a subclass of one.
 - **`payu_configuration` does not import the job-submission stack** (`payu_manager`, experiment-generator,
   experiment-runner): describing what is profiled should not need what submits it. `__init__.py` imports
-  everything, so this is about dependencies, not import time.
+  everything, so this is about dependencies, not import time. From Payu, it, the models and `um_parser` import
+  `payu.access_models` and `payu.conventions` alone, which import nothing else from Payu (Payu's
+  `test_access_models.py` checks it).
 - **`application`, `experiment` and `parser` never import a parser module.** `um_parser` imports `application` for
   `um_stdout`, so the reverse would close a cycle.
 
@@ -140,6 +145,10 @@ blocks, one page per concept. A new module needs a block on the right page and a
   in its format.
 - **The order of `_metrics` is load-bearing** in `UMProfilingParser`, which builds its regular expression for a
   region in that order, and in `FMSProfilingParser`, which zips them with the column labels.
+- **A log a Payu driver tars when it archives a run is read out of the tarball.** CICE4's `ice_diag.d` goes into
+  `ice/logfiles.tar.gz` unless `archive: compress_logs` is off. `payu_submodel_log` locates the log, or else the
+  tarball `payu.conventions.log_tarball` names, and hands the log's own parser the member, extracted into a temporary
+  directory with `filter="data"`. Which logs a driver tars is Payu's to say, never a list here.
 - New metrics are named `<base>_<stat>_<dimension>`, as the module docstring of `metrics.py` lays out; the
   predefined ones keep their short names.
 
@@ -313,6 +322,12 @@ blocks, one page per concept. A new module needs a block on the right page and a
   (`suite_variables`), and a configuration refuses a variable used for two settings, its `walltime_variable`
   included, which would overwrite each other. Rose files are read with `RoseConfParser` from access-config-utils, through `read_section`, which leaves out
   what Rose ignores (`!KEY`, `!!KEY`) and refuses a setting written both in use and ignored.
+- **What an ACCESS model is, is Payu's**: a configuration takes its `model_name`, its `model_type`, the submodel
+  types `from_control` accepts, the variables of a suite and the repository of its configurations from
+  `payu.access_models`, never a literal of its own. What only profiling needs stays here: grids, constraints,
+  tokens, release tags. The literals that remain (the submodels a configuration declares, the files and keys a
+  component writes) are checked against Payu's description by the `TestPayusDescription` class of each model's
+  test file and of `test_components.py`, with `written_setting`. A change to a model goes into Payu first.
 - **Presets are module-level values with a docstring on the line after**, which is what puts them in the API
   reference. A model ships a preset per distinct layout, and a control source per configuration, beside the presets
   rather than on them: at the configuration's latest release tag, or at its `dev-*` branch while it has no release,
@@ -397,8 +412,9 @@ same second leaves the mutant's `.pyc` loaded.
 - **`conftest.py` has one fixture**, `close_figures`, which closes the figures every test drew. The rest are
   helpers, imported with `from conftest import ...`: those that narrow an optional result with an assertion message
   rather than an `AttributeError` (`component_of`, `layout_of`, `decomposition_of`, `grid_of`, `legend_labels`), and
-  those more than one module needs (`fake_parser`, `select_layouts` for a Payu application, and `write_suite_conf`
-  for the variables of a Rose suite). The import works because `tests/` has no `__init__.py`: don't add one.
+  those more than one module needs (`fake_parser`, `select_layouts` for a Payu application, `write_suite_conf`
+  for the variables of a Rose suite, and `written_setting` for what a configuration writes for a setting of
+  `payu.access_models`). The import works because `tests/` has no `__init__.py`: don't add one.
 - Newer files group tests in `class Test<Behaviour>:` blocks with no base class and no setup, the class docstring
   stating the behaviour. `pytest.raises` gets a `match=`. A test's docstring says what is checked and, where it is
   not obvious, why. Tests carry no type annotations.

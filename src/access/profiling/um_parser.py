@@ -40,6 +40,7 @@ import re
 from pathlib import Path
 
 from access.config import YAMLParser
+from payu.access_models import um_stdout_file
 
 from access.profiling.application import LogLocator
 from access.profiling.metrics import pemax, pemin, tavg, tmax, tmed, tmin, tstd
@@ -254,7 +255,8 @@ def um_stdout() -> LogLocator:
     """Returns a locator for the UM's standard output.
 
     The UM writes one file per rank and names them from `UM_STDOUT_FILE` in its own environment file; the
-    timings are in rank 0's.
+    timings are in rank 0's. Which file that is, is the rule of Payu's description of the ACCESS models,
+    `payu.access_models.um_stdout_file`, which Payu reads it by too.
 
     The `atmosphere/` path segment is where a Payu-driven run puts the UM's output. That is a coupling to the
     runner rather than to the UM, and it is written here rather than hidden: a suite that lays its output out
@@ -268,8 +270,7 @@ def um_stdout() -> LogLocator:
         um_env_path = output_dir / "atmosphere" / "um_env.yaml"
         if not um_env_path.is_file():
             return None
-        um_env = YAMLParser().parse(um_env_path.read_text())
-        stem = um_env.get("UM_STDOUT_FILE")
-        return None if stem is None else output_dir / "atmosphere" / f"{stem}0"
+        stdout = um_stdout_file(YAMLParser().parse(um_env_path.read_text()))
+        return None if stdout is None else output_dir / "atmosphere" / stdout
 
     return locate

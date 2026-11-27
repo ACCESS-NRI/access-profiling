@@ -13,7 +13,8 @@ are for test code only: production code states the same thing with an explicit V
 reader is a user rather than whoever is holding the test output.
 
 It also holds what more than one test module needs: a stand-in parser, the layout search of a Payu application,
-the variables of a Rose suite, and the closing of the figures a test draws.
+the variables of a Rose suite, the value a configuration writes for a setting Payu's description of the ACCESS
+models names, and the closing of the figures a test draws.
 """
 
 from collections.abc import Iterator
@@ -24,6 +25,7 @@ import matplotlib.pyplot as plt
 import pytest
 from access.config.parallel_component import ComponentLayout
 from access.config.parallel_domain import DomainDecompositionSpec
+from payu.access_models import Setting
 
 from access.profiling.manager import find_component
 from access.profiling.parser import ProfilingParser
@@ -153,3 +155,20 @@ def legend_labels(ax) -> list[str]:
     legend = ax.get_legend()
     assert legend is not None, "the axes carries no legend"
     return [text.get_text() for text in legend.get_texts()]
+
+
+def written_setting(changes: dict, setting: Setting) -> object:
+    """Returns what a configuration's changes write for a setting, asserting they write it.
+
+    Args:
+        changes (dict): The changes, keyed by file and by section, as `config_changes` returns them.
+        setting (Setting): Where Payu's description of the ACCESS models says the control states the setting.
+
+    Returns:
+        The value written.
+    """
+    values = changes.get(setting.file, {})
+    if setting.section is not None:
+        values = values.get(setting.section, {})
+    assert setting.key in values, f"the changes write no {setting} for a layout"
+    return values[setting.key]

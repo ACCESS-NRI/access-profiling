@@ -241,3 +241,12 @@ the ACCESS models use to read their files. The Payu manager creates experiments 
 [experiment-runner](https://access-experiment-runner.access-hive.org.au/), which in turn drive
 [Payu](https://payu.readthedocs.io/en/stable/). The Cylc manager writes the Rose configurations of its copies of a
 suite with `RoseConfParser`, from access-config-utils, and runs the suites with `rose suite-run`.
+
+What the ACCESS models are comes from Payu too. Its description of the ACCESS models, `payu.access_models`, states
+the components of each model and the files and settings in which a control states their parallelism. It also states
+the Payu submodels or the Cylc tasks that run them, and the repository of the model's configurations. Payu's own
+drivers read the models from it, and so do the models here, rather than stating them again. What only profiling
+needs stays here: the grids, the constraints and the tokens of a layout key. Payu's conventions, `payu.conventions`,
+say where Payu puts what a run writes, such as the model's standard output and the logs that some of its drivers put
+in a tarball. Neither module imports the rest of Payu, so describing an application does not need the job
+submission.

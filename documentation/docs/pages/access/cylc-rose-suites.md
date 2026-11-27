@@ -45,7 +45,7 @@ suite as follows:
     ```bash
     mkdir -p /scratch/$PROJECT/model_scaling/ACCESS-AM3/release-n96e-3.0
     cd /scratch/$PROJECT/model_scaling/ACCESS-AM3/release-n96e-3.0
-    git clone git@github.com:ACCESS-NRI/ACCESS-AM3-configs.git -b release-n96e-3.0 config
+    git clone git@github.com:ACCESS-NRI/access-am3-configs.git -b release-n96e-3.0 config
     ```
 
     This clones the release into the working directory of the study, under the name `config`, which is where the

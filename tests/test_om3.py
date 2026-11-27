@@ -10,7 +10,8 @@ from access.config.parallel_allocation_strategies import FixedAllocation, FreeAl
 from access.config.parallel_component import ComponentLayout
 from access.config.parallel_constraints import DomainDivisibleByRanksConstraint, EqualCoresGroupConstraint
 from access.config.parallel_domain import Domain
-from conftest import component_of, layout_of, select_layouts
+from conftest import component_of, layout_of, select_layouts, written_setting
+from payu.access_models import ACCESS_OM3
 
 from access.profiling.cice5_parser import CICE5ProfilingParser
 from access.profiling.control import GitControlSource
@@ -942,3 +943,32 @@ class TestBlockSizeChoices:
             OM3_MC_100KM.block_size_choices(
                 layouts, {"1": (1, 1)}, changes={"ice_in": {"domain_nml": {"distribution_type": "'roundrobin'"}}}
             )
+
+
+class TestPayusDescription:
+    """The configuration agrees with Payu's description of ACCESS-OM3, `payu.access_models`."""
+
+    def test_its_components_are_named_after_payus_realms(self):
+        """The shared range is a component of the tree, not a realm."""
+
+        names = {
+            OM3_MEDIATOR_NAME,
+            OM3_ATMOSPHERE_NAME,
+            OM3_SEA_ICE_NAME,
+            OM3_RUNOFF_NAME,
+            OM3_OCEAN_NAME,
+            OM3_WAVE_NAME,
+        }
+
+        assert names == {realm.prefix for realm in ACCESS_OM3.realms}
+
+    def test_each_realm_s_ranks_are_written_into_the_pe_layout(self):
+        """The waves included, in a configuration that runs them."""
+
+        layout = _om3_layout(OM3_MCW_100KM, 208, OM3_MCW_100KM_CORES)
+
+        changes = OM3_MCW_100KM.config_changes(layout)
+
+        for realm in ACCESS_OM3.realms:
+            ranks = ACCESS_OM3.component(realm.component).parallelism.ranks
+            assert written_setting(changes, ranks) == OM3_MCW_100KM_CORES[realm.prefix]

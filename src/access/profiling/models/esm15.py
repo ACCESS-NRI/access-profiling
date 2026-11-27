@@ -18,8 +18,8 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 from access.config.parallel_domain import Domain
+from payu.access_models import ACCESS_ESM15
 
-from access.profiling.application import LogSpec, log_at
 from access.profiling.cice5_parser import CICE5ProfilingParser
 from access.profiling.control import GitControlSource
 from access.profiling.models.components import MOM5Component, UMComponent
@@ -28,6 +28,7 @@ from access.profiling.payu_configuration import (
     PlainComponent,
     SubmodelsConfiguration,
     control_name,
+    payu_submodel_log,
     read_submodels,
 )
 
@@ -37,6 +38,10 @@ ESM15_MOM5_NAME: str = MOM5Component.name
 """Component name of the ocean, MOM5."""
 ESM15_CICE4_NAME: str = "CICE4"
 """Component name of the sea ice, CICE4."""
+
+# The log CICE4 writes its timers to, in its submodel's directory. Payu's driver of CICE4 puts it in a tarball when
+# it archives a run.
+_CICE4_LOG: str = "ice_diag.d"
 
 ESM15_N96_ATMOSPHERE: Domain = Domain(shape=(192, 144))
 """The N96 atmosphere grid, which both released ACCESS-ESM1.5 configurations run the UM on."""
@@ -86,8 +91,8 @@ class ESM15Configuration(SubmodelsConfiguration):
     atmosphere: Domain | None = None
     ocean: Domain | None = None
     sea_ice: int | None = None
-    model_type: str = "access"
-    model_name: str = "ACCESS-ESM1.5"
+    model_type: str = ACCESS_ESM15.workflow.model
+    model_name: str = ACCESS_ESM15.name
     experiment_prefix: str = "esm1p5-layout"
 
     @property
@@ -108,7 +113,15 @@ class ESM15Configuration(SubmodelsConfiguration):
                 name=ESM15_CICE4_NAME,
                 token="ice",
                 n_ranks=self.sea_ice,
-                logs=(LogSpec("CICE4", log_at("ice/ice_diag.d"), CICE5ProfilingParser(), component=ESM15_CICE4_NAME),),
+                logs=(
+                    payu_submodel_log(
+                        "CICE4",
+                        ACCESS_ESM15.workflow.submodel(ESM15_CICE4_NAME),
+                        _CICE4_LOG,
+                        CICE5ProfilingParser(),
+                        component=ESM15_CICE4_NAME,
+                    ),
+                ),
             )
             submodels.append(PayuSubmodel("ice", "cice", cice4))
         if len(submodels) > 1:
@@ -143,7 +156,7 @@ class ESM15Configuration(SubmodelsConfiguration):
                 f"The control at {directory} runs CICE5 (`model: cice5`), which is ACCESS-ESM1.6's sea ice: read it "
                 "with ESM16Configuration.from_control."
             )
-        unknown = types - {"um", "mom", "cice", "oasis"}
+        unknown = types - {submodel.model for submodel in ACCESS_ESM15.workflow.submodels}
         if unknown:
             raise ValueError(
                 f"The control at {directory} declares submodels of types {sorted(unknown)}, which ACCESS-ESM1.5 "
@@ -174,12 +187,13 @@ ESM15_PREINDUSTRIAL: ESM15Configuration = ESM15Configuration(
 )
 """The pre-industrial configuration, with concentration-driven greenhouse gases.
 
-CICE4 prints its timers as CICE5 does, so its log is read with the CICE5 parser.
+CICE4 prints its timers as CICE5 does, so its log is read with the CICE5 parser. Payu puts the log in
+`ice/logfiles.tar.gz` when it archives a run, unless `archive: compress_logs` is off, and it is read from there.
 """
 ESM15_HISTORICAL: ESM15Configuration = replace(ESM15_PREINDUSTRIAL, name="historical+concentrations")
 """The historical configuration, with concentration-driven greenhouse gases: the same layout under another name."""
 
-ESM15_CONFIGS_REPOSITORY: str = "git@github.com:ACCESS-NRI/access-esm1.5-configs.git"
+ESM15_CONFIGS_REPOSITORY: str = ACCESS_ESM15.configs_ssh_url
 """The repository holding the released ACCESS-ESM1.5 configurations."""
 ESM15_PREINDUSTRIAL_SOURCE: GitControlSource = GitControlSource(
     repository=ESM15_CONFIGS_REPOSITORY,

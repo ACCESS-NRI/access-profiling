@@ -18,6 +18,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 from access.config.parallel_domain import Domain
+from payu.access_models import ACCESS_ESM16
 
 from access.profiling.control import GitControlSource
 from access.profiling.models.cice import CICEPartitioning
@@ -88,8 +89,8 @@ class ESM16Configuration(SubmodelsConfiguration):
     ocean: Domain | None = None
     sea_ice: CICEPartitioning | None = None
     sea_ice_executable: str | None = "cice_access.exe"
-    model_type: str = "access-esm1.6"
-    model_name: str = "ACCESS-ESM1.6"
+    model_type: str = ACCESS_ESM16.workflow.model
+    model_name: str = ACCESS_ESM16.name
     experiment_prefix: str = "esm1p6-layout"
 
     @property
@@ -140,7 +141,7 @@ class ESM16Configuration(SubmodelsConfiguration):
                 f"The control at {directory} runs CICE4 (`model: cice`), which is ACCESS-ESM1.5's sea ice: read it "
                 "with ESM15Configuration.from_control."
             )
-        unknown = types - {"um", "mom", "cice5", "oasis"}
+        unknown = types - {submodel.model for submodel in ACCESS_ESM16.workflow.submodels}
         if unknown:
             raise ValueError(
                 f"The control at {directory} declares submodels of types {sorted(unknown)}, which ACCESS-ESM1.6 "
@@ -183,7 +184,7 @@ ESM16_AMIP: ESM16Configuration = ESM16Configuration(name="amip", atmosphere=ESM1
 `release-amip-1.0` runs it on 208 cores, as a 16 x 13 process grid.
 """
 
-ESM16_CONFIGS_REPOSITORY: str = "git@github.com:ACCESS-NRI/access-esm1.6-configs.git"
+ESM16_CONFIGS_REPOSITORY: str = ACCESS_ESM16.configs_ssh_url
 """The repository holding the released ACCESS-ESM1.6 configurations."""
 ESM16_PI_CONTROL_SOURCE: GitControlSource = GitControlSource(
     repository=ESM16_CONFIGS_REPOSITORY,

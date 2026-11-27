@@ -9,6 +9,7 @@ from access.config.parallel_component import CoreSharing
 from access.config.parallel_domain import Domain
 from access.config.parallel_layouts import iter_layouts
 from conftest import grid_of, write_suite_conf
+from payu.access_models import ACCESS_AM3, ACCESS_CM3, ACCESS_RAM3, ProcessGrid
 
 from access.profiling.models import um_suites
 from access.profiling.models.components import UM_CONSTRAINTS
@@ -23,6 +24,7 @@ from access.profiling.models.um_suites import (
     UM_SUITE_PARSERS,
     am3_from_control,
 )
+from access.profiling.rose_configuration import SUITE_CONF, SUITE_VARIABLES
 from access.profiling.um_parser import UMProfilingParser, UMTotalRuntimeParser
 
 
@@ -263,3 +265,20 @@ class TestAM3FromControl:
     def test_a_suite_without_a_um_app_is_refused(self, tmp_path):
         with pytest.raises(FileNotFoundError, match="app/um/rose-app.conf"):
             am3_from_control(tmp_path)
+
+
+class TestPayusDescription:
+    """The suites agree with Payu's description of the models, `payu.access_models`."""
+
+    @pytest.mark.parametrize("model", [ACCESS_AM3, ACCESS_RAM3, ACCESS_CM3], ids=lambda model: model.name)
+    def test_every_variable_is_one_of_rose_suite_conf(self, model):
+        """The suites take the variables' names alone, as variables of the section their templates read."""
+
+        for component in model.components:
+            parallelism = component.parallelism
+            if isinstance(parallelism, ProcessGrid):
+                settings = [parallelism.x, parallelism.y, parallelism.threads, parallelism.io_server]
+            else:
+                settings = [parallelism.ranks]
+            for setting in settings:
+                assert setting is None or (setting.file, setting.section) == (SUITE_CONF, SUITE_VARIABLES)

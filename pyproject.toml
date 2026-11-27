@@ -25,7 +25,7 @@ dependencies = [
     "access-config-utils>=0.6",
     "experiment-generator>=0.10.2",
     "experiment-runner>=0.3.2",
-    "payu", # Extra dependency of experiment-runner, not handled correctly in conda
+    "payu", # payu.access_models and payu.conventions; also an extra dependency of experiment-runner
 ]
 
 [project.urls]

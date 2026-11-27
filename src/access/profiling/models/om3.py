@@ -26,6 +26,7 @@ from pathlib import Path
 
 from access.config import MOM6InputParser, NUOPCParser
 from access.config.parallel_component import ComponentLayout, CoreSharing, ParallelComponent
+from payu.access_models import ACCESS_OM3, active_realms
 
 from access.profiling.application import LogSpec, log_at
 from access.profiling.control import GitControlSource
@@ -128,8 +129,8 @@ class OM3Configuration(PayuConfiguration):
     name: str
     sea_ice: CICEPartitioning
     waves: bool = False
-    model_type: str = "access-om3"
-    model_name: str = "ACCESS-OM3"
+    model_type: str = ACCESS_OM3.workflow.model
+    model_name: str = ACCESS_OM3.name
     experiment_prefix: str = "om3-layout"
 
     def __post_init__(self) -> None:
@@ -143,10 +144,11 @@ class OM3Configuration(PayuConfiguration):
     def from_control(cls, directory: Path, name: str | None = None) -> "OM3Configuration":
         """Returns the configuration a control directory holds, read from its own files.
 
-        The realms come from `nuopc.runconfig`, by the rules Payu's own ACCESS-OM3 driver reads them with: a
-        realm whose model starts with `s` is a stub and absent, `d` is a data component, and `cice`, `mom` and
-        `ww3` are the models. The sea ice is read from `ice_in` with the block size the control pins; a study
-        choosing the blocks from the rank count, as the presets do, replaces it:
+        The realms come from `nuopc.runconfig`, by the rules Payu's own ACCESS-OM3 driver reads them with, which
+        `payu.access_models` states: a realm whose model is the realm's stub, such as `swav`, is absent, and
+        `cice`, `mom` and `ww3dev` are the models the sea ice, the ocean and the waves run. The sea ice is read
+        from `ice_in` with the block size the control pins; a study choosing the blocks from the rank count, as the
+        presets do, replaces it:
         `replace(sea_ice, block_shape=None, blocks_per_rank_range=OM3_CICE6_BLOCKS_PER_RANK_RANGE)`. `MOM_input`
         is read only to warn: a LAYOUT or a MASKTABLE pinned there without AUTO_MASKTABLE has to be removed, and
         AUTO_MASKTABLE set, through `control_options` before a generated ocean core count runs.
@@ -167,15 +169,17 @@ class OM3Configuration(PayuConfiguration):
         if not runconfig_path.is_file():
             raise ValueError(f"The control at {directory} has no nuopc.runconfig, so it is not an ACCESS-OM3 control.")
         models = NUOPCParser().parse(runconfig_path.read_text()).get("ALLCOMP_attributes") or {}
-        ice_model, ocn_model, wav_model = (models.get(f"{realm}_model") for realm in ("ICE", "OCN", "WAV"))
-        if ice_model != "cice":
+        ice, ocean = ACCESS_OM3.realm(OM3_SEA_ICE_NAME), ACCESS_OM3.realm(OM3_OCEAN_NAME)
+        # What the control states, and not what active_realms gives back, which leaves a stubbed sea ice out.
+        ice_model, ocn_model = (models.get(f"{realm.section}_model") for realm in (ice, ocean))
+        if ice_model != ice.model:
             raise ValueError(
                 f"The sea ice of the control at {directory} is {ice_model!r}, not CICE: a configuration with a data "
                 "or a stub sea ice is a subclass of OM3Configuration returning its own components."
             )
-        if ocn_model != "mom":
+        if ocn_model != ocean.model:
             raise ValueError(f"The ocean of the control at {directory} is {ocn_model!r}, not MOM6.")
-        waves = wav_model is not None and not wav_model.startswith("s")
+        waves = OM3_WAVE_NAME in active_realms(models, ACCESS_OM3)
         sea_ice = CICEPartitioning.from_control(directory, "ice_in")
         _warn_of_a_pinned_ocean_layout(directory)
         return cls(name=control_name(directory, name), sea_ice=sea_ice, waves=waves)
@@ -732,7 +736,7 @@ OM3_MC_PANAN4KM_ISF_CORES: dict[str, int] = {
 Its control asks for 2990 cores, which is not a whole number of 104-core nodes.
 """
 
-OM3_CONFIGS_REPOSITORY: str = "git@github.com:ACCESS-NRI/access-om3-configs.git"
+OM3_CONFIGS_REPOSITORY: str = ACCESS_OM3.configs_ssh_url
 """The repository holding the released ACCESS-OM3 configurations."""
 OM3_MC_25KM_JRA_RYF_SOURCE: GitControlSource = GitControlSource(
     repository=OM3_CONFIGS_REPOSITORY,

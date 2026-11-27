@@ -7,7 +7,8 @@ from unittest import mock
 import pytest
 from access.config.parallel_allocation_strategies import FixedAllocation, FreeAllocation, RootAllocation
 from access.config.parallel_constraints import SubdomainAspectRatioConstraint
-from conftest import grid_of, layout_of, select_layouts
+from conftest import grid_of, layout_of, select_layouts, written_setting
+from payu.access_models import ACCESS_OM2
 
 from access.profiling.cice5_parser import CICE5ProfilingParser
 from access.profiling.control import GitControlSource
@@ -275,7 +276,7 @@ class TestOM2FromControl:
     def test_a_control_of_another_model_is_refused(self, tmp_path):
         control = _om2_control(tmp_path, RUNTIME_CICE_IN, types=("um", "mom", "cice5"))
 
-        with pytest.raises(ValueError, match="where ACCESS-OM2 runs yatm, mom and cice5"):
+        with pytest.raises(ValueError, match="where ACCESS-OM2 runs yatm, mom, cice5"):
             OM2Configuration.from_control(control)
 
 
@@ -292,3 +293,17 @@ def test_om2_ships_a_control_for_every_released_configuration():
         assert source.start_point.startswith("release-")
     assert om2.OM2_1DEG_JRA55_RYF_SOURCE.start_point == "release-1deg_jra55_ryf-4.1"
     assert om2.OM2_01DEG_JRA55_IAF_WOMBATLITE_SOURCE.start_point == "release-01deg_jra55_iaf+wombatlite-3.0"
+
+
+class TestPayusDescription:
+    """The configuration agrees with Payu's description of ACCESS-OM2, `payu.access_models`."""
+
+    def test_its_submodels_are_payus(self):
+        declared = [(submodel.name, submodel.model) for submodel in OM2_1DEG.submodels]
+
+        assert declared == [(submodel.name, submodel.model) for submodel in ACCESS_OM2.workflow.submodels]
+
+    def test_the_sea_ice_s_ranks_are_written_into_its_namelist(self, one_degree_layout):
+        ranks = ACCESS_OM2.component(OM2_CICE5_NAME).parallelism.ranks
+
+        assert written_setting(OM2_1DEG.config_changes(one_degree_layout), ranks) == "24"

@@ -1,7 +1,9 @@
 # Copyright 2025 ACCESS-NRI and contributors. See the top-level COPYRIGHT file for details.
 # SPDX-License-Identifier: Apache-2.0
 
+import tarfile
 from dataclasses import dataclass
+from pathlib import Path
 
 import pytest
 from access.config.parallel_allocation_strategies import FixedAllocation, FreeAllocation, RootAllocation
@@ -10,6 +12,7 @@ from access.config.parallel_constraints import FixedThreadsPerRankConstraint, Ma
 from access.config.parallel_domain import Domain, DomainDecompositionSpec
 from access.config.parallel_mpi_grid import MPICartesianGrid
 from conftest import fake_parser, grid_of, layout_of, select_layouts
+from payu.access_models import Submodel
 
 from access.profiling.application import LogSpec, log_at
 from access.profiling.payu_configuration import (
@@ -20,6 +23,7 @@ from access.profiling.payu_configuration import (
     SubmodelsConfiguration,
     control_name,
     payu_model_stdout,
+    payu_submodel_log,
     read_submodels,
     require_process_grid,
 )
@@ -65,6 +69,90 @@ def _layout(name: str, n_ranks: int, grid: tuple[int, ...] | None = None) -> Com
     if grid is not None:
         decomposition = DomainDecompositionSpec(Domain(tuple(8 * ranks for ranks in grid)), MPICartesianGrid(grid))
     return ComponentLayout(name=name, n_cores=n_ranks, n_ranks=n_ranks, threads_per_rank=1, decomposition=decomposition)
+
+
+class TestPayuSubmodelLog:
+    """A log a submodel writes is read where Payu left it: beside the tarball its driver puts logs in, or in it."""
+
+    @staticmethod
+    def _parser():
+        """A parser that gives back the text it read, so that what was read can be told."""
+        parser = fake_parser()
+        parser.parse.side_effect = lambda path: {"text": Path(path).read_text()}
+        return parser
+
+    @staticmethod
+    def _tarball(path: Path, members: dict[str, str]) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with tarfile.open(path, "w:gz") as tarball:
+            for name, text in members.items():
+                member = path.parent / f"member-{name}"
+                member.write_text(text)
+                tarball.add(member, arcname=name)
+                member.unlink()
+
+    def test_a_log_no_driver_compresses_is_read_where_it_is(self, tmp_path):
+        """CICE5's driver leaves its logs as they are, so the log's own parser reads it."""
+
+        parser = self._parser()
+        spec = payu_submodel_log("CICE5", Submodel("ice", "cice5", "CICE5"), "ice_diag.d", parser, "CICE5")
+        (tmp_path / "ice").mkdir()
+        (tmp_path / "ice" / "ice_diag.d").write_text("timers")
+
+        log = spec.resolve(tmp_path)
+
+        assert (log.filepath, log.parser, spec.component) == (tmp_path / "ice" / "ice_diag.d", parser, "CICE5")
+
+    def test_a_log_left_beside_the_tarball_is_read_where_it_is(self, tmp_path):
+        """A run archived with compress_logs off keeps CICE4's log as it is."""
+
+        spec = payu_submodel_log("CICE4", Submodel("ice", "cice", "CICE4"), "ice_diag.d", self._parser(), "CICE4")
+        (tmp_path / "ice").mkdir()
+        (tmp_path / "ice" / "ice_diag.d").write_text("timers")
+
+        log = spec.resolve(tmp_path)
+
+        assert log.filepath == tmp_path / "ice" / "ice_diag.d"
+        assert log.parser.parse(log.filepath) == {"text": "timers"}
+
+    def test_a_log_payu_compressed_is_read_out_of_the_tarball(self, tmp_path):
+        """Payu's CICE4 driver puts ice_diag.d in logfiles.tar.gz, beside the other logs it compresses."""
+
+        parser = self._parser()
+        spec = payu_submodel_log("CICE4", Submodel("ice", "cice", "CICE4"), "ice_diag.d", parser, "CICE4")
+        self._tarball(tmp_path / "ice" / "logfiles.tar.gz", {"iceout085": "out", "ice_diag.d": "timers"})
+
+        log = spec.resolve(tmp_path)
+
+        assert log.filepath == tmp_path / "ice" / "logfiles.tar.gz"
+        assert log.parser.parse(log.filepath) == {"text": "timers"}
+        # The log's own metrics, the keys of its dataset
+        assert log.parser.metrics is parser.metrics
+
+    def test_a_tarball_without_the_log_is_refused(self, tmp_path):
+        spec = payu_submodel_log("CICE4", Submodel("ice", "cice", "CICE4"), "ice_diag.d", self._parser(), "CICE4")
+        self._tarball(tmp_path / "ice" / "logfiles.tar.gz", {"iceout085": "out"})
+
+        log = spec.resolve(tmp_path)
+
+        with pytest.raises(FileNotFoundError, match=r"logfiles.tar.gz holds no ice_diag.d"):
+            log.parser.parse(log.filepath)
+
+    def test_a_tarball_that_cannot_be_read_is_refused(self, tmp_path):
+        spec = payu_submodel_log("CICE4", Submodel("ice", "cice", "CICE4"), "ice_diag.d", self._parser(), "CICE4")
+        (tmp_path / "ice").mkdir()
+        (tmp_path / "ice" / "logfiles.tar.gz").write_bytes(b"cut short")
+
+        log = spec.resolve(tmp_path)
+
+        with pytest.raises(ValueError, match=r"logfiles.tar.gz is not a tarball that can be read"):
+            log.parser.parse(log.filepath)
+
+    def test_a_run_without_the_log_or_the_tarball_wrote_no_log(self, tmp_path):
+        spec = payu_submodel_log("CICE4", Submodel("ice", "cice", "CICE4"), "ice_diag.d", self._parser(), "CICE4")
+        (tmp_path / "ice").mkdir()
+
+        assert spec.resolve(tmp_path) is None
 
 
 class TestFixedRanksConstraint:

@@ -83,7 +83,9 @@ A log spec has four parts. The first is the name of the log, which is the name y
 log, and the fourth is the component that the log belongs to. [`log_at`][access.profiling.application.log_at] locates a
 file at a fixed path in the output directory, and
 [`payu_model_stdout`][access.profiling.payu_configuration.payu_model_stdout], particular to Payu, locates the
-standard output Payu captured from the run. Mark a log `optional=True` if a run may legitimately not write it.
+standard output Payu captured from the run. Some of Payu's drivers put a submodel's logs in a tarball when they archive
+a run. [`payu_submodel_log`][access.profiling.payu_configuration.payu_submodel_log] declares such a log, and reads it
+from the tarball where it is there. Mark a log `optional=True` if a run may legitimately not write it.
 
 `config_changes` returns the changes to make to the files of the component in order to run a layout. The changes
 are given for each file, with its path relative to the control directory, in the format of

@@ -9,6 +9,10 @@ variables, with an I/O server and OpenMP threads besides. ACCESS-rAM3 runs two n
 each stating its process grid as one comma-separated pair. ACCESS-CM3 runs the UM beside an ocean and a sea ice it
 couples through NUOPC, each given its ranks by a variable. All read their task logs with the same two UM parsers.
 None of that is code, so no suite has any.
+
+The components and their variables, the models' names and the repositories of their configurations are Payu's
+description of the ACCESS models, `payu.access_models`, which the other tools of the models share. What only
+profiling knows stays here: the token of each component in a layout key, the grids and the constraints.
 """
 
 import re
@@ -17,12 +21,14 @@ from pathlib import Path
 from access.config import RoseConfParser
 from access.config.parallel_component import CoreSharing
 from access.config.parallel_domain import Domain
+from payu.access_models import ACCESS_AM3, ACCESS_CM3, ACCESS_RAM3, Model, Ranks, Setting
 
 from access.profiling.control import GitControlSource
 from access.profiling.models.components import UM_CONSTRAINTS
 from access.profiling.rose_configuration import (
     SUITE_CONF,
     SUITE_VARIABLES,
+    RoseComponent,
     RoseProcessGrid,
     RoseRanks,
     RoseSuiteConfiguration,
@@ -42,11 +48,38 @@ The UM writes one profiling log per task, read twice: once for its regions and o
 # Where an ACCESS-AM3 suite states the UM's grid, relative to the suite directory, and the section and the settings
 # that state it there: the namelist the UM itself reads its sizes from. The optional configuration of the UM app for
 # the suite's resolution, which the variable of rose-suite.conf names, changes them where the suite has one.
-_UM_APP_CONF: str = "app/um/rose-app.conf"
+_UM_GRID: tuple[Setting, Setting] = ACCESS_AM3.component("UM").parallelism.grid
+_UM_APP_CONF: str = _UM_GRID[0].file
 _UM_OPT_CONF: str = "app/um/opt/rose-app-{}.conf"
 _UM_RESOLUTION_VARIABLE: str = "EXPT_HORIZ_ATM"
-_UM_SIZES: str = "namelist:nlsizes"
-_UM_GRID_SETTINGS: tuple[str, str] = ("global_row_length", "global_rows")
+_UM_SIZES: str = _UM_GRID[0].section
+_UM_GRID_SETTINGS: tuple[str, str] = (_UM_GRID[0].key, _UM_GRID[1].key)
+
+
+def _rose_component(model: Model, name: str, token: str, **kwargs) -> RoseComponent:
+    """Returns one of a suite's components, stating its parallelism in the variables Payu's description names.
+
+    Args:
+        model (Model): The model, as `payu.access_models` describes it.
+        name (str): The component's name, in the model and in the component tree.
+        token (str): How `RoseSuiteConfiguration.layout_key` abbreviates it.
+        **kwargs: What only profiling knows about a process grid: its `grid` and its `local_constraints`.
+
+    Returns:
+        RoseComponent: A `RoseRanks` for a component given its ranks, and a `RoseProcessGrid` for one decomposing a
+            process grid, its two extents stated apart or as one comma-separated pair.
+    """
+    parallelism = model.component(name).parallelism
+    if isinstance(parallelism, Ranks):
+        return RoseRanks(name=name, token=token, variable=parallelism.ranks.key)
+    return RoseProcessGrid(
+        name=name,
+        token=token,
+        variables=tuple(setting.key for setting in (parallelism.x, parallelism.y) if setting is not None),
+        threads_variable=None if parallelism.threads is None else parallelism.threads.key,
+        io_server_variable=None if parallelism.io_server is None else parallelism.io_server.key,
+        **kwargs,
+    )
 
 
 def _am3(name: str, grid: Domain) -> RoseSuiteConfiguration:
@@ -61,18 +94,8 @@ def _am3(name: str, grid: Domain) -> RoseSuiteConfiguration:
     """
     return RoseSuiteConfiguration(
         name=name,
-        model_name="ACCESS-AM3",
-        components=(
-            RoseProcessGrid(
-                name="UM",
-                token="atm",
-                variables=("MAIN_ATM_PROCX", "MAIN_ATM_PROCY"),
-                grid=grid,
-                threads_variable="MAIN_OMPTHR_ATM",
-                io_server_variable="MAIN_IOS_NPROC",
-                local_constraints=UM_CONSTRAINTS,
-            ),
-        ),
+        model_name=ACCESS_AM3.name,
+        components=(_rose_component(ACCESS_AM3, "UM", "atm", grid=grid, local_constraints=UM_CONSTRAINTS),),
         parsers=UM_SUITE_PARSERS,
         experiment_prefix="am3-layout",
         walltime_variable="MAIN_CLOCK",
@@ -87,7 +110,7 @@ product, and multiplies the result by the OpenMP threads each rank runs. This is
 in site/nci_gadi.rc: `cpus(x, y, i, nt) = (x*y + i)*nt`. The walltime of the UM's job is `MAIN_CLOCK`.
 """
 
-AM3_CONFIGS_REPOSITORY: str = "git@github.com:ACCESS-NRI/ACCESS-AM3-configs.git"
+AM3_CONFIGS_REPOSITORY: str = ACCESS_AM3.configs_ssh_url
 """The repository holding the released ACCESS-AM3 configurations."""
 AM3_N96E_SOURCE: GitControlSource = GitControlSource(
     repository=AM3_CONFIGS_REPOSITORY,
@@ -169,16 +192,17 @@ def am3_from_control(directory: Path, name: str | None = None) -> RoseSuiteConfi
 
 RAM3: RoseSuiteConfiguration = RoseSuiteConfiguration(
     name="ram3",
-    model_name="ACCESS-rAM3",
+    model_name=ACCESS_RAM3.name,
     components=tuple(
-        RoseProcessGrid(
-            name=f"UM {nest}",
-            token=nest,
-            variables=(f"rg01_{nest}_m01_nproc",),
+        # A nest is named "UM rs01", and its token is the nest's.
+        _rose_component(
+            ACCESS_RAM3,
+            component.name,
+            component.name.split()[-1],
             grid=Domain((450, 450)),
             local_constraints=UM_CONSTRAINTS,
         )
-        for nest in ("rs01", "rs02")
+        for component in ACCESS_RAM3.components
     ),
     parsers=UM_SUITE_PARSERS,
     core_sharing=CoreSharing.SHARED,
@@ -197,13 +221,11 @@ jobs in `site/nci-gadi/suite-adds.rc` rather than in a variable, so it names no 
 
 CM3_O25KM: RoseSuiteConfiguration = RoseSuiteConfiguration(
     name="O25km",
-    model_name="ACCESS-CM3",
+    model_name=ACCESS_CM3.name,
     components=(
-        RoseProcessGrid(
-            name="UM", token="atm", variables=("ATM_NPROCX", "ATM_NPROCY"), io_server_variable="FLUME_IOS_NPROC"
-        ),
-        RoseRanks(name="MOM6", token="ocn", variable="OCN_NPROC"),
-        RoseRanks(name="CICE6", token="ice", variable="ICE_NPROC"),
+        _rose_component(ACCESS_CM3, "UM", "atm"),
+        _rose_component(ACCESS_CM3, "MOM6", "ocn"),
+        _rose_component(ACCESS_CM3, "CICE6", "ice"),
     ),
     parsers=UM_SUITE_PARSERS,
     experiment_prefix="cm3-layout",
@@ -218,7 +240,7 @@ ACCESS-AM3; the logs the ocean and the sea ice write are not read by the Cylc ma
 states the ocean's cores as `OCN_NPROCX` and `OCN_NPROCY` instead, and is not described here.
 """
 
-CM3_CONFIGS_REPOSITORY: str = "git@github.com:ACCESS-NRI/access-cm3-configs.git"
+CM3_CONFIGS_REPOSITORY: str = ACCESS_CM3.configs_ssh_url
 """The repository holding the ACCESS-CM3 configurations, one per branch, which is restricted like ACCESS-AM3's."""
 CM3_O25KM_SOURCE: GitControlSource = GitControlSource(
     repository=CM3_CONFIGS_REPOSITORY,

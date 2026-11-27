@@ -13,7 +13,8 @@ from access.config.parallel_constraints import (
 )
 from access.config.parallel_domain import Domain, DomainDecompositionSpec
 from access.config.parallel_mpi_grid import MPICartesianGrid
-from conftest import decomposition_of, grid_of, select_layouts
+from conftest import decomposition_of, grid_of, select_layouts, written_setting
+from payu.access_models import ACCESS_ESM16
 
 from access.profiling.cice5_parser import CICE5ProfilingParser
 from access.profiling.control import GitControlSource
@@ -721,3 +722,22 @@ def test_esm16_ships_a_control_for_every_released_configuration():
         assert source.start_point.startswith("release-")
     assert esm16.ESM16_HISTORICAL_SOURCE.start_point == "release-historical-1.3"
     assert esm16.ESM16_AMIP_SOURCE.start_point == "release-amip-1.0"
+
+
+class TestPayusDescription:
+    """The configuration agrees with Payu's description of ACCESS-ESM1.6, `payu.access_models`."""
+
+    def test_its_submodels_are_payus(self, esm16):
+        declared = [(submodel.name, submodel.model) for submodel in esm16.submodels]
+
+        assert declared == [(submodel.name, submodel.model) for submodel in ACCESS_ESM16.workflow.submodels]
+
+    def test_amip_runs_the_first_of_them_alone(self):
+        declared = [(submodel.name, submodel.model) for submodel in ESM16_AMIP.submodels]
+
+        assert declared == [(submodel.name, submodel.model) for submodel in ACCESS_ESM16.workflow.submodels[:1]]
+
+    def test_the_sea_ice_s_ranks_are_written_into_its_namelist(self, esm16, pi_control_layout):
+        ranks = ACCESS_ESM16.component(ESM16_CICE5_NAME).parallelism.ranks
+
+        assert written_setting(esm16.config_changes(pi_control_layout), ranks) == str(PI_CONTROL_CICE5_RANKS)

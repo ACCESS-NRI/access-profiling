@@ -1,6 +1,7 @@
 # Copyright 2025 ACCESS-NRI and contributors. See the top-level COPYRIGHT file for details.
 # SPDX-License-Identifier: Apache-2.0
 
+import tarfile
 from pathlib import Path
 from unittest import mock
 
@@ -8,10 +9,11 @@ import pytest
 from access.config.parallel_allocation_strategies import FixedAllocation, FreeAllocation, RootAllocation
 from access.config.parallel_constraints import SubdomainAspectRatioConstraint
 from conftest import grid_of, layout_of, select_layouts
+from payu.access_models import ACCESS_ESM15
 
-from access.profiling.cice5_parser import CICE5ProfilingParser
 from access.profiling.control import GitControlSource
 from access.profiling.fms_parser import FMSProfilingParser
+from access.profiling.metrics import tmax
 from access.profiling.models.esm15 import (
     ESM15_CICE4_NAME,
     ESM15_CICE4_RANKS,
@@ -136,6 +138,16 @@ def test_esm15_sources_point_at_the_releases():
         assert (source.repository, source.start_point) == (ESM15_CONFIGS_REPOSITORY, release)
 
 
+# The timers CICE4 prints at the end of ice_diag.d, in CICE5's format.
+_CICE4_TIMERS = """Timing information:
+
+Timer   1:     Total    3943.81 seconds
+  Timer stats (node): min =    3943.80 seconds
+                      max =    3943.81 seconds
+                      mean=    3943.80 seconds
+"""
+
+
 class TestESM15Logs:
     """Which profiling logs a configuration says it writes, and where they are."""
 
@@ -147,7 +159,7 @@ class TestESM15Logs:
         (tmp_path / "config.yaml").write_text("model: access\n")
         (tmp_path / "access.out").write_text("")
         (tmp_path / "ice").mkdir()
-        (tmp_path / "ice" / "ice_diag.d").write_text("")
+        (tmp_path / "ice" / "ice_diag.d").write_text(_CICE4_TIMERS)
         return tmp_path
 
     def test_every_log_is_found_and_read_with_its_own_parser(self, esm15, tmp_path):
@@ -159,8 +171,21 @@ class TestESM15Logs:
         assert isinstance(logs["UM"].parser, UMProfilingParser)
         assert isinstance(logs["UM_Total_Walltime"].parser, UMTotalRuntimeParser)
         assert isinstance(logs["MOM5"].parser, FMSProfilingParser)
-        assert isinstance(logs["CICE4"].parser, CICE5ProfilingParser)
         assert logs["CICE4"].filepath == tmp_path / "ice" / "ice_diag.d"
+        assert logs["CICE4"].parse()[tmax].pint.magnitude.tolist() == [3943.81]
+
+    def test_the_cice4_log_payu_compressed_is_read_out_of_its_tarball(self, tmp_path):
+        """Payu's CICE4 driver puts ice_diag.d in ice/logfiles.tar.gz when it archives a run, by default."""
+
+        output = self._output(tmp_path)
+        with tarfile.open(output / "ice" / "logfiles.tar.gz", "w:gz") as tarball:
+            tarball.add(output / "ice" / "ice_diag.d", arcname="ice_diag.d")
+        (output / "ice" / "ice_diag.d").unlink()
+
+        log = ESM15_PREINDUSTRIAL.component_logs(output)["CICE4"]
+
+        assert log.filepath == tmp_path / "ice" / "logfiles.tar.gz"
+        assert log.parse()[tmax].pint.magnitude.tolist() == [3943.81]
 
     def test_each_log_names_the_component_it_was_run_on(self, esm15):
         assert esm15.component_for_log("UM") == ESM15_UM7_NAME
@@ -267,3 +292,13 @@ class TestESM15FromControl:
 
         with pytest.raises(ValueError, match=r"types \['mom6'\], which ACCESS-ESM1.5 does not run"):
             ESM15Configuration.from_control(control)
+
+
+class TestPayusDescription:
+    """The configuration declares the submodels Payu's description of ACCESS-ESM1.5 has, `payu.access_models`."""
+
+    def test_its_submodels_are_payus(self, esm15):
+        declared = [(submodel.name, submodel.model) for submodel in esm15.submodels]
+
+        assert declared == [(submodel.name, submodel.model) for submodel in ACCESS_ESM15.workflow.submodels]
+        assert ACCESS_ESM15.workflow.submodel(ESM15_CICE4_NAME).name == "ice"

@@ -4,13 +4,16 @@
 """What a Payu-driven application states about itself.
 
 Everything here knows that Payu is the runner: that it archives a run under `config.yaml`, that it names the
-model's standard output after the `model` key that file states, that the components of a coupled model are the
-`submodels` that file declares, each given its cores outright, and that `ncpureq` is what the job asks for. None of
-it belongs in the generic contract, which must hold for a runner that does none of those things.
+model's standard output after the `model` key that file states, that some of its drivers put a submodel's logs in
+a tarball when they archive a run, that the components of a coupled model are the `submodels` that file declares,
+each given its cores outright, and that `ncpureq` is what the job asks for. None of it belongs in the generic
+contract, which must hold for a runner that does none of those things.
 
 It is kept apart from `payu_manager` deliberately. That module reaches for the experiment generator and the
-experiment runner, and so for Payu itself; an application only describes what is to be profiled and should
-not have to import a job-submission stack to do it.
+experiment runner, and so for Payu's job submission; an application only describes what is to be profiled and
+should not have to import a job-submission stack to do it. What it takes from Payu is what Payu states for every
+package that reads its output, `payu.conventions`, and its description of the ACCESS models, `payu.access_models`.
+Neither imports the rest of Payu.
 
 A Payu application is put together from components, one per code the model runs, so that a configuration
 arranges components rather than restating what each one decomposes, writes and logs. The arrangement is the
@@ -21,6 +24,9 @@ NUOPC, which its own configuration class describes. The components of the ACCESS
 """
 
 import logging
+import os
+import tarfile
+import tempfile
 from abc import ABC, abstractmethod
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -30,8 +36,11 @@ from access.config import YAMLParser
 from access.config.parallel_component import ComponentLayout, ParallelComponent
 from access.config.parallel_constraints import FixedThreadsPerRankConstraint, LocalConstraint
 from access.config.parallel_domain import Domain
+from payu.access_models import Submodel
+from payu.conventions import log_tarball, model_stdout
 
-from access.profiling.application import Application, LogLocator, LogSpec
+from access.profiling.application import Application, LogLocator, LogSpec, log_at
+from access.profiling.parser import ProfilingData, ProfilingParser
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +52,7 @@ def payu_model_stdout() -> LogLocator:
     """Returns a locator for the standard output Payu captured from the model.
 
     Payu names it after the model it ran, which the archived `config.yaml` records, so the name is read from
-    there rather than assumed.
+    there rather than assumed, by Payu's own rule, `payu.conventions.model_stdout`.
 
     Returns:
         LogLocator: The locator.
@@ -55,9 +64,79 @@ def payu_model_stdout() -> LogLocator:
             return None
         payu_config = YAMLParser().parse(config_path.read_text())
         model = payu_config.get("model")
-        return None if model is None else output_dir / f"{model}.out"
+        return None if model is None else output_dir / model_stdout(model)
 
     return locate
+
+
+def payu_submodel_log(name: str, submodel: Submodel, log: str, parser: ProfilingParser, component: str) -> LogSpec:
+    """Returns a profiling log a submodel writes in its own directory, wherever Payu left it.
+
+    Some of Payu's drivers put a submodel's logs in a tarball when they archive a run, unless `config.yaml` sets
+    `archive: compress_logs` to false. The driver of CICE4, Payu's `cice`, puts `ice_diag.d`, which holds CICE4's
+    timers, in `ice/logfiles.tar.gz`. Which logs go where is Payu's convention, `payu.conventions.log_tarball`. Where
+    the log is not beside the tarball, it is read out of it.
+
+    Args:
+        name (str): What the log is called in the parsed data.
+        submodel (Submodel): The submodel, as `payu.access_models` describes it: its directory and its model type.
+        log (str): The log's name, in the submodel's directory.
+        parser (ProfilingParser): What reads the log.
+        component (str): The component whose cores the log's regions ran on.
+
+    Returns:
+        LogSpec: The log.
+    """
+    tarball = log_tarball(submodel.model, log)
+    if tarball is None:
+        return LogSpec(name, log_at(submodel.path(log)), parser, component=component)
+
+    def locate(output_dir: Path) -> Path:
+        path = output_dir / submodel.path(log)
+        return path if path.is_file() else output_dir / submodel.path(tarball)
+
+    return LogSpec(name, locate, _TarredLogParser(parser, log), component=component)
+
+
+class _TarredLogParser(ProfilingParser):
+    """Reads a log with its own parser, out of the tarball Payu put it in where it is handed the tarball.
+
+    Args:
+        parser (ProfilingParser): What reads the log.
+        log (str): The log's name, which is its name in the tarball too.
+    """
+
+    def __init__(self, parser: ProfilingParser, log: str) -> None:
+        self._parser = parser
+        self._log = log
+        # The same metrics, which a dataset is keyed by.
+        self._metrics = parser.metrics
+
+    def parse(self, file_path: str | Path | os.PathLike) -> ProfilingData:
+        """Parses the log, or the log in the tarball it is handed.
+
+        Args:
+            file_path (str | Path | os.PathLike): The log, or the tarball.
+
+        Returns:
+            ProfilingData: What the log's parser returns.
+
+        Raises:
+            FileNotFoundError: If the tarball does not hold the log.
+            ValueError: If the tarball cannot be read, or the log is not in its parser's format.
+        """
+        path = Path(file_path)
+        if path.name == self._log:
+            return self._parser.parse(path)
+        with tempfile.TemporaryDirectory() as directory:
+            try:
+                with tarfile.open(path) as tarball:
+                    tarball.extract(self._log, directory, filter="data")
+            except KeyError as error:
+                raise FileNotFoundError(f"{path} holds no {self._log}.") from error
+            except tarfile.TarError as error:
+                raise ValueError(f"{path} is not a tarball that can be read: {error}") from error
+            return self._parser.parse(Path(directory) / self._log)
 
 
 @dataclass(frozen=True)
