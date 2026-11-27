@@ -72,6 +72,8 @@ src/access/profiling/
   plotting_utils.py     plot_bar_metrics, plot_line_metrics
   scaling.py            parallel_speedup, parallel_efficiency, plot_scaling_metrics, plot_component_scaling
   versions.py           show_versions: the versions of Python, the package and what it requires
+  __main__.py           `python -m access.profiling guide`, which prints guide.md
+  guide.md              The guide to writing a study notebook; package data, and a page of the user guide
   py.typed              Says the package is typed (PEP 561); declared as package data in pyproject.toml
 
   ── the log parsers, one per format ──
@@ -131,6 +133,12 @@ that defines it, and `access.profiling.models` exports nothing. The API referenc
 from the docstrings, on pages in `documentation/docs/pages/api/` that are each a run of `::: access.profiling.<module>`
 blocks, one page per concept. A new module needs a block on the right page and a row in the table of
 `api/index.md`; a new page needs an entry in the `nav` of `mkdocs.yml`, or the strict build fails.
+
+**The guide to writing a notebook** is `guide.md`, package data that `python -m access.profiling guide` prints, so
+that an agent reads the version installed. The page `user-guide/writing-a-notebook.md` includes the file whole, with
+include-markdown, so the guide has no links but absolute ones. `test_guide.py` runs its code cells in order, with the
+engine faked, so a change to a name, a method or an argument that the guide uses fails there: update the guide with
+the change.
 
 ## Invariants
 
@@ -398,7 +406,7 @@ blocks, one page per concept. A new module needs a block on the right page and a
   readers after the blocks `replace`), which the tests check.
 - **Logging** is `logging.getLogger(__name__)` in each module that logs, with no handlers and no `warnings.warn`: a
   warning to the user is a `logger.warning`. Tests assert on `caplog.text`, so rewording a message can fail one.
-  `show_versions` is the one function that prints, since showing the versions is all it does.
+  `show_versions` and `__main__.main` are the only functions that print, since printing is all they do.
 
 ## Tests
 
@@ -413,6 +421,7 @@ blocks, one page per concept. A new module needs a block on the right page and a
 | `test_components.py` | `models/components.py`, the components the Payu models are put together from |
 | `test_esm15.py`, `test_esm16.py`, `test_om2.py`, `test_om3.py` | their model, and `PayuManager` driving it end to end |
 | `test_init.py` | `__init__.py`: that `__all__` lists exactly what the package imports |
+| `test_guide.py` | `__main__.py`, and `guide.md`, whose code cells it runs in order with the engine faked |
 
 Coverage is **100% of lines** across `access.profiling`, and a change keeps it there, error paths included. Nothing
 enforces it (there is no `fail-under`), so read the report for the files you changed:
@@ -495,10 +504,11 @@ New text follows it whatever the text around it looks like: a table cell or an e
 for a paragraph.
 
 - **Two voices, by kind of page.** A walkthrough guides as "we", addresses the reader as "you", and shows and reads
-  the output of what it runs: `getting-started.md`, the user guide pages other than `index.md` and
-  `logs-and-metrics.md`, `access/cylc-rose-suites.md`, `developer-guide/adding-an-application.md` and
-  `adding-a-parser.md`. Every other page is a manual: third person, "you" for an instruction, "we" only for a
-  recommendation. A code example on a manual page is still introduced in the walkthrough voice.
+  the output of what it runs: `getting-started.md`, the user guide pages other than `index.md`,
+  `logs-and-metrics.md` and `writing-a-notebook.md`, `access/cylc-rose-suites.md`,
+  `developer-guide/adding-an-application.md` and `adding-a-parser.md`. Every other page is a manual: third person,
+  "you" for an instruction, "we" only for a recommendation. A code example on a manual page is still introduced in the
+  walkthrough voice.
 - **Plain words first.** Say what a thing is before how it works, with one idea per sentence and per list item, one
   topic per paragraph, and the ordinary connectives ("This means that", "You can also", "For example"). No sentence
   runs over 40 words, in a table cell either. A term of a model or of an engine, such as a mask table or a block

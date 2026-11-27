@@ -40,6 +40,7 @@ nav:
       - Run-to-run variability: pages/user-guide/run-to-run-variability.md
       - Best layout for a budget: pages/user-guide/best-layout.md
       - Scaling studies: pages/user-guide/scaling-studies.md
+    - Writing a study notebook: pages/user-guide/writing-a-notebook.md
   - ACCESS models:
     - pages/access/index.md
     - Payu: pages/access/payu.md

@@ -9,6 +9,9 @@ package ships presets for the ACCESS models in `access.profiling.models`, such a
 from; each model module ships one per released configuration, such as `ESM16_PI_CONTROL_SOURCE`. The types a study
 is written with are importable from the package itself; the presets and their control sources, and everything
 else, are imported from the module that defines them.
+
+A study is usually written as a Jupyter notebook, and `python -m access.profiling guide` prints the guide to writing
+one: the order of its cells, and what a notebook states and what it leaves to the package.
 """
 
 from contextlib import suppress

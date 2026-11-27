@@ -16,7 +16,8 @@ are several kinds of study, depending on what changes from one run to the next:
 All of these studies are built from the same few pieces, which are introduced here. Once you know them, [Generating and
 running experiments](experiments.md) and [Managing experiments](managing-experiments.md) show how to create and follow
 the experiments, and [Logs and metrics](logs-and-metrics.md) and [Analysing profiling data](analysing-data.md) show how
-to read their results. The study guides then put everything together. All the examples are for the ACCESS climate
+to read their results. The study guides then put everything together, and [Writing a study
+notebook](writing-a-notebook.md) says how to lay a study out in a notebook. All the examples are for the ACCESS climate
 models, which are described in [ACCESS models](../access/index.md).
 
 ## Applications, managers and controls
