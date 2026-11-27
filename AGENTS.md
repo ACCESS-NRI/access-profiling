@@ -282,15 +282,18 @@ blocks, one page per concept. A new module needs a block on the right page and a
   status out of a tarball would mean extracting it. The records and the study file are all that is stored.
 - **`parse_status` never raises.** When it cannot tell, it logs why at DEBUG and returns `None`, which keeps the
   status the experiment has.
-- **Planning writes nothing; generating registers nothing unless all of it succeeds.** `plan_scaling_experiments`
-  and `plan_experiments` return a `StudyPlan` without touching the disk, and need neither a control nor a `lab_dir`.
-  Its experiments are unnamed, but for one being regenerated. `generate` numbers them against what the study holds
-  by then, leaving out an experiment created since the plan, so a plan generated twice creates nothing twice, and
-  refuses a plan regenerating an experiment no longer held. It then calls `_generate`, which calls
-  `_create_experiments` once with every plan. If that raises, no new experiment is registered and no record written,
-  because one registered with nothing on disk would be run and never generated again. `_create_experiments` returns
-  only the new experiments, not those being regenerated (`ExperimentPlan.regenerating`), which are held already. A
-  plan's changes are computed afresh by every planning call, never replayed.
+- **Planning writes nothing; generating registers nothing unless all of it succeeds.** `plan_scaling_experiments` and
+  `plan_experiments` return a `StudyPlan` without touching the disk, and need neither a control nor a `lab_dir`. Its
+  experiments are unnamed, but for one being regenerated. `generate` numbers them against what the study holds by then,
+  leaving out an experiment created since the plan, so a plan generated twice creates nothing twice, and refuses a plan
+  regenerating an experiment no longer held. It asks the engine again before regenerating, and leaves an experiment that
+  is no longer FAILED, whose job may be running. A plan names the study that made it (`StudyPlan.study`,
+  `_study_identity`), and another study's manager refuses it, since its changes are what that application comes to.
+  `generate` sees what this manager holds, not what another manager of the study made since. It then calls `_generate`,
+  which calls `_create_experiments` once with every plan. If that raises, no new experiment is registered and no record
+  written, because one registered with nothing on disk would be run and never generated again. `_create_experiments`
+  returns only the new experiments, not those being regenerated (`ExperimentPlan.regenerating`), which are held already.
+  A plan's changes are computed afresh by every planning call, never replayed.
 - **`plan_scaling_experiments` searches for layouts and is for scaling studies only; `plan_experiments` searches
   nothing.** The scaling plan's `changes` and `labels` are those of a choice without a layout, given to every layout it
   finds, so a study varying a setting across its sizes makes one plan per value. Its changes may not set the walltime
@@ -308,9 +311,10 @@ blocks, one page per concept. A new module needs a block on the right page and a
   string.
 - **Regenerating leaves a FAILED experiment FAILED**: the failure is the run's record, and
   `run_experiments(retry_failed=True)` is what clears it.
-- **A call that acts on the study returns what it did**: `generate`, `run_experiments` and `archive_experiments`
-  return the experiments they created, submitted or archived, as `status()` shows them (`_table`), with no rows where
-  there were none. `status()` asks the engine first. How a run is submitted is an argument of the call that submits
+- **A call that acts on the study returns what it did**: `generate`, `run_experiments` and `archive_experiments` return
+  the experiments they created, submitted or archived, as `status()` shows them (`_table`), with no rows where there
+  were none. A label named as a column of a table, such as `status`, is shown as `"<key> (label)"` (`_with_labels`), in
+  the plan's table too. `status()` asks the engine first. How a run is submitted is an argument of the call that submits
   it, never an attribute set in another cell: Payu's `nruns` and `startfrom_restart` are `run_experiments`'.
 - **The control is changed by what the application needs, under what the study asks.** `Application.control_changes`
   (`{}` by default) is what every experiment of the application needs of the control, such as OM3's ESMF summary.

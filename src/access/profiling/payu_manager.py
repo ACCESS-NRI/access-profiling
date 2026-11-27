@@ -313,11 +313,17 @@ class PayuManager(ProfilingManager[PayuConfiguration]):
         # The base class refuses a manager with no control before planning, so there is one to check here.
         if self.control is not None:
             _refuse_no_start_point(self.control)
-        if "laboratory" in self._control_options().get("config.yaml", {}):
+        if "laboratory" in self.control_options.get("config.yaml", {}):
             raise ValueError(
                 "The control options name a Payu laboratory, but each study runs in a laboratory of its own, under "
                 "the manager's lab_dir. Remove 'laboratory' from the control options, and pass the directory to put "
                 "the study's laboratory in as lab_dir."
+            )
+        if "laboratory" in self.application.control_changes.get("config.yaml", {}):
+            raise ValueError(
+                f"The control changes of the application {self.application.name!r} name a Payu laboratory, but each "
+                "study runs in a laboratory of its own, under the manager's lab_dir. The application cannot be "
+                "profiled with Payu as it stands: remove 'laboratory' from its control_changes."
             )
         for plan in plans:
             config_changes = plan.changes.get("config.yaml", {})

@@ -271,12 +271,15 @@ class StudyPlan:
             regenerated, which keeps its name.
         table (pd.DataFrame): One row for each experiment to create, saying what it is, which is what the plan shows.
         held (tuple[str, ...]): The experiments the study already has for what was asked, which are left as they are.
+        study (str): Which study made the plan: its application and its working directory. Its changes are what that
+            application comes to, so `generate` refuses the plan of another study.
     """
 
     call: str
     experiments: tuple[ExperimentPlan, ...]
     table: pd.DataFrame
     held: tuple[str, ...] = ()
+    study: str = ""
 
     def __repr__(self) -> str:
         """Returns how many experiments the plan creates, regenerates and leaves, with the table of them.

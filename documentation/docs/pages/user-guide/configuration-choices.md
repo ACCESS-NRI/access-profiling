@@ -179,9 +179,19 @@ a copy of the sea ice settings of the application with another range of blocks p
 out, as the application does for every layout.
 
 With a layout, the changes of an experiment are put together from two sources. The application says what the
-layout comes to: the numbers of cores in `config.yaml` and `nuopc.runconfig`, and the grid and the blocks in
-`ice_in`. The changes of the choice are then merged over these, so that the choice has the last word. Here this
-replaces the block size that the application chose.
+layout comes to: the numbers of cores in `config.yaml` and `nuopc.runconfig`, the grid and the blocks in `ice_in`, and
+in `MOM_input` the `AUTO_MASKTABLE` that lets MOM6 choose its own decomposition. The changes of the choice are then
+merged over these, so that the choice has the last word. Here this replaces the block size that the application
+chose.
+
+Note that a choice with a layout therefore also lets MOM6 choose its decomposition, even on the layout of the
+control. The 25 km release, for example, fixes a `LAYOUT` of 72 × 48 and a `MASKTABLE`, which every layout removes. To
+keep the decomposition of the control, the choice gives `"PRESERVE"` for these settings, which leaves them as the
+control has them:
+
+```python
+keep_ocean = {"MOM_input": {name: "PRESERVE" for name in ("AUTO_MASKTABLE", "LAYOUT", "IO_LAYOUT", "MASKTABLE")}}
+```
 
 A study of the block size usually asks the same question on several layouts, since the best size depends on the
 number of ranks.

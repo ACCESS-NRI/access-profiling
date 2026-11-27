@@ -264,6 +264,15 @@ class TestControlChanges:
         assert "    Control options: {'config.yaml': {'umask': 18}}" in lines
 
 
+def test_a_label_named_as_a_column_of_the_status_has_a_column_of_its_own():
+    manager = MockProfilingManager([Path("/fake/work_dir/a")])
+    manager.experiments["a"].labels = {"status": "baseline"}
+
+    status = manager.status()
+
+    assert (status.loc["a", "status"], status.loc["a", "status (label)"]) == ("DONE", "baseline")
+
+
 def test_status_asks_the_engine_and_shows_the_labels():
     """A status does not outlive the session, so the table of them is read afresh, and says what the names do not."""
     manager = MockProfilingManager([Path("/fake/work_dir/a"), Path("/fake/work_dir/b")], ncpus=[4, 8])

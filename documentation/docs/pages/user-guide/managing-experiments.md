@@ -175,7 +175,8 @@ With `regenerate_failed=True`, the plan updates the failed experiments using the
 `regenerates` names each of them. The manager first asks the workflow engine how each run went, so this also finds
 the experiments that failed in an earlier session. The experiments that are running or that have finished are not
 touched. Note that an updated experiment keeps the status FAILED until it
-runs again. `run_experiments(retry_failed=True)` then submits the failed experiments, together with any new ones. See
+runs again. `run_experiments(retry_failed=True)` then submits the failed experiments, together with any new ones.
+With Payu, pass the `nruns` the study first ran with too, since it is 1 by default. See
 [Experiments with Payu](../access/payu.md#running-failed-experiments-again) to find out where Payu leaves the outputs of
 a failed run, and how it cleans up before running again. For a Rose suite, see
 [Cylc Rose suites](../access/cylc-rose-suites.md#running-failed-suites-again).
