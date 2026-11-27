@@ -1,6 +1,8 @@
 # Copyright 2025 ACCESS-NRI and contributors. See the top-level COPYRIGHT file for details.
 # SPDX-License-Identifier: Apache-2.0
 
+import builtins
+import inspect
 import os
 import re
 import runpy
@@ -10,18 +12,61 @@ from pathlib import Path
 from unittest import mock
 
 import pytest
-from matplotlib.axes import Axes
+import xarray as xr
 
+import access.profiling
 from access.profiling.__main__ import main
+from access.profiling.cylc_manager import CylcRoseManager
+from access.profiling.experiment import StudyPlan
+from access.profiling.metrics import tmax
+from access.profiling.models.om3 import OM3Configuration
 from access.profiling.payu_manager import PayuManager
-from access.profiling.results import ProfilingResults
+from access.profiling.results import ParsedExperiment, ProfilingResults
 
-GUIDE = files("access.profiling").joinpath("guide.md").read_text()
+GUIDE = files("access.profiling").joinpath("guide.md").read_text(encoding="utf-8")
 
 
 def code_cells():
     """The Python blocks of the guide, in order: the code cells of its notebook."""
     return re.findall(r"```python\n(.*?)```", GUIDE, flags=re.DOTALL)
+
+
+def prose():
+    """The guide without its code blocks."""
+    return re.sub(r"```.*?```", "", GUIDE, flags=re.DOTALL)
+
+
+def api_names():
+    """Every name the guide could mean by an identifier: what the package exports, the members of the types a study
+    calls, and the arguments of their methods."""
+    names = set(dir(access.profiling)) | set(dir(builtins))
+    for kind in (PayuManager, CylcRoseManager, ProfilingResults, StudyPlan, OM3Configuration):
+        names |= set(dir(kind))
+        for base in kind.__mro__:
+            for member in vars(base).values():
+                function = member.fget if isinstance(member, property) else member
+                if inspect.isfunction(function):
+                    names |= set(inspect.signature(function).parameters)
+    # The names the guide's own notebook gives its values.
+    return names | {"manager", "plan"}
+
+
+def parsed(manager):
+    """Results of the experiments the manager holds, as if each had run, with the ESMF regions the guide reads.
+
+    Each time comes from the layout of its experiment, so that the regions are read against the real components of
+    the application, and no two experiments tie.
+    """
+    experiments = {}
+    for name, experiment in manager.experiments.items():
+        cores = experiment.layout.n_cores
+        times = [1e5 / cores, 9e4 / cores, 1e4 / cores + len(experiments)]
+        regions = ["[ensemble] RunPhase1", "[OCN] RunPhase1", "[ICE] RunPhase1"]
+        summary = xr.Dataset(
+            {tmax: xr.DataArray(times, dims=["region"]).pint.quantify("second")}, coords={"region": regions}
+        )
+        experiments[name] = ParsedExperiment({"ESMF": summary}, dict(experiment.labels), experiment.layout, cores)
+    return ProfilingResults(manager.application, experiments)
 
 
 class TestPrintingTheGuide:
@@ -44,7 +89,7 @@ class TestPrintingTheGuide:
         with (
             mock.patch.object(sys, "argv", ["access.profiling", "guide"]),
             mock.patch.dict(sys.modules),
-            pytest.raises(SystemExit) as exit_,
+            pytest.raises(SystemExit, match="^0$") as exit_,
         ):
             # As `python -m` runs it: the module this test imported is not the one run.
             del sys.modules["access.profiling.__main__"]
@@ -61,32 +106,21 @@ class TestPrintingTheGuide:
 
 
 class TestTheNotebookOfTheGuide:
-    """The code cells of the guide run, in order, with the workflow engine faked and the logs not parsed.
+    """The code cells of the guide run, in order, with the workflow engine faked and the logs made up.
 
-    So a name the guide imports, a method it calls, or an argument it passes that the package no longer has fails
-    here. The parsed results are an autospec of `ProfilingResults`, which checks each call against the signature of
-    the method, and a selection returns the same results.
+    The analysis cells run on real results, made from the layouts the guide's plan finds, so a name the guide imports,
+    a method it calls, an argument it passes, or a component or a region it names, that the package or the application
+    no longer has, fails here.
     """
-
-    @pytest.fixture
-    def results(self):
-        results = mock.create_autospec(ProfilingResults, instance=True)
-        results.select_best_experiments.return_value = results
-        results.plot_scaling_data.return_value = (
-            mock.create_autospec(Axes, instance=True),
-            mock.create_autospec(Axes, instance=True),
-        )
-        results.plot_component_scaling_data.return_value = mock.create_autospec(Axes, instance=True)
-        return results
 
     @mock.patch("access.profiling.payu_manager.ExperimentRunner")
     @mock.patch("access.profiling.payu_manager.ExperimentGenerator")
-    def test_the_cells_run_in_order(self, mock_experiment_generator, mock_experiment_runner, tmp_path, results):
+    def test_the_cells_run_in_order(self, mock_experiment_generator, mock_experiment_runner, tmp_path):
         namespace = {}
         environment = {name: value for name, value in os.environ.items() if name != "PAYU_LAB_PATH"}
         with (
             mock.patch.dict(os.environ, environment, clear=True),
-            mock.patch.object(PayuManager, "parse_profiling_data", return_value=results),
+            mock.patch.object(PayuManager, "parse_profiling_data", autospec=True, side_effect=parsed),
         ):
             for cell in code_cells():
                 # The directories of the guide are examples on Gadi, which the test keeps under tmp_path.
@@ -96,13 +130,24 @@ class TestTheNotebookOfTheGuide:
                 exec(compile(cell, "guide.md", "exec"), namespace)
 
         manager, plan = namespace["manager"], namespace["plan"]
-        assert len(plan.experiments) > 0, "the strategy of the guide finds layouts at every size"
+        assert set(plan.table["nodes"]) == {1, 2, 3, 4}, "the strategy of the guide finds layouts at every size"
         assert list(manager.experiments) == [f"exp-{number:04d}" for number in range(1, len(plan.experiments) + 1)]
         mock_experiment_generator.return_value.run.assert_called_once_with()
         mock_experiment_runner.return_value.run.assert_called_once_with()
-        results.table.assert_called_once()
-        namespace["ax"].set.assert_called_once()
+        assert namespace["ax"].get_xlabel() == "Cores of the component"
+        assert len(namespace["ax"].lines) > 0
 
     def test_the_cells_name_no_experiment(self):
         """As the guide asks: an experiment is picked out by a coordinate, never by its name."""
         assert not any(re.search(r"exp-\d{4}", cell) for cell in code_cells())
+
+    def test_every_name_the_prose_gives_is_one_the_package_has(self):
+        """A method or an argument the guide names outside its code, such as `nruns`, is checked too."""
+        known = api_names()
+        unknown = set()
+        for token in re.findall(r"`([^`]+)`", prose()):
+            # Text that is not code: a name of an experiment, a string, a magic, a command.
+            if re.search(r"[\s%-]", token) or token.startswith(('"', "'")):
+                continue
+            unknown |= set(re.findall(r"[A-Za-z_]\w*", re.sub(r"\"[^\"]*\"", "", token))) - known
+        assert unknown == set()

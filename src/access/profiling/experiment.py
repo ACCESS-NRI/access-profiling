@@ -271,12 +271,15 @@ class StudyPlan:
             regenerated, which keeps its name.
         table (pd.DataFrame): One row for each experiment to create, saying what it is, which is what the plan shows.
         held (tuple[str, ...]): The experiments the study already has for what was asked, which are left as they are.
+        study (str): Which study made the plan: its application and its working directory. Its changes are what that
+            application comes to, so `generate` refuses the plan of another study.
     """
 
     call: str
     experiments: tuple[ExperimentPlan, ...]
     table: pd.DataFrame
     held: tuple[str, ...] = ()
+    study: str = ""
 
     def __repr__(self) -> str:
         """Returns how many experiments the plan creates, regenerates and leaves, with the table of them.
@@ -717,6 +720,10 @@ class ProfilingExperiment:
             path (Path): Where the experiment is now: its directory, or its tarball.
             run_path (Path | None): Where its runs are, if they are kept elsewhere.
 
+        A record written before a key was reserved for a coordinate, as `run`, `ncpus` and `experiment` are, may
+        have a label of that key. The label is read under the key "<key> (label)", with a warning, so that the
+        study can still be opened and the label still read.
+
         Returns:
             ProfilingExperiment: The experiment, with the layout, the changes, the labels and the CPU count the
                 record states.
@@ -725,9 +732,16 @@ class ProfilingExperiment:
             ValueError: If the layout the record states is not a layout.
         """
         layout = None if record["layout"] is None else _layout_from_record(record["layout"])
-        experiment = cls(
-            path, run_path, layout, changes=record["changes"], labels=record["labels"], complete=record["complete"]
-        )
+        labels = {}
+        for key, value in record["labels"].items():
+            if key in RESERVED_LABELS:
+                logger.warning(
+                    f"The record of the experiment at '{path}' has a label '{key}', which is now the name of a "
+                    f"coordinate every experiment has. It is read as the label '{key} (label)'."
+                )
+                key = f"{key} (label)"
+            labels[key] = value
+        experiment = cls(path, run_path, layout, changes=record["changes"], labels=labels, complete=record["complete"])
         experiment.ncpus = record["ncpus"]
         return experiment
 

@@ -194,8 +194,8 @@ om3 = replace(
 )
 ```
 
-The reader of ACCESS-OM3 warns you when the control fixes a `LAYOUT` or a `MASKTABLE` in `MOM_input` without
-`AUTO_MASKTABLE`, as the control options have to remove them. The reader of ACCESS-OM2 refuses a control whose
+The reader of ACCESS-OM3 does not read `MOM_input`: a `LAYOUT` or a `MASKTABLE` that the control fixes there is
+removed from every layout of a study. The reader of ACCESS-OM2 refuses a control whose
 CICE5 is compiled for its grid, as in the `-4.1` and `_bgc` releases. These are profiled with the preset of their
 resolution instead.
 
@@ -292,7 +292,9 @@ To find out why a run failed, look at its outputs. They are in the directory of 
 `<work_dir>/<experiment>/config`, and in its PBS output files. When you create a failed experiment again, its
 changes are applied to its branch once more. If the failed experiment had already archived some output, it is
 cleaned with `payu sweep --hard` before it is submitted again. This removes everything that its earlier runs
-archived, so the experiment starts again from the beginning.
+archived, so the experiment starts again from the beginning. It then has as many runs as `nruns` asks for, which is 1
+by default, so pass the same `nruns` as when the study first ran, for example
+`run_experiments(retry_failed=True, nruns=3)`.
 
 ## Archiving
 

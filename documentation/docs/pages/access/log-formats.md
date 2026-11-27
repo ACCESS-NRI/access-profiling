@@ -110,5 +110,7 @@ separately.
   `ESMFSummaryProfilingParser` merges them into one region. The counts are added, the mean times are averaged
   using the counts as weights, and the smallest minimum and the largest maximum are kept. If you want to keep the
   call tree instead, use `hierarchical=True`.
-- The model logs of ACCESS-OM3 and the UM logs of the Rose suites are optional. If one of them cannot be read, the
-  log is skipped, with a warning. If a Payu run did not write a log at all, the log is simply left out.
+- The model logs of ACCESS-OM3 and the UM logs of the Rose suites are optional. A Rose suite hands the UM parsers the
+  log of every task, so most of these logs are not in their format. A log that is missing, or that is not in the
+  format of its parser, is skipped with an INFO message. One that its parser fails on in any other way is skipped
+  with a warning that gives the reason.

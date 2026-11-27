@@ -122,8 +122,8 @@ called metrics, for every region that the log times.
 finished experiment and returns the results, a [`ProfilingResults`][access.profiling.results.ProfilingResults].
 Their `data` holds one [xarray](https://docs.xarray.dev/en/stable/) dataset per log, organised by experiment name
 and then by log name. The results also know the labels, the layout and the number of CPUs of each experiment, and
-they make the tables and the plots. They never change: a selection, or a reduction of the runs, returns new
-results.
+they make the tables and the plots. They never change: a selection, or a reduction of the runs, returns
+new results.
 
 For example, here is what the MOM5 timers of a run on 49 PEs look like once parsed:
 
