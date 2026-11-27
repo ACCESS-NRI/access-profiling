@@ -855,6 +855,17 @@ class TestRecord:
         assert experiment.ncpus == 48
         assert experiment.status == ProfilingExperimentStatus.NEW
 
+    def test_a_label_written_before_its_key_was_reserved_is_read_under_another(self, tmp_path, caplog):
+        """So that a study made before `run` named a coordinate can still be opened, its label read."""
+        record = ProfilingExperiment(tmp_path / "expt", labels={"a": 1}).record(tmp_path)
+        record["labels"] = {"run": 1, "a": 1}
+
+        with caplog.at_level(logging.WARNING):
+            experiment = ProfilingExperiment.from_record(record, tmp_path / "expt")
+
+        assert experiment.labels == {"run (label)": 1, "a": 1}
+        assert f"The record of the experiment at '{tmp_path / 'expt'}' has a label 'run'" in caplog.text
+
     def test_one_added_as_complete_comes_back_done(self, tmp_path):
         """No engine record says so, which is why the record does."""
         record = ProfilingExperiment(tmp_path / "expt", complete=True).record(tmp_path)

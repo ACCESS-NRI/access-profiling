@@ -149,14 +149,27 @@ def test_plot_bar_metrics_show(mock_show):
     assert mock_show.call_count == 0
 
 
+def positions(fig):
+    """Where each axes of a figure is, which laying the figure out changes."""
+    return [ax.get_position().bounds for ax in fig.axes]
+
+
 def test_plot_bar_metrics_draws_on_the_axes_it_is_given():
     """Which is how a chart shares a figure with another plot, whose layout it leaves alone."""
 
     fig, (left, right) = plt.subplots(1, 2)
+    before = positions(fig)
 
     assert plot_bar_metrics({"exp_A": [10.0]}, ["R1"], tavg, ax=left) is left
     assert len(left.patches) == 1 and len(right.patches) == 0
+    assert positions(fig) == before
     plt.close(fig)
+
+
+def test_plot_bar_metrics_lays_out_a_figure_of_its_own():
+    fig = plot_bar_metrics({"exp_A": [10.0]}, ["R1"], tavg).figure
+
+    assert positions(fig) != positions(plt.subplots(figsize=fig.get_size_inches())[0])
 
 
 class TestPlotLineMetrics:
@@ -214,7 +227,14 @@ class TestPlotLineMetrics:
 
     def test_it_draws_on_the_axes_it_is_given(self):
         fig, ax = plt.subplots()
+        before = positions(fig)
 
         assert plot_line_metrics(self.LINES, tavg, xlabel="Blocks per rank", ax=ax) is ax
         assert len(ax.lines) == 2
+        assert positions(fig) == before, "the layout of a figure it did not make is left alone"
         plt.close(fig)
+
+    def test_it_lays_out_a_figure_of_its_own(self):
+        fig = plot_line_metrics(self.LINES, tavg, xlabel="Blocks per rank").figure
+
+        assert positions(fig) != positions(plt.subplots(figsize=fig.get_size_inches())[0])

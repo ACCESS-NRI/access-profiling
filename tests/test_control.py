@@ -121,6 +121,10 @@ class TestAnExistingDirectoryMustBeFoundAgain:
 
         assert ExistingDirectoryControlSource(suite).origin == str(suite)
 
+    def test_a_path_given_as_a_string(self, tmp_path):
+        """As a notebook types it, which is the same control as the path."""
+        assert ExistingDirectoryControlSource(str(tmp_path)) == ExistingDirectoryControlSource(tmp_path)
+
 
 class TestWhatAnExistingDirectoryAnswersTo:
     """ACCESS-rAM3 works this way: `rosie checkout` has already run, and the suite is simply there."""

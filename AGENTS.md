@@ -156,14 +156,15 @@ blocks, one page per concept. A new module needs a block on the right page and a
 - **A `run` dimension appears only where it is needed.** `parse_profiling_data` gives a log one only when more than
   one run produced it, and selection, tables and plotting refuse it, naming the experiments, until `select_best_run`
   or `aggregate_runs` has returned results without it (`_selected_experiments`).
-- **Nothing changes a `ProfilingResults`.** Its mappings are read-only and its experiments' labels are copied whole;
-  a selection or a reduction returns new results (`_with_data`), and `parse_profiling_data` returns new ones at every
-  call. A notebook's cells then give the same answer whichever ran first, so don't add a method that changes the
-  results it is called on.
+- **Nothing changes a `ProfilingResults`.** Its mappings are read-only and its experiments' labels are copied whole; a
+  selection or a reduction returns new results (`_with_data`), with datasets of their own, and `parse_profiling_data`
+  returns new ones at every call. A notebook's cells then give the same answer whichever ran first, so don't add a
+  method that changes the results it is called on.
 - **Parsing reads what tells the experiments apart, once.** While an experiment's directory is open,
-  `parse_profiling_data` reads its CPUs and, where it was given none, its layout, and keeps both on the experiment.
-  One that cannot be read (`OSError`, `ValueError`, as for archiving) is kept as `ncpus_error` or `layout_error`, and
-  raised with the experiment's name by the reader that needs it, so one unreadable count stops no other analysis.
+  `parse_profiling_data` reads its CPUs and, where it was given none, its layout, and keeps both on the experiment. One
+  that cannot be read, whatever the reader raises (a Rose or a YAML parser raises errors of its own), is kept as
+  `ncpus_error` or `layout_error`, as archiving keeps going past it, and raised with the experiment's name by the reader
+  that needs it, so one unreadable count stops no other analysis.
 - **`select_best_run` keeps a run that took place; `aggregate_runs` does not.** The first picks one run by one metric
   and keeps it in every log; the second reduces each region and metric on its own, so its minimum can mix runs.
   They answer different questions, so don't substitute one for the other. `split_runs` answers a third, by making
@@ -190,20 +191,21 @@ blocks, one page per concept. A new module needs a block on the right page and a
   notebook cell (the module docstring of `plotting_utils`). Given `ax`, it draws there and leaves the layout alone.
   `plot_scaling_data` draws two plots and a table on a figure of its own and returns the two axes. Each of its
   series is a dataset of its own, relative to its own smallest size, and its table spans every size of any of them.
-- **`table` pivots what `gather` collects, and never picks between experiments.** Its rows are sorted, as
-  `plot_metric` sorts x, and its columns keep the order of the group and of the experiments, as `plot_metric` orders
-  its series. Two experiments in one cell raise, naming them, rather than one being kept, and so do two regions of
-  the group with one label. The column of values is keyed by the metric, which no coordinate's name can equal. A
-  table holds numbers, not quantities, so it names the units of the metric in `attrs["units"]`.
+- **`table` pivots what `gather` collects, and never picks between experiments.** Its rows are sorted, as `plot_metric`
+  sorts x, and its columns keep the order of the regions and of the experiments, as `plot_metric` orders its series. Two
+  experiments in one cell raise, naming them, rather than one being kept, and so do two regions with one label. The
+  column of values is keyed by the metric, which no coordinate's name can equal. A table holds numbers, not quantities,
+  so it names the units of the metric in `attrs["units"]`.
 - **A reader is given `Region`s, one or several, never names.** A region is one region of one log, under a label
   that is its name unless it is given one, and the regions of one reader must have labels of their own
   (`_region_list`). Regions of several logs are read together, keeping the metrics every one of their logs has
   (`_region_data`), and a reader of one metric names the log that lacks it. The metric is `tmax` unless one is given.
 - **Experiments are picked out and named by coordinates too.** `select_experiments` returns results holding, of the
   experiments of the results, those with one of some values of a coordinate, in the order of the results, and
-  `select_best_experiments` the best of each value of `per`. No reader takes a list of names. An experiment without
-  the label is not one of them, but a label that none of them has is refused. `plot_bar_chart(label=...)` names each experiment's bars
-  `<name> <value>`, as `plot_metric` names its series, and refuses two experiments with the same value, whose bars
+  `select_best_experiments` the best of each value of `per`, ranked by one `Region`. No reader takes a list of names,
+  and a name the results do not hold is refused, saying why where it was not parsed. An experiment without the label is
+  not one of them, but a label that none of them has is refused. `plot_bar_chart(label=...)` names each experiment's
+  bars `<name> <value>`, as `plot_metric` names its series, and refuses two experiments with the same value, whose bars
   would otherwise replace one another.
 
 ### Experiments
@@ -219,7 +221,9 @@ blocks, one page per concept. A new module needs a block on the right page and a
   `layout`, `changes`, `labels` and `ncpus`. What is true of the whole study goes in the study file instead
   (`STUDY_FILENAME`): the highest number given, and one history entry per call that created, added or deleted
   experiments. Don't add to the record what is the same for every experiment of a call. Labels are JSON values:
-  `ProfilingExperiment` refuses those a record would not give back as they were, NaN included.
+  `ProfilingExperiment` refuses those a record would not give back as they were, NaN included. A label of a key
+  reserved since its record was written (`RESERVED_LABELS`) is read under `"<key> (label)"`, with a warning
+  (`from_record`), so that an older study still opens.
 - **The records, the study file and the archives are written whole**: to a temporary file beside the target, which
   then replaces it (`_write_whole`, and `ProfilingExperiment.archive` for a tarball). A record cut short stops the
   study being opened, and an archive cut short still has its record readable, being its first member.

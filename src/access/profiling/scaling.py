@@ -185,9 +185,9 @@ def plot_component_scaling(
     This asks a different question from plot_scaling_metrics. That one reads every component against the
     whole job, which is what a scaling study costs; this one reads each component against its own cores,
     which is what tells you whether giving the ocean more of them bought anything. Two components therefore
-    sit on different points of the same axis, and the lines are labelled with both the log and the
-    region so that the two can be told apart - region names are only made unique within one log, so two
-    components may well each have a "Total".
+    sit on different points of the same axis, and each line carries the label of its region. Region names are
+    only unique within one log, so two components may well each have a "Total", which then need labels of their
+    own.
 
     The metric is plotted as it stands rather than turned into a speedup, so there is no baseline to choose
     and no need for the metric to be a time, though a time is what this is for.
@@ -217,9 +217,8 @@ def plot_component_scaling(
     sooner and waits longer on the components that have not.
 
     Args:
-        stats (list[xr.Dataset]): The data to plot, one dataset per group of regions. Each holds those regions
-            against the cores their component was given, its region coordinate being the label each curve is to
-            carry.
+        stats (list[xr.Dataset]): The data to plot, one dataset per component. Each holds the regions read against
+            that component's cores, its region coordinate being the label each curve is to carry.
         metric (ProfilingMetric): The metric to plot, which labels the y axis unless ylabel is given.
         xcoordinate (str): The coordinate holding the core counts. Default: "ncpus".
         xlabel (str | None): Optional label for the x-axis. If None, a default naming the component's own

@@ -204,8 +204,8 @@ means that the history of a study is still there once its working directory is g
 An archive is written whole, to a temporary file that takes the name of the archive only once it is complete. If
 archiving stops part way, no archive is left, and you can simply archive the experiment again. You can also call
 `archive_experiments` again at any time: an experiment that is already archived is passed over with an INFO
-message, while one that is not yet DONE is passed over with a warning. An archive that
-cannot be read at all, such as an empty file, is skipped with a warning when the manager is created.
+message, while one that is not yet DONE is passed over with a warning. An archive that cannot be read at all, such
+as an empty file, is skipped with a warning when the manager is created.
 
 You can choose what goes into the archive. `exclude_dirs` and `exclude_files` leave out the directories and files
 inside the experiment that match the given patterns. `follow_symlinks` decides what happens with symlinks. A
@@ -264,14 +264,16 @@ and what they mean:
 | `The number of CPUs of experiment '<name>' could not be read (...), ...` | The experiment was archived without its number of CPUs. The manager reads it from the archive when the experiment is parsed. |
 | `The number of CPUs of experiment '<name>' is not known: ...` | The number of CPUs could not be read when the experiment was parsed, for the reason given. A selection or a plot that needs it raises this, and the others work. |
 | `The layout of experiment '<name>' could not be read: ...` | The layout could not be read back when the experiment was parsed, for the reason given. A table or a plot that needs it raises this. |
-| `These results hold no experiments: ...` | No experiment had finished when the logs were parsed. The message lists the experiments that were passed over, with their statuses. |
+| `These results hold no experiments. ...` | No experiment had finished when the logs were parsed, or a selection matched none of them. The message lists the experiments that were passed over, with their statuses. |
+| `These results hold no experiment named [...]. ...` | `select_experiments("experiment", ...)` was given a name the results do not hold, such as a misspelt name, or an experiment that was not parsed, whose reason the message gives. Give each name as a value of its own, not a list of them. |
+| `The record of the experiment at '<path>' has a label '<key>', which is now the name of a coordinate ...` | The record was written before `run`, `ncpus` and `experiment` were reserved for coordinates. The label is read under the key `<key> (label)`. |
 | `Could not update the working directory '<work_dir>' (...), so experiment '<name>' is forgotten in this session only, ...` | `forget_experiment` could not remove the record, for example because you cannot write to the study. A manager created later finds the experiment again. |
 | `Experiment name '<name>' is not the name of a single directory, ...` | An experiment was added under a name with a `/`, or under `.` or `..`. Its record is kept in a directory of that name in the working directory, so add it under a name without a `/`. |
 | `Experiment name '<name>' is of the form this manager gives the experiments it generates. ...` | An experiment was added under a name such as `exp-0003`. Add it under another name. |
 | `No new experiments to run. Will skip execution.` | Every experiment has been submitted or has finished. Pass `retry_failed=True` to run the failed ones. |
 | `Experiment '<name>' is not completed (status: RUNNING). Skipping parsing profiling data.` | Only finished experiments are parsed. Wait for the run to finish. |
 | `The profiling data of experiments [...] still has a 'run' dimension, ...` | The experiments ran several times. See [Reducing the runs](run-to-run-variability.md#reducing-the-runs). |
-| `Several selected experiments use the same number of CPUs ...` | See [Selecting the best layouts](scaling-studies.md#selecting-the-best-layouts). |
+| `Several experiments use the same number of CPUs ...` | See [Selecting the best layouts](scaling-studies.md#selecting-the-best-layouts). |
 | `Experiment '<name>' has no label '<key>'. ...` | A table or a plot was asked for a label that one of its experiments does not have. Select the experiments that have it first, with `select_experiments`. |
 | `Several regions are labelled [...], so a table or a plot could not tell them apart. ...` | Two regions have the same label, such as two regions named `Total` in two logs. Give each a `label` of its own. |
 | `The log '<log>' of experiment '<name>' has no metric '<metric>'. ...` | The log does not provide the metric, which is `tmax` by default. Pass one of the metrics that the message lists as `metric`. |

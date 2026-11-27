@@ -167,7 +167,8 @@ def single_exp_manager():
 def test_repr():
     """Test the __repr__ method of ProfilingManager.
 
-    It holds no parsed data, which the results of parse_profiling_data hold, so parsing changes nothing in it.
+    It holds no parsed data, which the results of parse_profiling_data hold. Parsing keeps only the count of CPUs on
+    each experiment, which this manager cannot read, so its repr is the same before and after.
     """
 
     manager = MockProfilingManager(paths=[Path("/fake/work_dir")], datasets=[make_component_dataset([1.0, 2.0])])
@@ -682,20 +683,29 @@ def test_parse_profiling_data_optional_log_failures_are_skipped_and_logged(singl
 
     failed = [record for record in caplog.records if "Failed to parse optional profiling log" in record.message]
     not_found = [record for record in caplog.records if "not found. Skipping." in record.message]
-    assert len(failed) == 3 and len(not_found) == 2, (
-        "The dedicated FileNotFoundError branch should catch exactly the missing-log errors, including subclasses; "
-        "every other exception type, including other OSErrors, should fall through to the general branch."
+    other_format = [record for record in caplog.records if "is not in the format of its parser" in record.message]
+    assert (len(failed), len(not_found), len(other_format)) == (2, 2, 1), (
+        "The FileNotFoundError branch should catch exactly the missing-log errors, including subclasses, and the "
+        "ValueError branch a log in another format; every other exception type, including other OSErrors, should "
+        "fall through to the general branch."
     )
     assert {record.levelname for record in failed} == {"WARNING"}, (
-        "An optional log the run wrote and the parser cannot read is reported as a warning, whatever the exception."
+        "A parser that fails in a way it does not mean to is reported as a warning."
     )
-    assert {record.levelname for record in not_found} == {"INFO"}, "A run need not write an optional log."
+    assert {record.levelname for record in not_found + other_format} == {"INFO"}, (
+        "A run need not write an optional log, and a Rose suite hands every parser the log of every task."
+    )
 
-    for name, record in zip(errors, failed + not_found, strict=True):
+    by_name = {"bad_log": other_format[0], "denied_log": failed[0], "custom_log": failed[1]}
+    by_name |= {"missing_log": not_found[0], "subclass_missing_log": not_found[1]}
+    for name, record in by_name.items():
         assert f"/fake/{name}.out" in record.message, f"The record reported for '{name}' should carry its own path."
     assert failed[0].message == (
-        "Failed to parse optional profiling log '/fake/bad_log.out' with exception:\n    boom\nSkipping."
+        "Failed to parse optional profiling log '/fake/denied_log.out' with exception:\n    denied\nSkipping."
     ), "The warning should report the log path and the exception message, each on its own line."
+    assert other_format[0].message == (
+        "Optional profiling log '/fake/bad_log.out' is not in the format of its parser: boom Skipping."
+    )
     assert [record.message for record in caplog.records].count(" Done.") == 1, (
         "' Done.' should only be logged for the log which was parsed successfully."
     )
@@ -727,6 +737,10 @@ def test_parse_profiling_data_errors_outside_the_swallowed_set_propagate(single_
 
     failed = [record for record in caplog.records if "Failed to parse optional profiling log" in record.message]
     assert failed == [], f"{type(error).__name__} should not be caught and logged as a swallowed failure."
+
+
+class GrammarError(Exception):
+    """An error of a parser's own, as lark raises on a Rose configuration it cannot read."""
 
 
 class TestParsingReadsWhatTellsTheExperimentsApart:
@@ -784,6 +798,22 @@ class TestParsingReadsWhatTellsTheExperimentsApart:
         assert results.experiments["expt"].layout is None
         assert results.experiments["expt"].layout_error is None
         assert manager.experiments["expt"].layout is None
+
+    @pytest.mark.parametrize("error", [FileNotFoundError("no config.yaml"), GrammarError("unexpected character")])
+    def test_whatever_the_readers_raise_stops_nothing(self, error):
+        """A missing configuration file, or one a parser of its own cannot read, is kept as the reason."""
+        manager = MockProfilingManager([Path("expt")], ncpus=[8], datasets=[make_component_dataset([1.0, 2.0])])
+
+        with (
+            mock.patch.object(manager, "parse_ncpus", side_effect=error),
+            mock.patch.object(manager.application, "parse_layout", side_effect=error),
+        ):
+            results = manager.parse_profiling_data()
+
+        assert (results.experiments["expt"].ncpus_error, results.experiments["expt"].layout_error) == (
+            str(error),
+            str(error),
+        )
 
     def test_a_layout_that_cannot_be_read_stops_nothing(self):
         manager = MockProfilingManager([Path("expt")], ncpus=[8], datasets=[make_component_dataset([1.0, 2.0])])
@@ -1220,10 +1250,13 @@ class TestArchivedRecords:
         assert found._ncpus("release") == 4
         assert found._parse_ncpus_calls == [], "the record states it"
 
-    @pytest.mark.parametrize("error", [FileNotFoundError("config.yaml"), ValueError("NPROC is not set")])
+    @pytest.mark.parametrize(
+        "error", [FileNotFoundError("config.yaml"), ValueError("NPROC is not set"), GrammarError("unexpected")]
+    )
     def test_a_count_that_cannot_be_read_stops_nothing(self, tmp_path, caplog, error):
         """The other experiments are archived, the study file is copied, and the record leaves the count null. Payu's
-        parse_ncpus raises the first without a config.yaml, and Cylc's the second for a variable it cannot find."""
+        parse_ncpus raises the first without a config.yaml, Cylc's the second for a variable it cannot find, and the
+        Rose parser an error of its own for a line it cannot read."""
         manager = added(tmp_path)
         (manager.work_dir / "second").mkdir()
         manager.add_experiment_from_directory("second", Path("second"))
