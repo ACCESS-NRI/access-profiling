@@ -171,17 +171,17 @@ what each metric means, and [Log formats](../access/log-formats.md) describes th
 ## Choosing the regions to plot
 
 The logs of an application usually time many more regions than you can show in one plot. For this reason, the
-plotting methods take a list of [`RegionGroup`][access.profiling.plotting_utils.RegionGroup]s. Each group names a
-log and the regions to take from it. For example, this group takes the region `um_total_walltime` of the log
-`UM_Total_Walltime`, and labels it `UM`:
+tables and the plots take the regions to show, each as a [`Region`][access.profiling.results.Region]. A region
+names a log and a region of that log. For example, this one is the region `um_total_walltime` of the log
+`UM_Total_Walltime`, labelled `UM`:
 
 ```python
-from access.profiling import RegionGroup
+from access.profiling import Region
 
-RegionGroup("UM_Total_Walltime", ["um_total_walltime"], relabel={"um_total_walltime": "UM"})
+Region("UM_Total_Walltime", "um_total_walltime", label="UM")
 ```
 
-Each region becomes a line or a bar in the plot. By default it is labelled `"<log>: <region>"`, and you can use
-`relabel` to give it another label. A group can also name the `component` of the layout that its regions ran on.
-This is only needed by the component scaling plot, and only for logs that cover several components.
-[Analysing profiling data](analysing-data.md) shows the groups in use.
+Each region becomes a line, a bar or a column. By default it is labelled with its name, and `label` gives it
+another label. The regions of one table or one plot must have labels of their own. A region can also name the
+`component` of the layout that it ran on. This is only needed by the component scaling plot, and only for logs that
+cover several components. [Analysing profiling data](analysing-data.md) shows the regions in use.

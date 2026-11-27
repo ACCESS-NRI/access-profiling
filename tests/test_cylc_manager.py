@@ -31,7 +31,7 @@ from access.profiling.experiment import (
 )
 from access.profiling.manager import STUDY_FILENAME, ProfilingManager
 from access.profiling.metrics import tmax
-from access.profiling.plotting_utils import RegionGroup
+from access.profiling.results import Region
 from access.profiling.rose_configuration import RoseProcessGrid, RoseSuiteConfiguration, read_section
 
 
@@ -1271,7 +1271,7 @@ class TestLayoutsOfAddedSuites:
     def test_its_cores_are_a_coordinate(self, tmp_path):
         _, results = self.added(tmp_path, {(4, 2): 10.0, (2, 2): 18.0})
 
-        gathered = results.gather(RegionGroup("cylc_tasks", ["atmos"]), [component_cores("UM")])
+        gathered = results.gather(Region("cylc_tasks", "atmos"), [component_cores("UM")])
 
         assert list(gathered["UM cores"].values) == [8, 4]
 
@@ -1281,7 +1281,7 @@ class TestLayoutsOfAddedSuites:
 
         _, results = self.added(tmp_path, {(4, 2): 10.0, (2, 2): 18.0})
 
-        results.plot_component_scaling_data([RegionGroup("cylc_tasks", ["atmos"], component="UM")], tmax)
+        results.plot_component_scaling_data([Region("cylc_tasks", "atmos", component="UM")], metric=tmax)
 
         (stat,) = mock_plot.call_args.args[0]
         seconds = stat[tmax].pint.dequantify().squeeze("region")

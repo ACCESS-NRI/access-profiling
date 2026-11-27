@@ -56,7 +56,8 @@ A profiling study is defined by three independent parts, which are introduced in
 ### Analysis
 
 - You choose which regions to look at, and how to label them, with
-  [region groups](user-guide/analysing-data.md#choosing-the-regions).
+  [regions](user-guide/analysing-data.md#choosing-the-regions).
+- Tables put the timings side by side, arranged by whatever tells the experiments apart.
 - Bar charts compare experiments side by side, region by region.
 - Scaling plots show the speedup and the parallel efficiency of the application and of each of its components.
 - Line plots show the timings against whatever a study varied, such as a setting of the application.

@@ -4,7 +4,7 @@ How much faster does your application run if you give it more cores? This is wha
 application is run on several numbers of cores, and we look at how the run time goes down, for the whole
 application and for each of its components. The experiments are created as shown in
 [Generating and running experiments](experiments.md), whose example is a scaling study. In this tutorial we use the
-`manager` of that page, the `results` of [Parsing the logs](analysing-data.md#parsing-the-logs) and the `groups` of
+`manager` of that page, the `results` of [Parsing the logs](analysing-data.md#parsing-the-logs) and the `regions` of
 [Choosing the regions](analysing-data.md#choosing-the-regions). The
 experiments of a Rose suite are created in the same way, as [Cylc Rose suites](../access/cylc-rose-suites.md)
 shows. The figures are drawn from synthetic data, to show what each plot looks like and how to read it.
@@ -22,27 +22,30 @@ creating the study, as [Counting the layouts](experiments.md#counting-the-layout
 A study usually has several layouts for each size, but the scaling plot needs exactly one experiment for each
 number of cores. We therefore keep only the fastest experiment of each size, with
 [`select_best_experiments`][access.profiling.results.ProfilingResults.select_best_experiments]. It needs to know
-which region to look at, and here we use the time the whole model took:
+which region to look at, and here we use the time the whole model took, which is the first of our regions:
 
-=== "ACCESS-ESM1.6"
+```python
+best = results.select_best_experiments(by=regions[0])
+```
 
-    ```python
-    from access.profiling.metrics import tmax
+`best` holds new results, with only the fastest experiment for each number of CPUs. Since we chose a region that
+covers the whole run, these are the layouts that made the whole application fastest. The experiments are ranked by
+`tmax`, unless you pass another `metric`. Before plotting, you can see their times in a table with a row for each
+number of CPUs:
 
-    best = results.select_best_experiments("payu", "payu_model_run_duration_seconds", tmax)
-    ```
+```python
+print(best.table(regions, "ncpus"))
+```
 
-=== "ACCESS-OM3"
+This prints the time of each region, in seconds, for each number of CPUs. The number of CPUs is a coordinate that
+every experiment has, under the name `"ncpus"`.
 
-    ```python
-    from access.profiling.metrics import tmax
+A study that also varied a setting, such as a label `"dt"` for the time step, keeps the fastest experiment for each
+number of CPUs and each value of the setting with `per`:
 
-    best = results.select_best_experiments("ESMF", "[ensemble] RunPhase1", tmax)
-    ```
-
-`best` is a list with the names of the experiments, sorted by number of CPUs. We will pass it to the plotting
-methods. Since we chose a region that covers the whole run, these are the layouts that made the whole application
-fastest.
+```python
+best_per_dt = results.select_best_experiments(by=regions[0], per=["ncpus", "dt"])
+```
 
 ## Scaling against the whole job
 
@@ -51,7 +54,7 @@ The first plot shows how well each region scales with the size of the job.
 efficiency of every region against the number of CPUs of the whole job, which is what the scheduler charged for:
 
 ```python
-fig = results.plot_scaling_data(groups, tmax, experiments=best, xlabel="Cores occupied by the job")
+fig = best.plot_scaling_data(regions, xlabel="Cores occupied by the job")
 ```
 
 <figure markdown="span">
@@ -67,8 +70,8 @@ almost 90%.
 
 Keep in mind that every region is plotted against the cores of the whole job. The curve of a component therefore
 does not show how well the component itself scales, but how its time changes as the whole job grows. Note also
-that the speedup only makes sense with one experiment for each number of cores. If you pass two experiments of
-the same size, the method raises an error, so pass the output of `select_best_experiments`.
+that the speedup only makes sense with one experiment for each number of cores. If two experiments have the same
+size, the method raises an error, so call it on the results of `select_best_experiments`.
 
 ## Scaling against each component's cores
 
@@ -77,7 +80,7 @@ To see how well each component itself scales, use
 every region against the number of cores of its own component:
 
 ```python
-fig = results.plot_component_scaling_data(groups, tmax, ylabel="Maximum time (s)")
+fig = results.plot_component_scaling_data(regions, ylabel="Maximum time (s)")
 ```
 
 <figure markdown="span">
@@ -101,18 +104,15 @@ fastest value is kept.
 
 You can also compute the speedup and the efficiency yourself. The functions used by the scaling plots are in
 `access.profiling.scaling`, and work on any dataset with an `ncpus` coordinate. Here we build such a dataset from
-the best experiments. The number of CPUs of each experiment was read when its logs were parsed, and is in
-`results.experiments`:
+the best experiments, with [`gather`][access.profiling.results.ProfilingResults.gather], which puts the number of
+CPUs of each experiment beside its data:
 
 ```python
-import xarray as xr
-
+from access.profiling import Region
+from access.profiling.metrics import tmax
 from access.profiling.scaling import parallel_efficiency
 
-stats = xr.concat(
-    [results.data[name]["MOM5"].expand_dims(ncpus=[results.experiments[name].ncpus]) for name in best],
-    dim="ncpus",
-)
+stats = best.gather(Region("MOM5", "Total runtime"), ["ncpus"]).swap_dims(experiment="ncpus")
 efficiency = parallel_efficiency(stats, tmax)
 print(efficiency.sel(region="Total runtime"))
 ```
@@ -125,5 +125,5 @@ The scaling plot works in the same way for [Cylc Rose suites](../access/cylc-ros
 CPUs are also the ones their jobs requested from PBS, as explained in
 [Parsing and plotting](../access/cylc-rose-suites.md#parsing-and-plotting). The component scaling plot works too,
 since the package reads the layout of each suite from the configuration it ran with. The logs of a suite do not say
-which component they belong to, so each group names its component, as in `RegionGroup("cylc_tasks", [...],
+which component they belong to, so each region names its component, as in `Region("cylc_tasks", ...,
 component="UM")`.

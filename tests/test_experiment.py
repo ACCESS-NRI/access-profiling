@@ -1128,3 +1128,16 @@ class TestComponentCores:
     def test_a_layout_without_the_component(self):
         with pytest.raises(ValueError, match="The layout holds no component 'atm'. It holds \\['model', 'ocn'\\]"):
             component_cores("atm").value(layout_with(ocn=240))
+
+
+class TestReservedLabels:
+    """A label may not be named as a coordinate every experiment has, or as the label of a run."""
+
+    @pytest.mark.parametrize("key", ["experiment", "ncpus", "run"])
+    def test_a_choice_refuses_one(self, key):
+        with pytest.raises(ValueError, match=f"The labels of a configuration choice \\['{key}'\\] are named as"):
+            ConfigurationChoice(labels={key: 1})
+
+    def test_an_experiment_refuses_one(self):
+        with pytest.raises(ValueError, match="The labels of an experiment \\['ncpus'\\] are named as"):
+            ProfilingExperiment(path=Path("/fake/exp"), labels={"ncpus": 4})

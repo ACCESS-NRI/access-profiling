@@ -65,8 +65,7 @@ class LogSpec:
 
     Args:
         name (str): What the log is called in the parsed data, and so the `log` a caller names in a
-            RegionGroup or passes to the selection methods. User-facing: changing it changes a
-            published name.
+            Region. User-facing: changing it changes a published name.
         locator (LogLocator): How to find the file inside one output directory.
         parser (ProfilingParser): What reads it.
         component (str | None): The component of the layout whose cores this log's regions ran on, named as

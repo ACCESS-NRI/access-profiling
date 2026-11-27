@@ -58,12 +58,13 @@ Be aware that the plots, the tables and `select_best_experiments` do not accept 
 try, you get a message like this one, which names the experiments that ran several times:
 
 ```text
-The profiling data of experiments ['exp-0001', 'exp-0002'] still has a 'run' dimension, since they ran several times. Reduce it first: select_best_run() returns results with the best run of each experiment, and aggregate_runs() results with each region reduced over the runs.
+The profiling data of experiments ['exp-0001', 'exp-0002'] still has a 'run' dimension, since they ran several times. Reduce it first: select_best_run() returns results with the best run of each experiment, aggregate_runs() results with each region reduced over the runs, and split_runs() results with each run an experiment of its own.
 ```
 
 ## Reducing the runs
 
-As the message says, there are two ways of getting one value for each experiment:
+As the message says, there are two ways of getting one value for each experiment, and a third, described in
+[Comparing the runs](#comparing-the-runs), of making each run an experiment of its own:
 
 - [`select_best_run`][access.profiling.results.ProfilingResults.select_best_run] keeps the best run of every
   experiment, which is the run where a region you choose was fastest. The same run is kept for all the logs of
@@ -77,8 +78,13 @@ As the message says, there are two ways of getting one value for each experiment
 For example, to keep the run in which the whole model was fastest:
 
 ```python
-best = results.select_best_run("payu", "payu_model_run_duration_seconds", tmax)
+from access.profiling import Region
+
+runtime = Region("payu", "payu_model_run_duration_seconds", label="Whole model")
+best = results.select_best_run(by=runtime)
 ```
+
+The runs are ranked by `tmax`, unless you pass another `metric`.
 
 Both methods return new results, for all the experiments, and keep the datasets that have no `run` dimension as
 they are. They leave `results` as it was, so it still holds every run. This means that you can keep the runs, their
@@ -91,9 +97,6 @@ experiment come from the same results. For example, to collect both with
 [`gather`][access.profiling.results.ProfilingResults.gather]:
 
 ```python
-from access.profiling import RegionGroup
-
-runtime = RegionGroup("payu", ["payu_model_run_duration_seconds"])
 fastest = results.aggregate_runs("min").gather(runtime)[tmax]
 slowest = results.aggregate_runs("max").gather(runtime)[tmax]
 spread = (slowest - fastest) / fastest
@@ -109,12 +112,47 @@ arranged by what tells the experiments apart. For example, by the cores of the s
 ```python
 from access.profiling import component_cores
 
-fastest = results.aggregate_runs("min").table(runtime, tmax, component_cores("ice"))
-slowest = results.aggregate_runs("max").table(runtime, tmax, component_cores("ice"))
+fastest = results.aggregate_runs("min").table(runtime, component_cores("ice"))
+slowest = results.aggregate_runs("max").table(runtime, component_cores("ice"))
 print(100 * (slowest - fastest) / fastest)
 ```
 
 This prints the spread in percent, with a row for each number of cores of the sea ice.
+
+## Comparing the runs
+
+To compare the runs of an experiment with each other, make each run an experiment of its own, with
+[`split_runs`][access.profiling.results.ProfilingResults.split_runs]:
+
+```python
+runs = results.split_runs()
+print(list(runs.experiments))
+```
+
+This prints the names of the runs, such as `exp-0001 run 0`, `exp-0001 run 1` and so on. Each run keeps the labels,
+the layout and the number of CPUs of its experiment, and gets a label of its own, `"run"`, with its number. A table
+or a plot can then be arranged by the run, as by any other label. For example, this is a table with a row for each
+run of the experiment `exp-0001`, and the mean, the spread and the extremes of its run time. We select the
+experiment before splitting its runs:
+
+```python
+one = results.select_experiments("experiment", "exp-0001").split_runs()
+table = one.table(runtime, "run")
+print(table.describe())
+```
+
+The bar chart of a few runs puts them side by side, region by region:
+
+```python
+fig = one.select_experiments("run", 0, 1, 2).plot_bar_chart(runtime, label="run")
+```
+
+There are a few things to keep in mind:
+
+- A log that only one of the runs wrote has no `run` dimension, so it is not known which run it belongs to. It is
+  left out of every run.
+- An experiment that ran once is kept as it is, without a label `"run"`.
+- Like the reductions, `split_runs` returns new results, and leaves `results` as it was.
 
 ## Rose suites
 

@@ -95,7 +95,7 @@ class PayuComponent(ABC):
 
     Attributes:
         name (str): How the component tree names it, and so the key a caller uses for it in an allocation strategy
-            or a RegionGroup.
+            or a Region.
         token (str): How `layout_key` abbreviates it, where a configuration states what each component received.
             Changing it changes the key of every layout, so that the experiments on disk are no longer recognised
             as the experiments of their layouts.
@@ -334,7 +334,7 @@ class PayuConfiguration(Application):
             attribute for the same reason as Application's own two.
         model_name (str): The model's name, which names the root of the component tree together with `name`:
             `ACCESS-ESM1.6 piControl` is the root of the pre-industrial control's tree, and so the component a
-            RegionGroup names for the regions plotted against the cores of the whole job.
+            Region names for a region plotted against the cores of the whole job.
     """
 
     model_type: str

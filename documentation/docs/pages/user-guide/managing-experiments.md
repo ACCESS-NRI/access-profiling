@@ -269,7 +269,9 @@ and what they mean:
 | `Experiment '<name>' is not completed (status: RUNNING). Skipping parsing profiling data.` | Only finished experiments are parsed. Wait for the run to finish. |
 | `The profiling data of experiments [...] still has a 'run' dimension, ...` | The experiments ran several times. See [Reducing the runs](run-to-run-variability.md#reducing-the-runs). |
 | `Several selected experiments use the same number of CPUs ...` | See [Selecting the best layouts](scaling-studies.md#selecting-the-best-layouts). |
-| `Experiment '<name>' has no label '<key>'. ...` | A table or a plot was asked for a label that one of its experiments does not have. Restrict the selection with `experiments=[...]`. |
+| `Experiment '<name>' has no label '<key>'. ...` | A table or a plot was asked for a label that one of its experiments does not have. Select the experiments that have it first, with `select_experiments`. |
+| `Several regions are labelled [...], so a table or a plot could not tell them apart. ...` | Two regions have the same label, such as two regions named `Total` in two logs. Give each a `label` of its own. |
+| `The log '<log>' of experiment '<name>' has no metric '<metric>'. ...` | The log does not provide the metric, which is `tmax` by default. Pass one of the metrics that the message lists as `metric`. |
 | `None of the experiments [...] has a label '<key>'. ...` | `select_experiments` was asked for a label that no experiment has, as with a misspelt key. Check the key against the labels that the message lists. |
 | `The metric '<name>' has the dimensions [...] besides the experiments and the regions, ...` | A table, a bar chart or `plot_metric` was given a metric with more than one value for each region, such as a value for each PE. Choose a metric with one value for each region. |
 | `Experiment '<name>' has the value <value> for '<coordinate>', which is not a number, ...` | `plot_metric` places the experiments along the x-axis by a number. Use the coordinate as the `series`, or draw a bar chart. |

@@ -26,7 +26,7 @@ from access.profiling.manager import (
     _package_version,
 )
 from access.profiling.metrics import count, tavg
-from access.profiling.plotting_utils import RegionGroup
+from access.profiling.results import Region
 
 
 class MockProfilingManager(ProfilingManager[MockApplication]):
@@ -687,7 +687,7 @@ class TestParsingReadsWhatTellsTheExperimentsApart:
         assert results.experiments["1cpu"].ncpus is None
         assert results.experiments["1cpu"].ncpus_error == "No job file says how many CPUs 1cpu occupied."
         with pytest.raises(ValueError, match="The number of CPUs of experiment '2cpu_slow' is not known: No job"):
-            results.select_best_experiments("component", "Region 1", tavg)
+            results.select_best_experiments(Region("component", "Region 1"), metric=tavg)
 
     def test_the_layout_is_read_back_once_and_kept(self):
         """An experiment this manager did not generate has its layout read off its configuration."""
@@ -719,7 +719,7 @@ class TestParsingReadsWhatTellsTheExperimentsApart:
 
         assert results.experiments["expt"].layout_error == "no variables"
         with pytest.raises(ValueError, match="The layout of experiment 'expt' could not be read: no variables"):
-            results.gather(RegionGroup("component", ["Region 1"]), [component_cores("component")])
+            results.gather(Region("component", "Region 1"), [component_cores("component")])
 
     def test_a_layout_given_when_it_was_generated_is_not_read_again(self):
         manager = MockProfilingManager([Path("expt")], ncpus=[8], datasets=[make_component_dataset([1.0, 2.0])])
@@ -1450,7 +1450,10 @@ class TestGenerateExperiments:
 
         with pytest.raises(ValueError, match="Two of the configuration choices are the same configuration"):
             manager.generate_experiments(
-                [ConfigurationChoice(CARTESIAN, labels={"run": 1}), ConfigurationChoice(CARTESIAN, labels={"run": 2})]
+                [
+                    ConfigurationChoice(CARTESIAN, labels={"attempt": 1}),
+                    ConfigurationChoice(CARTESIAN, labels={"attempt": 2}),
+                ]
             )
 
         assert manager._created_plans == [] and manager.experiments == {}

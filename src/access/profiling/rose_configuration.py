@@ -116,7 +116,7 @@ class RoseComponent(ABC):
 
     Attributes:
         name (str): How the component tree names it, and so the key a caller uses for it in an allocation strategy
-            or a RegionGroup.
+            or a Region.
         token (str): How `RoseSuiteConfiguration.layout_key` abbreviates it. Changing it changes the key of every
             layout, so that the experiments on disk are no longer recognised as the experiments of their layouts.
 

@@ -30,7 +30,7 @@ the Rose components of the package, as shown in [Cylc Rose suites](../access/cyl
 A component is a frozen dataclass, and a subclass of
 [`PayuComponent`][access.profiling.payu_configuration.PayuComponent]. It has two names. The `name` is the name of
 the component in the component tree, and so the name you use for it in an allocation strategy or in a
-`RegionGroup`. The `token` is the short form that appears in the keys of the layouts. The component then says
+`Region`. The `token` is the short form that appears in the keys of the layouts. The component then says
 which grid the search decomposes for it, which rules every layout of it has to follow, which logs it writes, and
 what its own files have to say for a given layout. Our atmosphere decomposes its grid over a process grid, which it
 reads from its namelist, and writes FMS timers into a log of its own:
@@ -79,7 +79,7 @@ class ToyAtmosphere(PayuComponent):
 ```
 
 A log spec has four parts. The first is the name of the log, which is the name you use in `results.data` and in a
-`RegionGroup`. The second says where to find the file in an output directory. The third is the parser that reads the
+`Region`. The second says where to find the file in an output directory. The third is the parser that reads the
 log, and the fourth is the component that the log belongs to. [`log_at`][access.profiling.application.log_at] locates a
 file at a fixed path in the output directory, and
 [`payu_model_stdout`][access.profiling.payu_configuration.payu_model_stdout], particular to Payu, locates the
@@ -135,7 +135,7 @@ Every application has a `name` and an `experiment_prefix`, and both are used in 
 uses this key to tell whether it already has an experiment for a layout. The `name` is different for each
 configuration of the application, and the `experiment_prefix` is the same for the whole application.
 `model_name` and `name` together give the name of the root of the component tree, here `Toy demo`. This is the
-component you name in a `RegionGroup` for the regions that are timed over the whole job. `model_type` is specific
+component you name in a `Region` for the regions that are timed over the whole job. `model_type` is specific
 to Payu. It is the name that Payu gives to the model, and the experiment generator checks that Payu knows it.
 
 A [`PayuSubmodel`][access.profiling.payu_configuration.PayuSubmodel] has the name and the Payu model type of the

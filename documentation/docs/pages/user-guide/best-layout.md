@@ -4,7 +4,7 @@ Suppose you have a fixed number of cores to run your application on. There are m
 its components, and they are not all equally fast. Which one is the best? In this tutorial we try all the
 parallelisation layouts that an allocation strategy finds for one number of cores, and pick the fastest. The experiments
 are created as in [Generating and running experiments](experiments.md), with a single size. We use the `manager`,
-`walltime`, `allocations` and `control_options` of that page, and the `groups` of [Choosing the
+`walltime`, `allocations` and `control_options` of that page, and the `regions` of [Choosing the
 regions](analysing-data.md#choosing-the-regions). The figure is drawn from synthetic data.
 
 ## Choosing the layouts
@@ -121,50 +121,53 @@ depends on the model:
 === "ACCESS-ESM1.6"
 
     ```python
-    log, region = "payu", "payu_model_run_duration_seconds"
+    from access.profiling import Region
+
+    whole = Region("payu", "payu_model_run_duration_seconds", label="Whole model")
     ```
 
 === "ACCESS-OM3"
 
     ```python
-    log, region = "ESMF", "[ensemble] RunPhase1"
+    from access.profiling import Region
+
+    whole = Region("ESMF", "[ensemble] RunPhase1", label="Whole model")
     ```
 
-Then read the logs and select the fastest experiment:
+Then read the logs, keep the experiments of our layouts, and select the fastest of them:
 
 ```python
-from access.profiling.metrics import tmax
-
 results = manager.parse_profiling_data()
 keys = {manager.application.layout_key(layout) for layout in layouts}
-parsed = [name for name in results.data if manager.layout_key(name) in keys]
-best = results.select_best_experiments(log, region, tmax, experiments=parsed)
+names = [name for name in results.experiments if manager.layout_key(name) in keys]
+ours = results.select_experiments("experiment", *names)
+best = ours.select_best_experiments(by=whole)
 ```
 
 The experiments are numbered, so we find the ones of our layouts by the key of their layout.
 [`layout_key`][access.profiling.manager.ProfilingManager.layout_key] gives the key of the layout an experiment was
-created with.
+created with. The manager may hold other experiments, which we do not want to include, and the results hold only
+those that have finished.
 
 [`select_best_experiments`][access.profiling.results.ProfilingResults.select_best_experiments] keeps the fastest
-experiment for each number of CPUs. Here all the layouts use the same number of CPUs, so `best` contains a single name.
-We pass the list of experiments for two reasons. First, the manager may hold other experiments, which we do not want to
-include. Second, some experiments may not have finished. Note that an experiment without parsed data would make the
-method raise a `ValueError` that names it. We recommend choosing a region that covers the whole run, as we do here. If
-you choose the region of a single component, you get the layout that is best for that component only.
+experiment for each number of CPUs. Here all the layouts use the same number of CPUs, so `best` holds a single
+experiment. We recommend choosing a region that covers the whole run, as
+we do here. If you choose the region of a single component, you get the layout that is best for that component
+only.
 
 ## Ranking every layout
 
-What if you want to see all the layouts, from the fastest to the slowest? `select_best_experiments` only gives
-the best one, so we use the data directly:
+What if you want to see all the layouts, from the fastest to the slowest? `select_best_experiments` only gives the best
+one, so we put the time of every experiment in a table, with a row for each experiment, and sort it:
 
 ```python
-times = {name: float(results.data[name][log][tmax].sel(region=region).pint.dequantify()) for name in parsed}
-ranking = sorted(times, key=times.get)
-for name in ranking:
-    print(f"{times[name]:8.1f} s  {name}  {manager.layout_key(name)}")
+ranking = ours.table(whole, "experiment").sort_values("Whole model")
+ranking["layout"] = [manager.layout_key(name) for name in ranking.index]
+print(ranking)
 ```
 
-This prints the experiments from the fastest to the slowest, with the time each took and the key of its layout.
+This prints the experiments from the fastest to the slowest, with the time each took, in seconds, and the key of its
+layout.
 
 ## Comparing the fastest layouts
 
@@ -172,7 +175,8 @@ To understand why some layouts are faster than others, we can compare them regio
 [`plot_bar_chart`][access.profiling.results.ProfilingResults.plot_bar_chart]. We take the three fastest layouts:
 
 ```python
-fig = results.plot_bar_chart(groups, tmax, experiments=ranking[:3])
+fastest = ours.select_experiments("experiment", *ranking.index[:3])
+fig = fastest.plot_bar_chart(regions)
 ```
 
 <figure markdown="span">
@@ -195,7 +199,8 @@ with, so ask the application for the changes of the fastest one:
 ```python
 from pprint import pprint
 
-pprint(manager.application.config_changes(manager.experiments[best[0]].layout))
+(fastest_layout,) = [experiment.layout for experiment in best.experiments.values()]
+pprint(manager.application.config_changes(fastest_layout))
 ```
 
 For the release's own layout of ACCESS-ESM1.6, for example, they are:

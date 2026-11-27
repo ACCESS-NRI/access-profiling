@@ -26,7 +26,7 @@ The names a study uses most are available from the package itself:
 
 ```python
 from access.profiling import (
-    RegionGroup,            # choosing what to plot
+    Region,                 # choosing what to show
     PayuManager,            # the managers for the workflow engines of the ACCESS models
     CylcRoseManager,
     ESM16Configuration,     # the configuration types of the ACCESS models

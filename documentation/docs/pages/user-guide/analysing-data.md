@@ -50,65 +50,75 @@ between the runs, and how to get one value per experiment.
 
 ## Choosing the regions
 
-Before plotting, we need to say which regions we want to see. Each plotting method takes a list of
-[`RegionGroup`][access.profiling.plotting_utils.RegionGroup]s. A group names a log and the regions to take from
-it, and you can also give the regions nicer labels. These are the groups we use for the two models:
+Before plotting, we need to say which regions we want to see. Each table and each plot takes the regions to show,
+each as a [`Region`][access.profiling.results.Region]. A region names a log and a region of that log, and you can
+also give it a nicer label. To find the names, list the regions that a log holds, with the number of experiments
+that have each:
+
+```python
+print(results.regions("MOM5"))
+```
+
+This prints a table with a row for each region of the MOM5 timers. These are the regions we use for the two models:
 
 === "ACCESS-ESM1.6"
 
     ```python
-    from access.profiling import RegionGroup
+    from access.profiling import Region
 
-    groups = [
-        RegionGroup(
-            "payu",
-            ["payu_model_run_duration_seconds"],
-            component="ACCESS-ESM1.6 piControl",
-            relabel={"payu_model_run_duration_seconds": "Whole model"},
-        ),
-        RegionGroup("UM_Total_Walltime", ["um_total_walltime"], relabel={"um_total_walltime": "UM7"}),
-        RegionGroup("MOM5", ["Total runtime"], relabel={"Total runtime": "MOM5"}),
-        RegionGroup("CICE5", ["Total"], relabel={"Total": "CICE5"}),
+    regions = [
+        Region("payu", "payu_model_run_duration_seconds", label="Whole model", component="ACCESS-ESM1.6 piControl"),
+        Region("UM_Total_Walltime", "um_total_walltime", label="UM7"),
+        Region("MOM5", "Total runtime", label="MOM5"),
+        Region("CICE5", "Total", label="CICE5"),
     ]
     ```
 
 === "ACCESS-OM3"
 
     ```python
-    from access.profiling import RegionGroup
+    from access.profiling import Region
 
-    groups = [
-        RegionGroup(
-            "ESMF",
-            ["[ensemble] RunPhase1"],
-            component="ACCESS-OM3 MC-25km",
-            relabel={"[ensemble] RunPhase1": "Whole model"},
-        ),
-        RegionGroup("ESMF", ["[OCN] RunPhase1"], component="ocn", relabel={"[OCN] RunPhase1": "MOM6"}),
-        RegionGroup("ESMF", ["[ICE] RunPhase1"], component="ice", relabel={"[ICE] RunPhase1": "CICE6"}),
+    regions = [
+        Region("ESMF", "[ensemble] RunPhase1", label="Whole model", component="ACCESS-OM3 MC-25km"),
+        Region("ESMF", "[OCN] RunPhase1", label="MOM6", component="ocn"),
+        Region("ESMF", "[ICE] RunPhase1", label="CICE6", component="ice"),
     ]
     ```
 
-If you do not give a region a label, it is labelled `"<log>: <region>"`. The `component` is only used by the
-component scaling plot, which plots each region against the cores of its component. Most logs belong to one
-component, and the application already knows which one. You only need to give a `component` for the logs that
-cover the whole model, such as Payu's timings and the ESMF summary here. For those, give either one of the
-components, or the name of the whole model, which is `ACCESS-ESM1.6 piControl` or `ACCESS-OM3 MC-25km` here. In the
-second case the regions are plotted against the cores of the whole job.
+If you do not give a region a label, it is labelled with its name. The regions of one table or one plot must have
+labels of their own, so give a label to two regions of two logs that have the same name, such as two `Total`s.
+The `component` is only used by the component scaling plot, which plots each region against the cores of its
+component. Most logs belong to one component, and the application already knows which one. You only need to give a
+`component` for the logs that cover the whole model, such as Payu's timings and the ESMF summary here. For those,
+give either one of the components, or the name of the whole model, which is `ACCESS-ESM1.6 piControl` or
+`ACCESS-OM3 MC-25km` here. In the second case the regions are plotted against the cores of the whole job.
 
 ## The plots
 
-The results can make four kinds of plot. Each of them takes the groups, a metric and, optionally, the
-experiments to include, and returns the Matplotlib figure:
+The results can make four kinds of plot. Each of them takes the regions, or a single region, and returns the
+Matplotlib figure:
 
 | Method | What it plots | What it needs | Shown in |
 |---|---|---|---|
 | [`plot_scaling_data`][access.profiling.results.ProfilingResults.plot_scaling_data] | The speedup and parallel efficiency of every region, against the cores the whole job occupied | A single experiment for every number of CPUs | [Scaling studies](scaling-studies.md) |
 | [`plot_component_scaling_data`][access.profiling.results.ProfilingResults.plot_component_scaling_data] | Every region against the cores of its own component | The layout of every experiment | [Scaling studies](scaling-studies.md) |
 | [`plot_bar_chart`][access.profiling.results.ProfilingResults.plot_bar_chart] | The regions side by side, with one bar per experiment | | [Best layout for a budget](best-layout.md), [Comparing experiments](comparing-experiments.md) |
-| [`plot_metric`][access.profiling.results.ProfilingResults.plot_metric] | Every region against a coordinate of the experiments: one of their labels, or a quantity of their layouts | A number for every experiment, in its labels or its layout | [Configuration choices](configuration-choices.md#plotting-against-a-setting) |
+| [`plot_metric`][access.profiling.results.ProfilingResults.plot_metric] | Every region against a coordinate of the experiments: one of their labels, a quantity of their layouts, or their number of CPUs | A number for every experiment, in its labels or its layout | [Configuration choices](configuration-choices.md#plotting-against-a-setting) |
 
-Note that none of them accepts data that still has a `run` dimension.
+Each plot shows the metric `tmax` unless you pass another as `metric`, as [Choosing a metric](#choosing-a-metric)
+explains. Note that none of them accepts data that still has a `run` dimension.
+
+Each plot shows all the experiments of the results. To show only some of them, select them first. The names of the
+experiments are a coordinate, `"experiment"`, so this selects two of them by name:
+
+```python
+two = results.select_experiments("experiment", "exp-0001", "exp-0002")
+```
+
+[`select_experiments`][access.profiling.results.ProfilingResults.select_experiments] returns new results, which
+hold only the experiments with one of the values you give. It selects by a label or by a quantity of the layout in
+the same way, as [Configuration choices](configuration-choices.md#putting-the-experiments-in-a-table) shows.
 
 ## Saving the figures
 
@@ -116,9 +126,7 @@ Every plotting method returns its Matplotlib figure, and also shows it unless yo
 or to save a figure, use:
 
 ```python
-from access.profiling.metrics import tmax
-
-fig = results.plot_bar_chart(groups, tmax, experiments=["<experiment>", "<another experiment>"], show=False)
+fig = two.plot_bar_chart(regions, show=False)
 fig.savefig("bar-chart.png", dpi=150, bbox_inches="tight")
 ```
 
@@ -127,11 +135,12 @@ figures.
 
 ## Choosing a metric
 
-Which metric should you plot? In the examples we use `tmax`, which is the time of the PE that spent longest in a region.
-This is the time the rest of the run had to wait for. `tavg`, the mean over the PEs, tells you how much work a region
-does instead. The difference between the two shows how unevenly the work is shared among the PEs. Logs that only give
-one time per region, such as Payu's timings and the Cylc logs, store it as `tmax`. [Log
-formats](../access/log-formats.md) lists which metrics each log of the ACCESS models provides.
+Which metric should you plot? The tables and the plots use `tmax` unless you pass another as `metric`. It is the time of
+the PE that spent longest in a region, which is the time the rest of the run had to wait for. `tavg`, the mean over the
+PEs, tells you how much work a region does instead. For example, `results.plot_bar_chart(regions, metric=tavg)` draws
+the mean time. You import the metrics from `access.profiling.metrics`. The difference between the two shows how unevenly
+the work is shared among the PEs. Logs that only give one time per region, such as Payu's timings and the Cylc logs,
+store it as `tmax`. [Log formats](../access/log-formats.md) lists which metrics each log of the ACCESS models provides.
 
 ## Working with the data directly
 
@@ -147,13 +156,13 @@ imbalance = (mom5[tmax] - mom5[tavg]) / mom5[tavg]
 ```
 
 To work with several experiments at once, use [`gather`][access.profiling.results.ProfilingResults.gather]. It
-collects the regions of one group, for every experiment, into a single dataset. Here we also ask for the number of
+collects the regions you give, for every experiment, into a single dataset. Here we also ask for the number of
 cores that each experiment gives MOM5, as a coordinate:
 
 ```python
-from access.profiling import RegionGroup, component_cores
+from access.profiling import Region, component_cores
 
-ocean = RegionGroup("MOM5", ["Total runtime"], relabel={"Total runtime": "MOM5"})
+ocean = Region("MOM5", "Total runtime", label="MOM5")
 gathered = results.gather(ocean, [component_cores("MOM5")])
 print(gathered["MOM5 cores"].values)
 print(gathered[tmax].sel(region="MOM5").pint.dequantify().values)

@@ -383,30 +383,22 @@ first keep the best of them with
 time that the `atmos_main` task of ACCESS-AM3 took for the first cycle of the run:
 
 ```python
-from access.profiling import RegionGroup
-from access.profiling.metrics import tmax
+from access.profiling import Region
 
 results = manager.parse_profiling_data()
-groups = [
-    RegionGroup(
-        "cylc_tasks",
-        ["atmos_main_cycle19820101T0000Z"],
-        component="UM",
-        relabel={"atmos_main_cycle19820101T0000Z": "UM"},
-    )
-]
-best = results.select_best_experiments("cylc_tasks", "atmos_main_cycle19820101T0000Z", tmax)
-fig = results.plot_scaling_data(groups, tmax, experiments=best, xlabel="Cores")
+um = Region("cylc_tasks", "atmos_main_cycle19820101T0000Z", label="UM", component="UM")
+best = results.select_best_experiments(by=um)
+fig = best.plot_scaling_data(um, xlabel="Cores")
 ```
 
-The group names the component of its regions, the UM. The logs of a suite do not say which component they belong to, so
-only the group can say it. The scaling plot does not need it, but the component scaling plot does: it plots each region
+The region names its component, the UM. The logs of a suite do not say which component they belong to, so only the
+region can say it. The scaling plot does not need it, but the component scaling plot does: it plots each region
 against the cores of its component, which the manager reads from the layout of each suite when it parses the logs. Where
 several suites give the UM the same number of cores, the plot keeps the fastest of them. We plot the same task against
 the cores of the UM:
 
 ```python
-fig = results.plot_component_scaling_data(groups, tmax, xlabel="Cores of the UM")
+fig = results.plot_component_scaling_data(um, xlabel="Cores of the UM")
 ```
 
 The UM is the only component of ACCESS-AM3, so the two plots differ only where a job asked PBS for more cores than
@@ -425,7 +417,7 @@ cores of the UM, we pass [`component_cores("UM")`][access.profiling.experiment.c
 ```python
 from access.profiling import component_cores
 
-fig = results.plot_metric(groups, tmax, component_cores("UM"), xlabel="Cores of the UM")
+fig = results.plot_metric(um, component_cores("UM"), xlabel="Cores of the UM")
 ```
 
 The labels of the suites work in the same way: pass the key of a label in place of `component_cores("UM")`.
@@ -528,7 +520,7 @@ MY_SUITE = RoseSuiteConfiguration(
 A [`RoseProcessGrid`][access.profiling.rose_configuration.RoseProcessGrid] is a code that divides a grid among its
 ranks along a process grid, as the UM does. Its fields are:
 
-- `name`, the name of the component in allocation strategies and in a `RegionGroup`;
+- `name`, the name of the component in allocation strategies and in a `Region`;
 - `token`, its short name in the key of each layout, which identifies the experiments of a study, so do not change
   it once a study has experiments;
 - `variables`, either the names of the two variables that set the process grid, or the name of the single variable

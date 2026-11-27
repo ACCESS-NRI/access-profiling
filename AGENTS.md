@@ -64,10 +64,11 @@ src/access/profiling/
                         tarball)
   manager.py            ProfilingManager[AppT]: generation, records and the study file, statuses, parsing
   results.py            ProfilingResults (what parsing returns: selection, reductions, tables and plotting),
-                        ParsedExperiment (the data, labels, layout and CPUs of one experiment)
+                        ParsedExperiment (the data, labels, layout and CPUs of one experiment), Region (one region
+                        of one log, under a label)
   parser.py             ProfilingParser (the ABC), flatten_hierarchical, aggregate_pe_data
   metrics.py            ProfilingMetric and the predefined metrics (tmin, tmax, tavg, count, ...)
-  plotting_utils.py     RegionGroup, plot_bar_metrics, plot_line_metrics
+  plotting_utils.py     plot_bar_metrics, plot_line_metrics
   scaling.py            parallel_speedup, parallel_efficiency, plot_scaling_metrics, plot_component_scaling
   versions.py           show_versions: the versions of Python, the package and what it requires
   py.typed              Says the package is typed (PEP 561); declared as package data in pyproject.toml
@@ -164,12 +165,16 @@ blocks, one page per concept. A new module needs a block on the right page and a
   raised with the experiment's name by the reader that needs it, so one unreadable count stops no other analysis.
 - **`select_best_run` keeps a run that took place; `aggregate_runs` does not.** The first picks one run by one metric
   and keeps it in every log; the second reduces each region and metric on its own, so its minimum can mix runs.
-  They answer different questions, so don't substitute one for the other.
+  They answer different questions, so don't substitute one for the other. `split_runs` answers a third, by making
+  each run an experiment of its own, labelled `"run"`, so that runs are compared by a coordinate like any other. A
+  log only one run produced has no `run` dimension and belongs to no run, so it is left out.
 
 ### Coordinates
 
 - **A table or a plot is arranged by coordinates, never by names.** A coordinate is the key of a label, as a plain
-  string, or an `ExperimentCoordinate`, which reads a quantity from the layout the experiment runs.
+  string, an `ExperimentCoordinate`, which reads a quantity from the layout the experiment runs, or one of the
+  `BUILT_IN_COORDINATES`, `"experiment"` (the name) and `"ncpus"`. No label may be named as those, nor as `"run"`,
+  which `split_runs` gives (`RESERVED_LABELS` in `experiment.py`, refused where labels are given).
   `_coordinate_value` is the one place that reads either, and the one place that can name the experiment in an
   error, since a coordinate is handed a layout and nothing else.
 - **`gather` puts a coordinate together one value at a time**, with `xr.Variable.concat` over 0-d variables. This
@@ -185,9 +190,14 @@ blocks, one page per concept. A new module needs a block on the right page and a
   its series. Two experiments in one cell raise, naming them, rather than one being kept, and so do two regions of
   the group with one label. The column of values is keyed by the metric, which no coordinate's name can equal. A
   table holds numbers, not quantities, so it names the units of the metric in `attrs["units"]`.
-- **Experiments are picked out and named by coordinates too.** `select_experiments` returns, of the experiments
-  of the results, those with one value of a coordinate. An experiment without the label is not one of them, but a
-  label that none of them has is refused. `plot_bar_chart(label=...)` names each experiment's bars
+- **A reader is given `Region`s, one or several, never names.** A region is one region of one log, under a label
+  that is its name unless it is given one, and the regions of one reader must have labels of their own
+  (`_region_list`). Regions of several logs are read together, keeping the metrics every one of their logs has
+  (`_region_data`), and a reader of one metric names the log that lacks it. The metric is `tmax` unless one is given.
+- **Experiments are picked out and named by coordinates too.** `select_experiments` returns results holding, of the
+  experiments of the results, those with one of some values of a coordinate, in the order of the results, and
+  `select_best_experiments` the best of each value of `per`. No reader takes a list of names. An experiment without
+  the label is not one of them, but a label that none of them has is refused. `plot_bar_chart(label=...)` names each experiment's bars
   `<name> <value>`, as `plot_metric` names its series, and refuses two experiments with the same value, whose bars
   would otherwise replace one another.
 

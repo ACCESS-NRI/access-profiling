@@ -4,7 +4,7 @@ Did a new compiler flag make the model faster? Is one configuration slower than 
 this kind of question, you can put experiments side by side, region by region, and see what changed in each part
 of the application. The experiments can be ones that the manager created, or existing experiments that were run in
 some other way. In this tutorial we compare experiments of ACCESS-ESM1.6 and ACCESS-OM3, run with Payu, using the
-`groups` of
+`regions` of
 [Choosing the regions](analysing-data.md#choosing-the-regions).
 
 ## What can be compared
@@ -80,28 +80,22 @@ The easiest way to compare experiments is a bar chart.
 region, with one bar for each experiment. Read the logs and draw it:
 
 ```python
-from access.profiling.metrics import tmax
-
 results = manager.parse_profiling_data()
-fig = results.plot_bar_chart(
-    groups,
-    tmax,
-    experiments=["release", "modified"],
-    experiment_relabel_map={"modified": "Modified build"},
-)
+two = results.select_experiments("experiment", "release", "modified")
+fig = two.plot_bar_chart(regions, experiment_relabel_map={"modified": "Modified build"})
 ```
 
-The regions appear along the x axis in the order of the groups, and the experiments in the order you give them.
-By default, all the experiments of the results are included. The bars are labelled with the names of the
-experiments, and you can use `experiment_relabel_map` to give them other labels. Experiments with labels can also
-be named by one of them, with `label`, as [Configuration choices](configuration-choices.md#running-and-comparing)
-shows. The title of the chart is the
-description of the metric. Note that the number of cores does not appear anywhere in the chart, so you can also
-compare experiments of different sizes.
-[Best layout for a budget](best-layout.md#comparing-the-fastest-layouts) shows an example.
+The regions appear along the x axis in the order you give them, and the experiments in the order of the results. By
+default, all the experiments of the results are included, so here we select the two we compare. The bars are labelled
+with the names of the experiments, and you can use `experiment_relabel_map` to give them other labels. Experiments with
+labels can also be named by one of them, with `label`, as [Configuration
+choices](configuration-choices.md#running-and-comparing) shows. The title of the chart is the description of the metric.
+Note that the number of cores does not appear anywhere in the chart, so you can also compare experiments of different
+sizes. [Best layout for a budget](best-layout.md#comparing-the-fastest-layouts) shows an example.
 
-If you want to see what changed inside one component, use groups with more regions of its log. For example,
-`RegionGroup("UM", ["AP2 Boundary Layer", "AP2 Convection"])` compares two of the timers of ACCESS-ESM1.6's UM.
+If you want to see what changed inside one component, use more regions of its log. For example,
+`[Region("UM", "AP2 Boundary Layer"), Region("UM", "AP2 Convection")]` compares two of the timers of
+ACCESS-ESM1.6's UM.
 
 ## Comparing the numbers
 
@@ -109,6 +103,8 @@ A chart is not always enough. You can also compare the numbers directly, for exa
 in every region of Payu's timings:
 
 ```python
+from access.profiling.metrics import tmax
+
 release = results.data["release"]["payu"][tmax]
 modified = results.data["modified"]["payu"][tmax]
 change = (modified - release) / release
@@ -123,8 +119,8 @@ This prints the change of each region as a percentage, next to its name.
 Rose suites are generated with `generate_experiments` too, as
 [Cylc Rose suites](../access/cylc-rose-suites.md#the-changes-of-an-experiment) shows, and compared in the same way.
 A suite that you prepared yourself is registered with
-[`add_rose_experiment`][access.profiling.cylc_manager.CylcRoseManager.add_rose_experiment] instead. Their groups
-name logs such as `cylc_tasks`.
+[`add_rose_experiment`][access.profiling.cylc_manager.CylcRoseManager.add_rose_experiment] instead. Their regions
+are in logs such as `cylc_tasks`.
 
 Be aware that two runs of the same experiment never take exactly the same time. If the difference between two
 experiments is not larger than that, it does not tell you anything.

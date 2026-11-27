@@ -134,6 +134,30 @@ class ProfilingLog:
         )
 
 
+RESERVED_LABELS: tuple[str, ...] = ("experiment", "ncpus", "run")
+"""The keys no label may have: the coordinates every experiment has, its name and the CPUs its job occupied, and the
+label `ProfilingResults.split_runs` gives each run."""
+
+
+def _refuse_labels(what: str, labels: dict) -> None:
+    """Refuses labels that a record could not hold, or that are named as a coordinate every experiment has.
+
+    Args:
+        what (str): What the labels are, and whose, for the message.
+        labels (dict): The labels.
+
+    Raises:
+        ValueError: If the labels are not JSON values, or if one has a key of `RESERVED_LABELS`.
+    """
+    _refuse_other_than_json(what, labels)
+    reserved = sorted(set(labels) & set(RESERVED_LABELS))
+    if reserved:
+        raise ValueError(
+            f"The {what} {reserved} are named as coordinates a table or a plot reads off every experiment, "
+            f"{list(RESERVED_LABELS)}, which they would hide. Give the labels other keys."
+        )
+
+
 def _refuse_other_than_json(what: str, value: dict) -> None:
     """Refuses a value that an experiment's record could not hold and give back as it was.
 
@@ -179,10 +203,10 @@ class ConfigurationChoice:
             `ProfilingManager.select_layouts` returned. None (the default) keeps the layout of the control.
         labels (dict): The study's own keys and values for the experiment, such as `{"distribution":
             "roundrobin"}`. They say what the choice is to whoever reads the study, and are not part of what
-            identifies the experiment. Empty by default.
+            identifies the experiment. No label may have a key of `RESERVED_LABELS`. Empty by default.
 
     Raises:
-        ValueError: If the changes or the labels are not JSON values.
+        ValueError: If the changes or the labels are not JSON values, or if a label has a key of `RESERVED_LABELS`.
     """
 
     changes: dict = field(default_factory=dict)
@@ -191,7 +215,7 @@ class ConfigurationChoice:
 
     def __post_init__(self) -> None:
         _refuse_other_than_json("changes of a configuration choice", self.changes)
-        _refuse_other_than_json("labels of a configuration choice", self.labels)
+        _refuse_labels("labels of a configuration choice", self.labels)
         # Copied, rather than written and read back as JSON, which would turn a YAML library's quoted string into
         # a plain one and lose its quotes. A study may build several choices from one dictionary and change it
         # between batches, so each choice holds what it was validated as.
@@ -591,11 +615,11 @@ class ProfilingExperiment:
         changes (dict | None): What the study changed in the control beyond the layout, keyed by file. None (the
             default) says they are unknown, as they are for an experiment this manager did not generate.
         labels (dict | None): The study's own keys and values for this experiment, as JSON values, since the
-            record keeps them. None (the default) gives it none.
+            record keeps them, with no key of `RESERVED_LABELS`. None (the default) gives it none.
         complete (bool): Whether the experiment was added as one that had finished. Defaults to False.
 
     Raises:
-        ValueError: If the labels are not JSON values.
+        ValueError: If the labels are not JSON values, or if a label has a key of `RESERVED_LABELS`.
 
     Attributes:
         path (Path): Path to the experiment directory, or to its tarball once it has been archived.
@@ -634,7 +658,7 @@ class ProfilingExperiment:
         self.layout_given = layout is not None
         self.changes = changes
         self.labels = copy.deepcopy(labels) if labels is not None else {}
-        _refuse_other_than_json("labels of an experiment", self.labels)
+        _refuse_labels("labels of an experiment", self.labels)
         self.complete = complete
         if self.path.name.endswith(".tar.gz"):
             self.status = ProfilingExperimentStatus.ARCHIVED

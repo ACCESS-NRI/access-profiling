@@ -218,7 +218,7 @@ experiments](../user-guide/experiments.md#generating-the-experiments).
 
 The three model logs are optional, which means that a run is still parsed if one of them is missing. The ESMF
 summary covers the whole coupled model. When you plot its regions against the cores of a component, you therefore
-have to say which `component` in the groups.
+have to give each `Region` of it its `component`.
 
 Every release so far is the 25 km configuration. The other configurations are under development on `dev-*`
 branches, and the package has a control source for each of them as well:

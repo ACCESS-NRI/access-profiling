@@ -306,25 +306,26 @@ finished. We then read the logs and choose the regions to look at, as in
 [Analysing profiling data](analysing-data.md):
 
 ```python
-from access.profiling import RegionGroup
-from access.profiling.metrics import tmax
+from access.profiling import Region
 
 results = manager.parse_profiling_data()
 
-whole = RegionGroup("ESMF", ["[ensemble] RunPhase1"], relabel={"[ensemble] RunPhase1": "Whole model"})
-cice6 = RegionGroup("ESMF", ["[ICE] RunPhase1"], relabel={"[ICE] RunPhase1": "CICE6"})
+whole = Region("ESMF", "[ensemble] RunPhase1", label="Whole model")
+cice6 = Region("ESMF", "[ICE] RunPhase1", label="CICE6")
 ```
 
 Both regions come from the ESMF profiling summary. The first one times the whole model, and the second one the
 sea ice.
 
 To compare the three distributions, we draw a bar chart, as in [Comparing experiments](comparing-experiments.md).
-We select the experiments by their labels, and use the labels to name the bars:
+We select the experiments by their labels, with
+[`select_experiments`][access.profiling.results.ProfilingResults.select_experiments], which returns new results that
+hold only the experiments with one of the values we give. Then we use the labels to name the bars:
 
 ```python
-distributed = [name for name, experiment in results.experiments.items() if "distribution" in experiment.labels]
+distributed = results.select_experiments("distribution", "cartesian", "roundrobin", "sectrobin")
 
-fig = results.plot_bar_chart([whole, cice6], tmax, experiments=distributed, label="distribution")
+fig = distributed.plot_bar_chart([whole, cice6], label="distribution")
 ```
 
 This draws one group of bars for the whole model and one for CICE6, with a bar for each distribution. With
@@ -336,23 +337,25 @@ experiments. To give the bars names of your own instead, use `experiment_relabel
 ## Putting the experiments in a table
 
 The block sizes are numbers, so we can do more with them than name bars.
-[`gather`][access.profiling.results.ProfilingResults.gather] collects the regions of a group, for several
-experiments, into one dataset. The names of the experiments say nothing about them, so we also ask for what tells
-the experiments apart:
+[`gather`][access.profiling.results.ProfilingResults.gather] collects regions of several experiments into one
+dataset. The names of the experiments say nothing about them, so we also ask for what tells the experiments apart:
 
 ```python
 from access.profiling import component_cores
+from access.profiling.metrics import tmax
 
-sized = [name for name, experiment in results.experiments.items() if "blocks per rank" in experiment.labels]
-gathered = results.gather(cice6, ["blocks per rank", component_cores("ice")], experiments=sized)
+sized = results.select_experiments("blocks per rank", 1, 4, 6, 12)
+gathered = sized.gather(cice6, ["blocks per rank", component_cores("ice")])
 ```
 
-What tells the experiments apart is given as a list of coordinates. A coordinate is one of two things:
+What tells the experiments apart is given as a list of coordinates. A coordinate is one of three things:
 
 - A string is the key of a label. Here `"blocks per rank"` gives the label of each experiment.
 - An [`ExperimentCoordinate`][access.profiling.experiment.ExperimentCoordinate] is a quantity of the layout of each
   experiment. Here [`component_cores`][access.profiling.experiment.component_cores] gives the number of cores of the
   sea ice, under the name `ice cores`.
+- `"ncpus"` is the number of CPUs that the job of each experiment occupied, and `"experiment"` is its name. Every
+  experiment has these two, so no label can be named as one of them, nor as `"run"`.
 
 The dataset has the experiments along a dimension named `experiment`, and the regions along `region`, under the
 labels of the group. Each coordinate has one value for each experiment. We print them next to the times:
@@ -371,7 +374,7 @@ the same way, and puts it in a pandas `DataFrame`, with a row for each value of 
 each value of another:
 
 ```python
-table = results.table(cice6, tmax, component_cores("ice"), "blocks per rank", experiments=sized)
+table = sized.table(cice6, component_cores("ice"), "blocks per rank")
 print(table)
 ```
 
@@ -379,27 +382,28 @@ This prints the time of CICE6 with a row for each number of cores of the sea ice
 each number of blocks per rank. There are a few things to know about the table:
 
 - The rows are sorted by their value. The columns are in the order in which the experiments give their values.
-- The columns are grouped by region, under the labels of the group, so each region of the group needs a label of
-  its own. Without the second coordinate, there is one column for each region.
+- The columns are grouped by region, under the labels of the regions, so each region needs a label of its own.
+  Without the second coordinate, there is one column for each region.
+- The numbers are of the metric `tmax`, unless you pass another as `metric`.
 - The numbers are in the units of the metric. The table names these units in `table.attrs["units"]`.
 - An empty cell means that no experiment has that pair of values. If two experiments have the same pair, the
   method raises a `ValueError` that names them, since a cell holds one value.
 - Like `gather`, the method does not accept data with a `run` dimension. Reduce the runs first, as
   [Run-to-run variability](run-to-run-variability.md#measuring-the-spread-of-the-runs) explains.
 
-To look at only some of the experiments, pick them out by a value of a coordinate with
-[`select_experiments`][access.profiling.results.ProfilingResults.select_experiments]. For example, these are the
+`select_experiments` picks out experiments by any coordinate, and not only by a label. For example, these are the
 experiments that give the sea ice 24 cores:
 
 ```python
 on_24_cores = results.select_experiments(component_cores("ice"), 24)
 ```
 
-The method returns the names of the experiments, which you can give to a table or a plot as `experiments`. It
-selects from all the experiments of the results. To select from a list of your own instead, give it as
-`experiments`. An experiment without the label is not selected, since
-the experiments of a study need not all have the same labels. If none of them has the label, which is what a
-misspelt key gives, the method raises a `ValueError`.
+The method returns new results, which a table or a plot reads as it reads `results`. You can also select from what
+a selection returned, as in `sized.select_experiments(component_cores("ice"), 24)`. The experiments keep the order of
+the results. An experiment without the label is not selected, since the experiments of a study need not all have
+the same labels. If none of them has the label, which is what a misspelt key gives, the method raises a
+`ValueError`. If none of them has one of the values, the results it returns hold no experiments, and a table or a
+plot of them raises a `ValueError` that says so.
 
 You can also define a coordinate of your own. It needs a name, and a function that works the quantity out from a
 layout. For example, this one is the number of cores of the whole layout:
@@ -420,7 +424,7 @@ to.
 the time of CICE6 against the number of blocks of each rank:
 
 ```python
-fig = results.plot_metric([cice6], tmax, "blocks per rank", experiments=sized, xlabel="Blocks per rank")
+fig = sized.plot_metric(cice6, "blocks per rank", xlabel="Blocks per rank")
 ```
 
 <figure markdown="span">
@@ -446,7 +450,7 @@ For example, a study may run these block sizes on several layouts. This call the
 of cores of the sea ice:
 
 ```python
-fig = results.plot_metric([cice6], tmax, "blocks per rank", series=component_cores("ice"), experiments=sized)
+fig = sized.plot_metric(cice6, "blocks per rank", series=component_cores("ice"))
 ```
 
 Each line is labelled with its region and its value of the series, such as `CICE6, ice cores 24`. The series can
