@@ -109,7 +109,7 @@ experiment as a table, arranged by what tells the experiments apart. For example
 ACCESS-OM3:
 
 ```python
-from access.profiling.manager import component_cores
+from access.profiling import component_cores
 
 fastest = manager.table(runtime, tmax, component_cores("ice"), runs="min")
 slowest = manager.table(runtime, tmax, component_cores("ice"), runs="max")

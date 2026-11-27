@@ -14,6 +14,7 @@ import pytest
 from access.config.parallel_component import ComponentLayout, CoreSharing
 from access.config.parallel_domain import Domain, DomainDecompositionSpec
 from access.config.parallel_mpi_grid import MPICartesianGrid
+from conftest import component_of, layout_with, leaf_layout
 
 from access.profiling.experiment import (
     RECORD_FILENAME,
@@ -24,7 +25,9 @@ from access.profiling.experiment import (
     ProfilingLog,
     _layout_from_record,
     _layout_record,
+    component_cores,
     experiment_directory_walker,
+    find_component,
     read_archived_record,
     read_record,
     read_versioned,
@@ -235,19 +238,23 @@ def test_profiling_experiment_archive_unknown_status():
 
 @mock.patch("access.profiling.experiment.tarfile.open")
 def test_profiling_experiment_archive_not_done(mock_open, caplog):
-    """Test the archive method of ProfilingExperiment for non-DONE statuses."""
+    """Test the archive method of ProfilingExperiment for non-DONE statuses.
+
+    An experiment already archived is passed over at INFO, since archiving a study again passes over every
+    experiment it archived before. The others are a warning.
+    """
 
     exp = ProfilingExperiment(path=Path("/fake/work_dir/exp1"))
     for status in ProfilingExperimentStatus:
         if status == ProfilingExperimentStatus.DONE:
             continue
         exp.status = status
-        with caplog.at_level(logging.WARNING):
+        with caplog.at_level(logging.INFO):
             exp.archive(Path("/fake/archive"))
         assert mock_open.call_count == 0, "Tarfile should only be created for DONE experiments."
         assert len(caplog.records) == 1
         record = caplog.records[0]
-        assert record.levelname == "WARNING"
+        assert record.levelname == ("INFO" if status == ProfilingExperimentStatus.ARCHIVED else "WARNING"), status
         caplog.clear()
 
 
@@ -1064,3 +1071,60 @@ class TestExperimentCoordinate:
 
         with pytest.raises(dataclasses.FrozenInstanceError):
             coordinate.name = "ranks"
+
+
+class TestFindComponent:
+    """Looking a component up in a layout, which access.config offers no way to do."""
+
+    def test_it_finds_a_component_beside_the_others(self):
+        layout = layout_with(ocn=240, ice=120)
+        assert component_of(layout, "ice").n_cores == 120
+
+    def test_it_finds_the_layout_itself(self):
+        layout = layout_with(ocn=240)
+        assert find_component(layout, "model") is layout
+
+    def test_it_looks_at_any_depth(self):
+        """A tree groups components as the model runs them, not as a reader asks about them."""
+
+        shared = ComponentLayout(
+            name="shared",
+            n_cores=120,
+            n_ranks=120,
+            threads_per_rank=None,
+            decomposition=None,
+            sub_layouts=(leaf_layout("ice", 120),),
+        )
+        layout = ComponentLayout(
+            name="model",
+            n_cores=360,
+            n_ranks=360,
+            threads_per_rank=None,
+            decomposition=None,
+            sub_layouts=(shared, leaf_layout("ocn", 240)),
+        )
+        assert component_of(layout, "ice").n_cores == 120
+
+    def test_a_component_that_is_not_there(self):
+        assert find_component(layout_with(ocn=240), "atm") is None
+
+
+class TestComponentCores:
+    """The cores a layout gives one component, as a coordinate of the experiments."""
+
+    def test_it_is_named_after_the_component(self):
+        assert component_cores("ice").name == "ice cores"
+
+    def test_its_value_is_the_cores_the_layout_gives_the_component(self):
+        assert component_cores("ice").value(layout_with(ocn=240, ice=120)) == 120
+
+    def test_cores_are_not_ranks(self):
+        """A component with two threads on each rank occupies twice as many cores as it has ranks."""
+
+        threaded = ComponentLayout(name="atm", n_cores=96, n_ranks=48, threads_per_rank=2, decomposition=None)
+
+        assert component_cores("atm").value(threaded) == 96
+
+    def test_a_layout_without_the_component(self):
+        with pytest.raises(ValueError, match="The layout holds no component 'atm'. It holds \\['model', 'ocn'\\]"):
+            component_cores("atm").value(layout_with(ocn=240))

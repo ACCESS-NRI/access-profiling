@@ -148,7 +148,7 @@ in a choice:
 ```python
 from dataclasses import replace
 
-from access.profiling.manager import find_component
+from access.profiling import find_component
 
 sea_ice = manager.application.sea_ice
 ice_ranks = find_component(layout, "ice").n_ranks
@@ -341,7 +341,7 @@ experiments, into one dataset. The names of the experiments say nothing about th
 the experiments apart:
 
 ```python
-from access.profiling.manager import component_cores
+from access.profiling import component_cores
 
 sized = [name for name, experiment in manager.experiments.items() if "blocks per rank" in experiment.labels]
 gathered = manager.gather(cice6, ["blocks per rank", component_cores("ice")], experiments=sized)
@@ -351,7 +351,7 @@ What tells the experiments apart is given as a list of coordinates. A coordinate
 
 - A string is the key of a label. Here `"blocks per rank"` gives the label of each experiment.
 - An [`ExperimentCoordinate`][access.profiling.experiment.ExperimentCoordinate] is a quantity of the layout of each
-  experiment. Here [`component_cores`][access.profiling.manager.component_cores] gives the number of cores of the
+  experiment. Here [`component_cores`][access.profiling.experiment.component_cores] gives the number of cores of the
   sea ice, under the name `ice cores`.
 
 The dataset has the experiments along a dimension named `experiment`, and the regions along `region`, under the

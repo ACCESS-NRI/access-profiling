@@ -8,7 +8,8 @@ and, once they are known, the cores it occupied and the layout it ran. Once fini
 tarball, and it is read from the tarball after that. A `ProfilingLog` pairs one log file with the parser that
 reads it. A `ConfigurationChoice` is one configuration a study asks an experiment for, and an `ExperimentPlan` is
 an experiment a manager has decided to create, before any workflow engine has touched it. An `ExperimentCoordinate`
-is a quantity of an experiment's layout that a table or a plot puts the experiments side by side by.
+is a quantity of an experiment's layout that a table or a plot puts the experiments side by side by, such as the
+cores of one component, which `component_cores` reads with the help of `find_component`.
 
 An experiment's name says nothing about it, so what it is has to be written down. Each experiment has a record, a
 small JSON file named `RECORD_FILENAME`: in its directory under the working directory, and as the first member of
@@ -245,6 +246,61 @@ class ExperimentCoordinate:
 
     name: str
     value: Callable[[ComponentLayout], Hashable]
+
+
+def find_component(layout: ComponentLayout, name: str) -> ComponentLayout | None:
+    """Returns the part of a layout belonging to the named component, wherever it sits in it.
+
+    A component is looked for at any depth, since a tree groups its components as the application runs them
+    rather than as a reader asks about them: a component that takes its turn on a range of cores shared with
+    others sits under that range, not beside the components running concurrently with it.
+
+    Args:
+        layout (ComponentLayout): Layout to look in, itself included.
+        name (str): Name of the component to look for.
+
+    Returns:
+        ComponentLayout | None: The layout of that component, or None if it holds no such component.
+    """
+    if layout.name == name:
+        return layout
+    for sub_layout in layout.sub_layouts:
+        found = find_component(sub_layout, name)
+        if found is not None:
+            return found
+    return None
+
+
+def component_cores(name: str) -> ExperimentCoordinate:
+    """Returns the coordinate that is the number of cores a layout gives the named component.
+
+    The component is looked for at any depth of the layout, as `find_component` looks for it, and the coordinate is
+    named `"<name> cores"`.
+
+    Args:
+        name (str): Name of the component, as the layout names it.
+
+    Returns:
+        ExperimentCoordinate: The coordinate. Its value raises `ValueError` for a layout that holds no such
+            component.
+    """
+
+    def cores(layout: ComponentLayout) -> int:
+        found = find_component(layout, name)
+        if found is None:
+            raise ValueError(f"The layout holds no component '{name}'. It holds {sorted(_component_names(layout))}.")
+        return found.n_cores
+
+    return ExperimentCoordinate(f"{name} cores", cores)
+
+
+def _component_names(layout: ComponentLayout) -> list[str]:
+    """Returns the name of every component in a layout, itself included, for saying what it does hold."""
+
+    names = [layout.name]
+    for sub_layout in layout.sub_layouts:
+        names.extend(_component_names(sub_layout))
+    return names
 
 
 class ProfilingExperimentStatus(Enum):
@@ -675,7 +731,9 @@ class ProfilingExperiment:
         """Returns whether this experiment may be archived, saying why in the log when it may not.
 
         Only a finished experiment has anything worth keeping: one still to start or still running has not
-        produced it yet, one that failed has nothing worth keeping, and one already archived has had it kept.
+        produced it yet, one that failed has nothing worth keeping, and one already archived has had it kept. The
+        last is said at INFO, the others as a warning: archiving a study again passes over every experiment it
+        archived before, which is no cause for concern.
 
         Args:
             archive_file (Path): Where the archive would be written, named in the log message.
@@ -701,7 +759,8 @@ class ProfilingExperiment:
             # it may be archived - which would otherwise fall through and archive it.
             raise ValueError(f"Experiment at {self.path} has an unknown status {self.status}.")
 
-        logger.warning(f"Experiment at {self.path} {reasons[self.status]}. Skipping archiving.", stacklevel=3)
+        level = logging.INFO if self.status == ProfilingExperimentStatus.ARCHIVED else logging.WARNING
+        logger.log(level, f"Experiment at {self.path} {reasons[self.status]}. Skipping archiving.", stacklevel=3)
         return False
 
     def archive(

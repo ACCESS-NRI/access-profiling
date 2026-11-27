@@ -26,8 +26,9 @@ from access.profiling.experiment import (
     ExperimentPlan,
     ProfilingExperiment,
     ProfilingExperimentStatus,
+    component_cores,
 )
-from access.profiling.manager import STUDY_FILENAME, ProfilingManager, component_cores
+from access.profiling.manager import STUDY_FILENAME, ProfilingManager
 from access.profiling.metrics import tmax
 from access.profiling.plotting_utils import RegionGroup
 from access.profiling.rose_configuration import RoseProcessGrid, RoseSuiteConfiguration, read_section
@@ -359,6 +360,16 @@ class TestAddRoseExperiment:
 
         TestParseStatus._suite_db(run_path, [0])
         manager.update_statuses()
+        assert manager.experiments[self.ROSE].status == ProfilingExperimentStatus.DONE
+
+    def test_a_run_directory_given_as_a_string(self, manager, tmp_path):
+        """As a notebook types it, which is read as the path it names."""
+        run_path = tmp_path / "cylc-run" / self.ROSE
+        TestParseStatus._suite_db(run_path, [0])
+
+        manager.add_rose_experiment(self.ROSE, run_path=str(run_path))
+
+        assert manager.experiments[self.ROSE].run_path == run_path
         assert manager.experiments[self.ROSE].status == ProfilingExperimentStatus.DONE
 
     def test_without_a_run_directory(self, manager):

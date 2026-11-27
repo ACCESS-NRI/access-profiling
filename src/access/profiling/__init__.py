@@ -30,6 +30,8 @@ from access.profiling.experiment import (
     ProfilingExperiment,
     ProfilingExperimentStatus,
     ProfilingLog,
+    component_cores,
+    find_component,
 )
 from access.profiling.fms_parser import FMSProfilingParser
 from access.profiling.manager import ProfilingManager
@@ -54,6 +56,7 @@ from access.profiling.payujson_parser import PayuJSONProfilingParser
 from access.profiling.plotting_utils import RegionGroup
 from access.profiling.rose_configuration import RoseComponent, RoseProcessGrid, RoseRanks, RoseSuiteConfiguration
 from access.profiling.um_parser import UMProfilingParser, UMTotalRuntimeParser
+from access.profiling.versions import show_versions
 
 __all__ = [
     "Application",
@@ -61,6 +64,7 @@ __all__ = [
     "CICEComponent",
     "CICEPartitioning",
     "CICEPartitioningMode",
+    "component_cores",
     "ConfigurationChoice",
     "ControlSource",
     "CylcDBReader",
@@ -71,6 +75,7 @@ __all__ = [
     "ESMFSummaryProfilingParser",
     "ExistingDirectoryControlSource",
     "ExperimentCoordinate",
+    "find_component",
     "FixedRanksConstraint",
     "FMSProfilingParser",
     "GitControlSource",
@@ -96,6 +101,7 @@ __all__ = [
     "RoseProcessGrid",
     "RoseRanks",
     "RoseSuiteConfiguration",
+    "show_versions",
     "SubmodelsConfiguration",
     "UMComponent",
     "UMProfilingParser",

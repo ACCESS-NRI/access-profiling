@@ -77,6 +77,23 @@ def _refuse_payu_lab_path() -> None:
         )
 
 
+def _refuse_no_start_point(control: ControlSource) -> None:
+    """Refuses a control that states no start point, which the Payu experiment generator cannot clone.
+
+    Args:
+        control (ControlSource): The control.
+
+    Raises:
+        ValueError: If the control states no start point.
+    """
+    if control.start_point is None:
+        raise ValueError(
+            f"The control {control.label!r} states no start point. The Payu experiment generator "
+            "clones the control and branches every experiment from a particular state of it, so it has "
+            "to be told which: give the control a tag, a branch, a commit or a revision."
+        )
+
+
 def _generator_config(
     model_type: str,
     control: ControlSource,
@@ -106,12 +123,7 @@ def _generator_config(
     Raises:
         ValueError: If the control states no start point.
     """
-    if control.start_point is None:
-        raise ValueError(
-            f"The control {control.label!r} states no start point. The Payu experiment generator "
-            "clones the control and branches every experiment from a particular state of it, so it has "
-            "to be told which: give the control a tag, a branch, a commit or a revision."
-        )
+    _refuse_no_start_point(control)
     return {
         "model_type": model_type,
         "repository_url": control.origin,
@@ -124,7 +136,7 @@ def _generator_config(
     }
 
 
-def clone_control(work_dir: Path, control: ControlSource, model_type: str) -> Path:
+def clone_control(work_dir: Path | str, control: ControlSource, model_type: str) -> Path:
     """Clones a control into a working directory, the way generating a study does, and returns where it is.
 
     A configuration can be read out of a control's own files, with `from_control`, but the manager that
@@ -137,7 +149,7 @@ def clone_control(work_dir: Path, control: ControlSource, model_type: str) -> Pa
     no clone: its files are read from `control.path`.
 
     Args:
-        work_dir (Path): The working directory of the study.
+        work_dir (Path | str): The working directory of the study.
         control (ControlSource): Where the control comes from. Must state a start point.
         model_type (str): The model type identifier, as Payu defines it: the `model_type` of the configuration
             the control is to be read into, which the generator checks against Payu's list of models.
@@ -148,6 +160,7 @@ def clone_control(work_dir: Path, control: ControlSource, model_type: str) -> Pa
     Raises:
         ValueError: If the control states no start point.
     """
+    work_dir = Path(work_dir)
     ExperimentGenerator(_generator_config(model_type, control, work_dir, control.directory, {}, {})).run()
     return work_dir / control.directory
 
@@ -180,12 +193,12 @@ class PayuManager(ProfilingManager[PayuConfiguration]):
     behind - and none of it is any one application's.
 
     Args:
-        work_dir (Path): Working directory where profiling experiments will be generated and run.
-        archive_dir (Path): Directory where completed experiments will be archived.
+        work_dir (Path | str): Working directory where profiling experiments will be generated and run.
+        archive_dir (Path | str): Directory where completed experiments will be archived.
         application (PayuConfiguration): The application being profiled.
         control (ControlSource | None): Where the control every experiment perturbs comes from.
             None (the default) is enough to read and plot experiments that already exist.
-        lab_dir (Path | None): Directory, on the scratch file system, to put the study's Payu laboratory in:
+        lab_dir (Path | str | None): Directory, on the scratch file system, to put the study's Payu laboratory in:
             Payu runs the study's experiments in `<lab_dir>/<model type>-<8 hex digits>`, and keeps their outputs
             there. One directory can hold the laboratories of any number of studies. None (the default) is enough
             to read, plot, archive and delete experiments that already exist, but not to generate any.
@@ -196,15 +209,15 @@ class PayuManager(ProfilingManager[PayuConfiguration]):
 
     def __init__(
         self,
-        work_dir: Path,
-        archive_dir: Path,
+        work_dir: Path | str,
+        archive_dir: Path | str,
         application: PayuConfiguration,
         control: ControlSource | None = None,
         *,
-        lab_dir: Path | None = None,
+        lab_dir: Path | str | None = None,
     ):
         super().__init__(work_dir, archive_dir, application, control)
-        self.lab_dir = lab_dir
+        self.lab_dir = Path(lab_dir) if lab_dir is not None else None
 
     @property
     def laboratory(self) -> Path | None:
@@ -333,8 +346,9 @@ class PayuManager(ProfilingManager[PayuConfiguration]):
                 callers may pass options other runners take.
 
         Raises:
-            ValueError: If this manager has no `lab_dir`, if the control options name a laboratory, or if the
-                changes of a plan name a laboratory or an experiment.
+            ValueError: If this manager has no `lab_dir`, if the control states no start point, which the generator
+                needs to branch from, if the control options name a laboratory, or if the changes of a plan name a
+                laboratory or an experiment.
             RuntimeError: If `PAYU_LAB_PATH` is set in the environment.
         """
         if self.laboratory is None:
@@ -343,6 +357,9 @@ class PayuManager(ProfilingManager[PayuConfiguration]):
                 "study's own is made under it. Pass this manager a lab_dir on the scratch file system."
             )
         _refuse_payu_lab_path()
+        # The base class refuses a manager with no control before planning, so there is one to check here.
+        if self.control is not None:
+            _refuse_no_start_point(self.control)
         if control_options is not None and "laboratory" in control_options.get("config.yaml", {}):
             raise ValueError(
                 "The control options name a Payu laboratory, but each study runs in a laboratory of its own, under "

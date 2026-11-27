@@ -419,11 +419,11 @@ their I/O server. Generate them with `generate_experiments`, with one configurat
 them region by region, as in [Comparing experiments](../user-guide/comparing-experiments.md).
 
 Tables and plots can also use a quantity of the layout of each suite as a coordinate. To plot the time against the
-cores of the UM, we pass [`component_cores("UM")`][access.profiling.manager.component_cores] to
+cores of the UM, we pass [`component_cores("UM")`][access.profiling.experiment.component_cores] to
 [`plot_metric`][access.profiling.manager.ProfilingManager.plot_metric]:
 
 ```python
-from access.profiling.manager import component_cores
+from access.profiling import component_cores
 
 fig = manager.plot_metric(groups, tmax, component_cores("UM"), xlabel="Cores of the UM")
 ```

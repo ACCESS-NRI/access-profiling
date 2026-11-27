@@ -25,7 +25,7 @@ import pytest
 from access.config.parallel_component import ComponentLayout
 from access.config.parallel_domain import DomainDecompositionSpec
 
-from access.profiling.manager import find_component
+from access.profiling.experiment import find_component
 from access.profiling.parser import ProfilingParser
 from access.profiling.payu_configuration import PayuConfiguration
 from access.profiling.payu_manager import PayuManager
@@ -84,6 +84,40 @@ def write_suite_conf(directory: Path, variables: dict[str, str], file: str = "ro
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("[jinja2:suite.rc]\n" + "".join(f"{name}={value}\n" for name, value in variables.items()))
     return path
+
+
+def leaf_layout(name: str, n_cores: int) -> ComponentLayout:
+    """Returns a single component of a layout, one thread per rank as the ACCESS models have it.
+
+    Args:
+        name (str): Name of the component.
+        n_cores (int): Its cores, which are also its ranks.
+
+    Returns:
+        ComponentLayout: The component, with no decomposition.
+    """
+    return ComponentLayout(name=name, n_cores=n_cores, n_ranks=n_cores, threads_per_rank=1, decomposition=None)
+
+
+def layout_with(**cores: int) -> ComponentLayout:
+    """Returns a layout named "model" whose components run side by side.
+
+    Args:
+        **cores (int): The cores of each component, keyed by its name.
+
+    Returns:
+        ComponentLayout: The layout.
+    """
+    sub_layouts = tuple(leaf_layout(name, n) for name, n in cores.items())
+    total = sum(sub_layout.n_cores for sub_layout in sub_layouts)
+    return ComponentLayout(
+        name="model",
+        n_cores=total,
+        n_ranks=total,
+        threads_per_rank=None,
+        decomposition=None,
+        sub_layouts=sub_layouts,
+    )
 
 
 def component_of(layout: ComponentLayout, name: str) -> ComponentLayout:

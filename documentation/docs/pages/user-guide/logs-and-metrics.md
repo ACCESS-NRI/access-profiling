@@ -45,7 +45,7 @@ A parser can also have metrics of its own, for quantities that the predefined me
 - When a log names two regions the same way, the second is renamed with a `_2` suffix, the third with `_3`, and so
   on.
 - If a log cannot be read, `parse_profiling_data` stops with an error. The exception is an optional log, which is
-  simply skipped, with an INFO message.
+  skipped, with a warning that gives the reason.
 
 ## Parsing a log yourself
 

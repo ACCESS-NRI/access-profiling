@@ -15,11 +15,11 @@ from unittest import mock
 import pytest
 import xarray as xr
 from access.config.parallel_component import ComponentLayout
-from conftest import component_of, layout_of
+from conftest import layout_of, layout_with
 
 from access.profiling.application import Application, LogSpec
 from access.profiling.control import GitControlSource
-from access.profiling.experiment import RECORD_FILENAME, ConfigurationChoice, ExperimentCoordinate
+from access.profiling.experiment import RECORD_FILENAME, ConfigurationChoice, ExperimentCoordinate, component_cores
 from access.profiling.manager import (
     STUDY_FILENAME,
     ProfilingExperiment,
@@ -27,8 +27,6 @@ from access.profiling.manager import (
     ProfilingLog,
     ProfilingManager,
     _package_version,
-    component_cores,
-    find_component,
 )
 from access.profiling.metrics import count, tavg
 from access.profiling.plotting_utils import RegionGroup
@@ -560,6 +558,28 @@ def test_add_experiment_from_directory(tmp_path):
         manager.add_experiment_from_directory("outside_experiment", tmp_path / "outside_work_dir/outside_experiment")
 
 
+class TestDirectoriesGivenAsStrings:
+    """A notebook types a directory as a string, which is taken as the path it names."""
+
+    def test_the_directories_of_a_manager(self, tmp_path):
+        manager = MockProfilingManager(paths=[], work_dir=str(tmp_path / "work"), archive_dir=str(tmp_path / "archive"))
+
+        assert manager.work_dir == tmp_path / "work"
+        assert manager.archive_dir == tmp_path / "archive"
+
+    def test_the_directory_of_an_added_experiment(self, tmp_path):
+        """Relative to the working directory, as a path is, and found again by a manager built from strings."""
+
+        (tmp_path / "work" / "added").mkdir(parents=True)
+        manager = MockProfilingManager(paths=[], work_dir=str(tmp_path / "work"))
+
+        manager.add_experiment_from_directory("added", "added")
+
+        assert manager.experiments["added"].path == tmp_path / "work" / "added"
+        found = MockProfilingManager(paths=[], work_dir=str(tmp_path / "work"))
+        assert found.experiments["added"].path == tmp_path / "work" / "added"
+
+
 def test_delete_experiment(caplog, tmp_path):
     """Test the delete_experiment method of ProfilingManager."""
 
@@ -674,7 +694,7 @@ def test_parse_profiling_data_optional_log_failures_are_skipped_and_logged(singl
         } | {"good_log": {0: make_profiling_log("/fake/good_log.out", optional=True)}}
 
         # Parsing should return normally, without propagating any of the parsing errors. Capturing at INFO keeps
-        # records of both levels, so that the two except clauses can be told apart.
+        # the records of a missing log as well as those of a log that cannot be read.
         with caplog.at_level(logging.INFO):
             manager.parse_profiling_data()
 
@@ -684,9 +704,11 @@ def test_parse_profiling_data_optional_log_failures_are_skipped_and_logged(singl
         "The dedicated FileNotFoundError branch should catch exactly the missing-log errors, including subclasses; "
         "every other exception type, including other OSErrors, should fall through to the general branch."
     )
-    assert {record.levelname for record in failed + not_found} == {"INFO"}, (
-        "Optional log parse failures should be reported at INFO level, regardless of exception type."
+    assert {record.levelname for record in failed} == {"WARNING"}, (
+        "An optional log the run wrote and the parser cannot read is reported as a warning, whatever the exception."
     )
+    assert {record.levelname for record in not_found} == {"INFO"}, "A run need not write an optional log."
+
     for name, record in zip(errors, failed + not_found, strict=True):
         assert f"/fake/{name}.out" in record.message, f"The record reported for '{name}' should carry its own path."
     assert failed[0].message == (
@@ -1281,84 +1303,6 @@ def test_bar_chart_of_a_metric_with_more_than_one_value_for_each_region(block_st
         block_study.plot_bar_chart([RegionGroup("per_pe", ["Region 1"])], tavg, show=False)
 
 
-def _leaf(name: str, n_cores: int) -> ComponentLayout:
-    """A single component of a layout, one thread per rank as the ACCESS models have it."""
-
-    return ComponentLayout(name=name, n_cores=n_cores, n_ranks=n_cores, threads_per_rank=1, decomposition=None)
-
-
-def _layout(**cores: int) -> ComponentLayout:
-    """A layout whose components run side by side, given as name=cores."""
-
-    sub_layouts = tuple(_leaf(name, n) for name, n in cores.items())
-    total = sum(sub_layout.n_cores for sub_layout in sub_layouts)
-    return ComponentLayout(
-        name="model",
-        n_cores=total,
-        n_ranks=total,
-        threads_per_rank=None,
-        decomposition=None,
-        sub_layouts=sub_layouts,
-    )
-
-
-class TestFindComponent:
-    """Looking a component up in a layout, which access.config offers no way to do."""
-
-    def test_it_finds_a_component_beside_the_others(self):
-        layout = _layout(ocn=240, ice=120)
-        assert component_of(layout, "ice").n_cores == 120
-
-    def test_it_finds_the_layout_itself(self):
-        layout = _layout(ocn=240)
-        assert find_component(layout, "model") is layout
-
-    def test_it_looks_at_any_depth(self):
-        """A tree groups components as the model runs them, not as a reader asks about them."""
-
-        shared = ComponentLayout(
-            name="shared",
-            n_cores=120,
-            n_ranks=120,
-            threads_per_rank=None,
-            decomposition=None,
-            sub_layouts=(_leaf("ice", 120),),
-        )
-        layout = ComponentLayout(
-            name="model",
-            n_cores=360,
-            n_ranks=360,
-            threads_per_rank=None,
-            decomposition=None,
-            sub_layouts=(shared, _leaf("ocn", 240)),
-        )
-        assert component_of(layout, "ice").n_cores == 120
-
-    def test_a_component_that_is_not_there(self):
-        assert find_component(_layout(ocn=240), "atm") is None
-
-
-class TestComponentCores:
-    """The cores a layout gives one component, as a coordinate of the experiments."""
-
-    def test_it_is_named_after_the_component(self):
-        assert component_cores("ice").name == "ice cores"
-
-    def test_its_value_is_the_cores_the_layout_gives_the_component(self):
-        assert component_cores("ice").value(_layout(ocn=240, ice=120)) == 120
-
-    def test_cores_are_not_ranks(self):
-        """A component with two threads on each rank occupies twice as many cores as it has ranks."""
-
-        threaded = ComponentLayout(name="atm", n_cores=96, n_ranks=48, threads_per_rank=2, decomposition=None)
-
-        assert component_cores("atm").value(threaded) == 96
-
-    def test_a_layout_without_the_component(self):
-        with pytest.raises(ValueError, match="The layout holds no component 'atm'. It holds \\['model', 'ocn'\\]"):
-            component_cores("atm").value(_layout(ocn=240))
-
-
 @pytest.fixture()
 def component_scaling_data():
     """Parsed data for three experiments whose components were given different numbers of cores.
@@ -1372,7 +1316,7 @@ def component_scaling_data():
     datasets = [make_component_dataset([100.0 * 60 / n, 10.0]) for n in cores]
     manager = MockProfilingManager(paths, ncpus=[n * 2 for n in cores], datasets=datasets)
     for path, n in zip(paths, cores, strict=True):
-        manager.experiments[path.name].layout = _layout(component=n, other=n // 2)
+        manager.experiments[path.name].layout = layout_with(component=n, other=n // 2)
     return manager, cores
 
 
@@ -1526,7 +1470,7 @@ class TestPlotComponentScalingData:
         """A layout says what share a component had, not how big the job around it was, so this happens."""
 
         manager, _ = component_scaling_data
-        manager.experiments["large"].layout = _layout(component=60, other=240)
+        manager.experiments["large"].layout = layout_with(component=60, other=240)
 
         manager.plot_component_scaling_data([RegionGroup("component", ["Region 1"])], tavg)
 
@@ -1539,7 +1483,7 @@ class TestPlotComponentScalingData:
         """So a point can take its value for one region from one run and for another from another."""
 
         manager, _ = component_scaling_data
-        manager.experiments["large"].layout = _layout(component=60, other=240)
+        manager.experiments["large"].layout = layout_with(component=60, other=240)
         # 'large' is the faster of the two on Region 1 and the slower on Region 2.
         manager.data["large"] = make_component_dataset([25.0, 99.0])
 
@@ -1553,7 +1497,7 @@ class TestPlotComponentScalingData:
         """A point that is the best of several is not the only measurement there was, and says so."""
 
         manager, _ = component_scaling_data
-        manager.experiments["large"].layout = _layout(component=60, other=240)
+        manager.experiments["large"].layout = layout_with(component=60, other=240)
 
         with caplog.at_level(logging.INFO):
             manager.plot_component_scaling_data([RegionGroup("component", ["Region 1"])], tavg, show=False)
@@ -1564,7 +1508,7 @@ class TestPlotComponentScalingData:
     @mock.patch("access.profiling.manager.plot_component_scaling")
     def test_a_colliding_experiment_can_be_left_out(self, mock_plot, component_scaling_data):
         manager, _ = component_scaling_data
-        manager.experiments["large"].layout = _layout(component=60, other=240)
+        manager.experiments["large"].layout = layout_with(component=60, other=240)
 
         manager.plot_component_scaling_data(
             [RegionGroup("component", ["Region 1"])], tavg, experiments=["small", "medium"]
@@ -1618,7 +1562,7 @@ class TestOneListDrivesEveryPlot:
         paths, ncpus, datasets = scaling_data
         manager = MockProfilingManager(paths, ncpus, datasets)
         for path, n in zip(paths, ncpus, strict=True):
-            manager.experiments[path.name].layout = _layout(component=n)
+            manager.experiments[path.name].layout = layout_with(component=n)
         groups = self._groups()
 
         manager.plot_scaling_data(groups, tavg)
@@ -1669,7 +1613,7 @@ def block_study():
         paths, ncpus=[2 * n for n in cores], datasets=[make_component_dataset(values) for values in times]
     )
     for path, n, size in zip(paths, cores, blocks, strict=True):
-        manager.experiments[path.name].layout = _layout(component=n, other=n // 2)
+        manager.experiments[path.name].layout = layout_with(component=n, other=n // 2)
         manager.experiments[path.name].labels = {"blocks": size}
     return manager
 
@@ -2359,7 +2303,7 @@ class TestLayoutIsReadBackOnce:
 
     def test_it_is_parsed_and_kept(self):
         manager = MockProfilingManager([Path("expt")], ncpus=[8], datasets=[make_component_dataset([1.0, 2.0])])
-        manager.application.layouts["expt"] = _layout(component=4)
+        manager.application.layouts["expt"] = layout_with(component=4)
 
         assert layout_of(manager._layout("expt")).n_cores == 4
         assert layout_of(manager._layout("expt")).n_cores == 4

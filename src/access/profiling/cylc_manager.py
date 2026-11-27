@@ -250,8 +250,8 @@ class CylcRoseManager(ProfilingManager[RoseSuiteConfiguration]):
     of it is any one suite's.
 
     Args:
-        work_dir (Path): Working directory where profiling experiments will be generated and run.
-        archive_dir (Path): Directory where completed experiments will be archived.
+        work_dir (Path | str): Working directory where profiling experiments will be generated and run.
+        archive_dir (Path | str): Directory where completed experiments will be archived.
         application (RoseSuiteConfiguration): The suite being profiled.
         control (ControlSource | None): Where the control suite comes from, which every generated experiment is a
             copy of. Nothing here clones or checks it out: it is expected at the path of an
@@ -582,7 +582,7 @@ class CylcRoseManager(ProfilingManager[RoseSuiteConfiguration]):
             raise FileNotFoundError(f"Could not find suitable config file. Tried: {tried}")
         return config_path
 
-    def add_rose_experiment(self, rose: str, run_path: Path | None = None, labels: dict | None = None) -> None:
+    def add_rose_experiment(self, rose: str, run_path: Path | str | None = None, labels: dict | None = None) -> None:
         """Adds the given rose as an experiment to this manager.
 
         The experiment is named after the rose, and gets a record in its directory, from which a manager built
@@ -594,7 +594,7 @@ class CylcRoseManager(ProfilingManager[RoseSuiteConfiguration]):
 
         Args:
             rose (str): The rose to add as an experiment.
-            run_path (Path | None): Path to the Cylc run directory of the suite, where its results are, or will be
+            run_path (Path | str | None): Path to the Cylc run directory of the suite, where its results are, or will be
                 once it runs: it does not have to exist yet. Without it, nothing the suite records can be read, so
                 the suite stays NEW, a run of it is never seen to finish, and its logs cannot be parsed.
             labels (dict | None): The study's own keys and values for this experiment, as JSON values. None (the
@@ -606,6 +606,7 @@ class CylcRoseManager(ProfilingManager[RoseSuiteConfiguration]):
                 is added when it is raised.
         """
         self._refuse_added_name(rose)
+        run_path = Path(run_path) if run_path is not None else None
         experiment_path = self.work_dir / rose
         if not experiment_path.is_dir():
             raise ValueError(f"Experiment path '{experiment_path}' does not exist or is not a directory.")

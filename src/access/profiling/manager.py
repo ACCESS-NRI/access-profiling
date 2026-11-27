@@ -53,6 +53,7 @@ from access.profiling.experiment import (
     ProfilingExperiment,
     ProfilingExperimentStatus,
     ProfilingLog,
+    component_cores,
     read_archived_record,
     read_record,
     read_versioned,
@@ -178,52 +179,6 @@ def _merge_changes(layout_changes: dict, stated: dict, above: tuple[str, ...] = 
     return merged
 
 
-def find_component(layout: ComponentLayout, name: str) -> ComponentLayout | None:
-    """Returns the part of a layout belonging to the named component, wherever it sits in it.
-
-    A component is looked for at any depth, since a tree groups its components as the application runs them
-    rather than as a reader asks about them: a component that takes its turn on a range of cores shared with
-    others sits under that range, not beside the components running concurrently with it.
-
-    Args:
-        layout (ComponentLayout): Layout to look in, itself included.
-        name (str): Name of the component to look for.
-
-    Returns:
-        ComponentLayout | None: The layout of that component, or None if it holds no such component.
-    """
-    if layout.name == name:
-        return layout
-    for sub_layout in layout.sub_layouts:
-        found = find_component(sub_layout, name)
-        if found is not None:
-            return found
-    return None
-
-
-def component_cores(name: str) -> ExperimentCoordinate:
-    """Returns the coordinate that is the number of cores a layout gives the named component.
-
-    The component is looked for at any depth of the layout, as `find_component` looks for it, and the coordinate is
-    named `"<name> cores"`.
-
-    Args:
-        name (str): Name of the component, as the layout names it.
-
-    Returns:
-        ExperimentCoordinate: The coordinate. Its value raises `ValueError` for a layout that holds no such
-            component.
-    """
-
-    def cores(layout: ComponentLayout) -> int:
-        found = find_component(layout, name)
-        if found is None:
-            raise ValueError(f"The layout holds no component '{name}'. It holds {sorted(_component_names(layout))}.")
-        return found.n_cores
-
-    return ExperimentCoordinate(f"{name} cores", cores)
-
-
 def _coordinate_name(coordinate: ExperimentCoordinate | str) -> str:
     """Returns what a coordinate is called: its name, or the key of the label it is."""
 
@@ -277,15 +232,6 @@ def _note_shared_core_counts(component: str, cores: dict[str, int]) -> None:
             )
 
 
-def _component_names(layout: ComponentLayout) -> list[str]:
-    """Returns the name of every component in a layout, itself included, for saying what it does hold."""
-
-    names = [layout.name]
-    for sub_layout in layout.sub_layouts:
-        names.extend(_component_names(sub_layout))
-    return names
-
-
 class ProfilingManager(ABC, Generic[AppT]):
     """Abstract base class to handle profiling data and workflows.
 
@@ -308,8 +254,8 @@ class ProfilingManager(ABC, Generic[AppT]):
     and the application reads what its own input files say.
 
     Args:
-        work_dir (Path): Working directory where profiling experiments will be generated and run.
-        archive_dir (Path): Directory where completed experiments will be archived.
+        work_dir (Path | str): Working directory where profiling experiments will be generated and run.
+        archive_dir (Path | str): Directory where completed experiments will be archived.
         application (AppT): The application being profiled, which says how it is parallelised, what it
             writes and how a layout is realised in its own input files.
         control (ControlSource | None): Where the control every experiment perturbs comes from.
@@ -339,14 +285,14 @@ class ProfilingManager(ABC, Generic[AppT]):
 
     def __init__(
         self,
-        work_dir: Path,
-        archive_dir: Path,
+        work_dir: Path | str,
+        archive_dir: Path | str,
         application: AppT,
         control: ControlSource | None = None,
     ):
         super().__init__()
-        self.work_dir = work_dir
-        self.archive_dir = archive_dir
+        self.work_dir = Path(work_dir)
+        self.archive_dir = Path(archive_dir)
         self._application = application
         self._control = control
         self.experiments = {}
@@ -1252,7 +1198,7 @@ class ProfilingManager(ABC, Generic[AppT]):
         if study_file.is_file():
             shutil.copyfile(study_file, self.archive_dir / STUDY_FILENAME)
 
-    def add_experiment_from_directory(self, name: str, path: Path, labels: dict | None = None) -> None:
+    def add_experiment_from_directory(self, name: str, path: Path | str, labels: dict | None = None) -> None:
         """Adds an existing experiment from the specified directory.
 
         Note that the directory must already exist on disk and be inside the working directory. Also, the experiment
@@ -1264,7 +1210,7 @@ class ProfilingManager(ABC, Generic[AppT]):
         Args:
             name (str): Name of the experiment: the name of a single directory, other than one of the form
                 `exp-<digits>`, which is what generated experiments are named.
-            path (Path): Path to the experiment directory.
+            path (Path | str): Path to the experiment directory, absolute or relative to the working directory.
             labels (dict | None): The study's own keys and values for this experiment, as JSON values. None (the
                 default) gives it none.
 
@@ -1274,6 +1220,7 @@ class ProfilingManager(ABC, Generic[AppT]):
                 directory, or if the labels are not JSON values. Nothing is added when it is raised.
         """
         self._refuse_added_name(name)
+        path = Path(path)
         if not path.is_absolute():
             path = self.work_dir / path
         if not path.is_dir():
@@ -1410,9 +1357,9 @@ class ProfilingManager(ABC, Generic[AppT]):
                                     logger.info(f"Optional profiling log '{log.filepath}' not found. Skipping.")
                                     continue
                                 except Exception as e:
-                                    # might be useful to make this a warning instead of info to help catch parse
-                                    # failures for logs that should've succeeded.
-                                    logger.info(
+                                    # A warning, unlike a log that is not there: the run wrote it, and a parser that
+                                    # cannot read it is one to look into before the log is missed from a plot.
+                                    logger.warning(
                                         f"Failed to parse optional profiling log '{log.filepath}' with exception:\n"
                                         f"    {e}\nSkipping."
                                     )

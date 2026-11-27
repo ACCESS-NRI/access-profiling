@@ -111,4 +111,4 @@ separately.
   using the counts as weights, and the smallest minimum and the largest maximum are kept. If you want to keep the
   call tree instead, use `hierarchical=True`.
 - The model logs of ACCESS-OM3 and the UM logs of the Rose suites are optional. If one of them cannot be read, the
-  log is skipped, with an INFO message. If a Payu run did not write a log at all, the log is simply left out.
+  log is skipped, with a warning. If a Payu run did not write a log at all, the log is simply left out.

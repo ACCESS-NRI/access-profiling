@@ -150,7 +150,10 @@ def test_creating_experiments_without_a_control_is_refused():
 
 @mock.patch("access.profiling.payu_manager.ExperimentGenerator")
 def test_generation_needs_the_control_to_state_a_start_point(mock_experiment_generator, manager):
-    """The generator branches every experiment from a particular state of the control."""
+    """The generator branches every experiment from a particular state of the control.
+
+    It is refused before the study takes a number, as everything the engine can check without writing is.
+    """
     from access.profiling.control import ExistingDirectoryControlSource
 
     manager.control = ExistingDirectoryControlSource(Path("/fake/control"))
@@ -160,6 +163,7 @@ def test_generation_needs_the_control_to_state_a_start_point(mock_experiment_gen
             num_nodes_list=[1.0], cores_per_node=4, walltime=2.0, allocations=MOCK_ALLOCATIONS
         )
     mock_experiment_generator.assert_not_called()
+    assert not (manager.work_dir / STUDY_FILENAME).exists(), "nor is a number taken"
 
 
 @mock.patch("access.profiling.payu_manager.YAMLParser")
@@ -1660,6 +1664,13 @@ class TestCloneControl:
         mock_experiment_generator.return_value.run.assert_called_once_with()
 
     @mock.patch("access.profiling.payu_manager.ExperimentGenerator")
+    def test_a_working_directory_given_as_a_string(self, mock_experiment_generator):
+        control = GitControlSource("https://example.com/repo", "release-1.0", directory="ctrl-clone")
+
+        assert clone_control("/fake/work", control, "mock-payu-model") == Path("/fake/work/ctrl-clone")
+        assert mock_experiment_generator.call_args[0][0]["test_path"] == "/fake/work"
+
+    @mock.patch("access.profiling.payu_manager.ExperimentGenerator")
     def test_it_needs_the_control_to_state_a_start_point(self, mock_experiment_generator):
         from access.profiling.control import ExistingDirectoryControlSource
 
@@ -1701,6 +1712,15 @@ class TestLaboratory:
 
         assert relative.laboratory == absolute.laboratory
         assert absolute.laboratory.is_absolute()
+
+    def test_directories_given_as_strings(self, tmp_path):
+        """As a notebook types them, which name the same laboratory as the paths do."""
+        work_dir, lab_dir = tmp_path / "work", tmp_path / "lab"
+        paths = PayuManager(work_dir, tmp_path / "archive", MockPayuConfiguration(), lab_dir=lab_dir)
+        strings = PayuManager(str(work_dir), str(tmp_path / "archive"), MockPayuConfiguration(), lab_dir=str(lab_dir))
+
+        assert strings.lab_dir == lab_dir
+        assert strings.laboratory == paths.laboratory
 
     def test_another_working_directory_gives_another_laboratory(self, tmp_path):
         """Two studies sharing a lab_dir do not share a laboratory."""

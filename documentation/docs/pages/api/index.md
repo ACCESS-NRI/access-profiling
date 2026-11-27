@@ -5,7 +5,7 @@ organised: the general modules first, and then those implementing them for the A
 
 | Page | Modules | What they cover |
 |---|---|---|
-| [Managers](managers.md) | `manager` | Generating, running, archiving and analysing experiments, whatever the workflow engine |
+| [Managers](managers.md) | `manager`, `versions` | Generating, running, archiving and analysing experiments, whatever the workflow engine, and the versions a study runs with |
 | [Applications](applications.md) | `application` | What a study profiles, and the logs it writes |
 | [Control sources](control.md) | `control` | Where the control configuration comes from |
 | [Experiments](experiments.md) | `experiment` | Experiments, their statuses and their logs, and configuration choices |
@@ -41,7 +41,9 @@ The package also exports the other types a study or an application is written wi
 these are the base class of the managers, `ProfilingManager`, and the experiments and their statuses,
 `ProfilingExperiment` and `ProfilingExperimentStatus`. They also include the configurations a study asks
 experiments for, `ConfigurationChoice`, and the logs and how an application declares them, `ProfilingLog`, `LogSpec`
-and `log_at`. `ExperimentCoordinate`, a quantity of a layout that tables and plots are arranged by, is exported too.
+and `log_at`. `ExperimentCoordinate`, a quantity of a layout that tables and plots are arranged by, is exported too,
+with `component_cores`, the cores of one component, and `find_component`, which finds a component in a layout.
+`show_versions` prints the versions of the packages a study runs with.
 It also exports the application types, the control sources, `ProfilingMetric` and the parsers, and, for the ACCESS
 models, the configuration types, the component types and the CICE partitioning types.
 

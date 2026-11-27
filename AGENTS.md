@@ -57,14 +57,17 @@ src/access/profiling/
   control.py            ControlSource, GitControlSource, ExistingDirectoryControlSource: where a control is
   experiment.py         ProfilingLog (one log -> one xr.Dataset), ConfigurationChoice (one configuration a study
                         asks an experiment for), ExperimentPlan, ExperimentCoordinate (a quantity of a layout that
-                        tables and plots are arranged by), ProfilingExperimentStatus,
-                        ProfilingExperiment (its record, and its archive to and from a tarball)
+                        tables and plots are arranged by), find_component, component_cores,
+                        ProfilingExperimentStatus, ProfilingExperiment (its record, and its archive to and from a
+                        tarball)
   manager.py            ProfilingManager[AppT]: generation, records and the study file, statuses, parsing,
-                        selection, tables and plotting; find_component, component_cores
+                        selection, tables and plotting
   parser.py             ProfilingParser (the ABC), flatten_hierarchical, aggregate_pe_data
   metrics.py            ProfilingMetric and the predefined metrics (tmin, tmax, tavg, count, ...)
   plotting_utils.py     RegionGroup, plot_bar_metrics, plot_line_metrics
   scaling.py            parallel_speedup, parallel_efficiency, plot_scaling_metrics, plot_component_scaling
+  versions.py           show_versions: the versions of Python, the package and what it requires
+  py.typed              Says the package is typed (PEP 561); declared as package data in pyproject.toml
 
   ── the log parsers, one per format ──
   cice5_parser.py       CICE5ProfilingParser        (the CICE timers; OM3 reads CICE6 with it too)
@@ -353,6 +356,7 @@ blocks, one page per concept. A new module needs a block on the right page and a
   readers after the blocks `replace`), which the tests check.
 - **Logging** is `logging.getLogger(__name__)` in each module that logs, with no handlers and no `warnings.warn`: a
   warning to the user is a `logger.warning`. Tests assert on `caplog.text`, so rewording a message can fail one.
+  `show_versions` is the one function that prints, since showing the versions is all it does.
 
 ## Tests
 
@@ -397,8 +401,8 @@ same second leaves the mutant's `.pyc` loaded.
 - **`conftest.py` has one fixture**, `close_figures`, which closes the figures every test drew. The rest are
   helpers, imported with `from conftest import ...`: those that narrow an optional result with an assertion message
   rather than an `AttributeError` (`component_of`, `layout_of`, `decomposition_of`, `grid_of`, `legend_labels`), and
-  those more than one module needs (`fake_parser`, `select_layouts` for a Payu application, and `write_suite_conf`
-  for the variables of a Rose suite). The import works because `tests/` has no `__init__.py`: don't add one.
+  those more than one module needs (`fake_parser`, `select_layouts` for a Payu application, `write_suite_conf`
+  for the variables of a Rose suite, and `leaf_layout` and `layout_with` for a layout built by hand). The import works because `tests/` has no `__init__.py`: don't add one.
 - Newer files group tests in `class Test<Behaviour>:` blocks with no base class and no setup, the class docstring
   stating the behaviour. `pytest.raises` gets a `match=`. A test's docstring says what is checked and, where it is
   not obvious, why. Tests carry no type annotations.

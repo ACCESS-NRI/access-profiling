@@ -95,6 +95,14 @@ class ProfilingMetric:
     def __str__(self) -> str:
         return self._name
 
+    def __repr__(self) -> str:
+        """Returns the name and the units of the metric, which is how a message names it.
+
+        A dataset is keyed by the metric objects, so a message about one of its variables, such as xarray's for a key
+        it does not hold, shows them by this rather than by an address in memory.
+        """
+        return f"ProfilingMetric({self._name!r}, {str(self._units)!r})"
+
 
 # The metrics the parsers in this package report; the module docstring says what each one is a statistic of.
 count = ProfilingMetric("count", Unit("dimensionless"), "Number of calls to region")

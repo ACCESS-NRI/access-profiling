@@ -7,3 +7,8 @@ engines, and each subclass adds what is specific to one engine. The managers for
 models are documented under [Payu](payu.md) and [Cylc and Rose](cylc-rose.md).
 
 ::: access.profiling.manager
+
+A notebook usually starts by printing the versions of the packages it runs with, which
+[`show_versions`][access.profiling.versions.show_versions] does.
+
+::: access.profiling.versions
