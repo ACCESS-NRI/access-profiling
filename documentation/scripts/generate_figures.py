@@ -5,8 +5,8 @@
 
 The figures show what each of the package's plots looks like and how to read it, so the data behind them is
 made up: a coupled model whose ocean and sea ice run concurrently, timed by a simple model of strong scaling. The
-plots themselves are drawn by the package's own plotting functions, with the regions labelled the way the
-results label them, so regenerating the figures after a change to the plotting code shows what that change did.
+plots themselves are drawn by the plotting methods of the results, from results made of the synthetic data, so
+regenerating the figures after a change to the plotting code shows what that change did.
 
 Run it from the repository root, in an environment where access-profiling is installed:
 
@@ -24,11 +24,11 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 import xarray as xr  # noqa: E402
+from access.config.parallel_component import ComponentLayout  # noqa: E402
 
-from access.profiling import Region  # noqa: E402
+from access.profiling import ParsedExperiment, ProfilingResults, Region  # noqa: E402
 from access.profiling.metrics import tmax  # noqa: E402
-from access.profiling.plotting_utils import plot_bar_metrics, plot_line_metrics  # noqa: E402
-from access.profiling.scaling import plot_component_scaling, plot_scaling_metrics  # noqa: E402
+from access.profiling.models.om3 import OM3_MC_25KM  # noqa: E402
 
 FIGURES = Path(__file__).resolve().parents[1] / "docs" / "assets" / "figures"
 CORES_PER_NODE = 104
@@ -40,75 +40,82 @@ OCEAN_FRACTION = 0.88
 SEA_ICE_FRACTION = 0.10
 
 
-def strong_scaling(cores: np.ndarray, serial_seconds: float, parallel_seconds: float, comms: float) -> np.ndarray:
+def strong_scaling(cores: int, serial_seconds: float, parallel_seconds: float, comms: float) -> float:
     """Returns the time a component takes on the given cores: a serial part, a part divided among the cores,
     and a communication cost growing with the logarithm of their number."""
-    return serial_seconds + parallel_seconds / cores + comms * np.log2(cores)
+    return serial_seconds + parallel_seconds / cores + comms * float(np.log2(cores))
 
 
-def timings(total_cores: np.ndarray) -> dict[str, np.ndarray]:
-    """Returns the time spent in each region of the made-up model, keyed by the region's name in its log."""
-    ocean_cores = np.floor(OCEAN_FRACTION * total_cores)
-    sea_ice_cores = np.floor(SEA_ICE_FRACTION * total_cores)
+def experiment(
+    total_cores: int,
+    ocean_cores: int,
+    sea_ice_cores: int,
+    labels: dict | None = None,
+    sea_ice_seconds: float | None = None,
+) -> ParsedExperiment:
+    """Returns one made-up experiment as parsing gives it: its ESMF summary, its layout and its CPUs.
+
+    The time of each region comes from the made-up model, unless the time of the sea ice is given.
+    """
     ocean = strong_scaling(ocean_cores, serial_seconds=40.0, parallel_seconds=2.4e6, comms=6.0)
-    sea_ice = strong_scaling(sea_ice_cores, serial_seconds=150.0, parallel_seconds=1.6e5, comms=12.0)
-    # The two run concurrently, so the whole model waits for the slower of them, plus the coupling.
-    whole = np.maximum(ocean, sea_ice) + 25.0 + 2.0 * np.log2(total_cores)
-    # The ocean finishes its own work sooner as it gets more cores, and then waits longer for the sea ice.
-    ocean_wait = 5.0 + np.maximum(0.0, sea_ice - ocean) + 0.004 * ocean_cores
-    return {
-        "[ensemble] RunPhase1": whole,
+    if sea_ice_seconds is None:
+        sea_ice_seconds = strong_scaling(sea_ice_cores, serial_seconds=150.0, parallel_seconds=1.6e5, comms=12.0)
+    times = {
+        # The two run concurrently, so the whole model waits for the slower of them, plus the coupling.
+        "[ensemble] RunPhase1": max(ocean, sea_ice_seconds) + 25.0 + 2.0 * float(np.log2(total_cores)),
         "[OCN] RunPhase1": ocean,
-        "[ICE] RunPhase1": sea_ice,
-        "[OCN] wait for coupler": ocean_wait,
+        "[ICE] RunPhase1": sea_ice_seconds,
+        # The ocean finishes its own work sooner as it gets more cores, and then waits longer for the sea ice.
+        "[OCN] wait for coupler": 5.0 + max(0.0, sea_ice_seconds - ocean) + 0.004 * ocean_cores,
     }
+    summary = xr.Dataset(
+        {tmax: xr.DataArray(list(times.values()), dims=["region"]).pint.quantify("second")},
+        coords={"region": list(times)},
+    )
+    components = tuple(
+        ComponentLayout(name=name, n_cores=cores, n_ranks=cores, threads_per_rank=1, decomposition=None)
+        for name, cores in (("ocn", ocean_cores), ("ice", sea_ice_cores))
+    )
+    layout = ComponentLayout(
+        name=OM3_MC_25KM.name,
+        n_cores=total_cores,
+        n_ranks=ocean_cores + sea_ice_cores,
+        threads_per_rank=None,
+        decomposition=None,
+        sub_layouts=components,
+    )
+    return ParsedExperiment({"ESMF": summary}, labels or {}, layout, total_cores)
 
 
-def dataset(cores: np.ndarray, values: dict[str, np.ndarray], regions: list[str]) -> xr.Dataset:
-    """Returns the given regions as the results hand them to the plotting functions: one value per core count
-    and region, in seconds, keyed by the metric."""
-    data = np.stack([values[region] for region in regions], axis=1)
-    array = xr.DataArray(data, dims=["ncpus", "region"], coords={"ncpus": cores, "region": regions})
-    return xr.Dataset({tmax: array.pint.quantify("second")})
-
-
-def labelled(ds: xr.Dataset, regions: list[Region]) -> xr.Dataset:
-    """Returns the given regions under the labels the results would plot them under."""
-    ds = ds.sel(region=[region.name for region in regions])
-    return ds.assign_coords(region=[region.label for region in regions])
+def scaling_study() -> ProfilingResults:
+    """Returns the results of a scaling study of the made-up model, one experiment for each size."""
+    experiments = {}
+    for number, nodes in enumerate(NODES, start=1):
+        total = nodes * CORES_PER_NODE
+        experiments[f"exp-{number:04d}"] = experiment(total, int(OCEAN_FRACTION * total), int(SEA_ICE_FRACTION * total))
+    return ProfilingResults(OM3_MC_25KM, experiments)
 
 
 def scaling_figure() -> plt.Figure:
     """The figure ProfilingResults.plot_scaling_data draws: every region against the cores of the whole job."""
-    total_cores = np.array(NODES) * CORES_PER_NODE
-    values = timings(total_cores)
     regions = [
         Region("ESMF", "[ensemble] RunPhase1", label="Whole model"),
         Region("ESMF", "[OCN] RunPhase1", label="Ocean"),
         Region("ESMF", "[ICE] RunPhase1", label="Sea ice"),
     ]
-    stats = [labelled(dataset(total_cores, values, [region.name for region in regions]), regions)]
-    return plot_scaling_metrics(stats, tmax, xlabel="Cores occupied by the job", show=False)
+    speedup, _ = scaling_study().plot_scaling_data(regions, xlabel="Cores occupied by the job")
+    return speedup.figure
 
 
 def component_scaling_figure() -> plt.Figure:
     """The figure ProfilingResults.plot_component_scaling_data draws: every region against its own component's
     cores."""
-    total_cores = np.array(NODES) * CORES_PER_NODE
-    values = timings(total_cores)
-    ocean = [
+    regions = [
         Region("ESMF", "[OCN] RunPhase1", label="Ocean", component="ocn"),
         Region("ESMF", "[OCN] wait for coupler", label="Ocean waiting for the coupler", component="ocn"),
+        Region("ESMF", "[ICE] RunPhase1", label="Sea ice", component="ice"),
     ]
-    sea_ice = [Region("ESMF", "[ICE] RunPhase1", label="Sea ice", component="ice")]
-    # The regions of each component are read against the cores of that component.
-    stats = [
-        labelled(
-            dataset(np.floor(fraction * total_cores).astype(int), values, [region.name for region in regions]), regions
-        )
-        for fraction, regions in ((OCEAN_FRACTION, ocean), (SEA_ICE_FRACTION, sea_ice))
-    ]
-    return plot_component_scaling(stats, tmax, ylabel="Maximum time (s)", show=False)
+    return scaling_study().plot_component_scaling_data(regions, ylabel="Maximum time (s)").figure
 
 
 def bar_chart_figure() -> plt.Figure:
@@ -119,25 +126,31 @@ def bar_chart_figure() -> plt.Figure:
         Region("ESMF", "[ICE] RunPhase1", label="Sea ice"),
     ]
     # Three layouts of the same 832 cores, sharing them out differently between the ocean and the sea ice.
-    total_cores = 832
-    data = {}
-    for ocean_cores, sea_ice_cores in [(728, 78), (702, 104), (676, 130)]:
-        ocean = strong_scaling(np.array(ocean_cores), serial_seconds=40.0, parallel_seconds=2.4e6, comms=6.0)
-        sea_ice = strong_scaling(np.array(sea_ice_cores), serial_seconds=150.0, parallel_seconds=1.6e5, comms=12.0)
-        whole = np.maximum(ocean, sea_ice) + 25.0 + 2.0 * np.log2(total_cores)
-        data[f"ocn {ocean_cores}, ice {sea_ice_cores}"] = [float(whole), float(ocean), float(sea_ice)]
-    return plot_bar_metrics(data, [region.label for region in regions], tmax, show=False)
+    results = ProfilingResults(
+        OM3_MC_25KM,
+        {
+            f"ocn {ocean}, ice {sea_ice}": experiment(832, ocean, sea_ice)
+            for ocean, sea_ice in [(728, 78), (702, 104), (676, 130)]
+        },
+    )
+    return results.plot_bar_chart(regions).figure
 
 
 def line_plot_figure() -> plt.Figure:
     """The figure ProfilingResults.plot_metric draws: a region against a coordinate of the experiments."""
-    region = Region("ESMF", "[ICE] RunPhase1", label="CICE6")
     # Four block sizes on one layout. With few blocks on each rank the work is shared out unevenly, and with many
     # the ranks spend longer on the boundaries between the blocks.
-    blocks_per_rank = np.array([1, 4, 6, 12])
-    sea_ice = 70.0 + 30.0 / blocks_per_rank + 1.2 * blocks_per_rank
-    lines = [(region.label, blocks_per_rank.tolist(), sea_ice.tolist())]
-    return plot_line_metrics(lines, tmax, xlabel="Blocks per rank", show=False)
+    results = ProfilingResults(
+        OM3_MC_25KM,
+        {
+            f"exp-{number:04d}": experiment(
+                312, 288, 24, {"blocks per rank": blocks}, sea_ice_seconds=70.0 + 30.0 / blocks + 1.2 * blocks
+            )
+            for number, blocks in enumerate([1, 4, 6, 12], start=1)
+        },
+    )
+    region = Region("ESMF", "[ICE] RunPhase1", label="CICE6")
+    return results.plot_metric(region, "blocks per rank", xlabel="Blocks per rank").figure
 
 
 def main() -> None:

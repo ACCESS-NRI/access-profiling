@@ -388,7 +388,7 @@ from access.profiling import Region
 results = manager.parse_profiling_data()
 um = Region("cylc_tasks", "atmos_main_cycle19820101T0000Z", label="UM", component="UM")
 best = results.select_best_experiments(by=um)
-fig = best.plot_scaling_data(um, xlabel="Cores")
+speedup, efficiency = best.plot_scaling_data(um, xlabel="Cores")
 ```
 
 The region names its component, the UM. The logs of a suite do not say which component they belong to, so only the
@@ -398,7 +398,7 @@ several suites give the UM the same number of cores, the plot keeps the fastest 
 the cores of the UM:
 
 ```python
-fig = results.plot_component_scaling_data(um, xlabel="Cores of the UM")
+ax = results.plot_component_scaling_data(um, xlabel="Cores of the UM")
 ```
 
 The UM is the only component of ACCESS-AM3, so the two plots differ only where a job asked PBS for more cores than
@@ -417,7 +417,7 @@ cores of the UM, we pass [`component_cores("UM")`][access.profiling.experiment.c
 ```python
 from access.profiling import component_cores
 
-fig = results.plot_metric(um, component_cores("UM"), xlabel="Cores of the UM")
+ax = results.plot_metric(um, component_cores("UM"), xlabel="Cores of the UM")
 ```
 
 The labels of the suites work in the same way: pass the key of a label in place of `component_cores("UM")`.

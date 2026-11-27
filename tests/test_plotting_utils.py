@@ -3,6 +3,7 @@
 
 from unittest import mock
 
+import matplotlib.pyplot as plt
 import pytest
 from conftest import legend_labels
 from matplotlib.figure import Figure
@@ -96,7 +97,7 @@ def test_plot_bar_metrics_returns_figure():
     }
     region_labels = ["Region 1", "Region 2", "Region 3", "Region 4"]
 
-    fig = plot_bar_metrics(data, region_labels, tavg, show=False)
+    fig = plot_bar_metrics(data, region_labels, tavg).figure
 
     assert isinstance(fig, Figure)
     ax = fig.axes[0]
@@ -130,7 +131,7 @@ def test_plot_bar_metrics_single_experiment():
     data = {"exp_A": [10.0, 20.0, 30.0, 40.0, 50.0]}
     region_labels = ["R1", "R2", "R3", "R4", "R5"]
 
-    fig = plot_bar_metrics(data, region_labels, tavg, show=False)
+    fig = plot_bar_metrics(data, region_labels, tavg).figure
     ax = fig.axes[0]
 
     assert len(ax.patches) == 5
@@ -140,15 +141,22 @@ def test_plot_bar_metrics_single_experiment():
 
 @mock.patch("access.profiling.plotting_utils.plt.show")
 def test_plot_bar_metrics_show(mock_show):
-    """Test that plt.show() is called when show=True and not called when show=False."""
+    """Test that plt.show() is never called: a notebook shows the figure at the end of the cell."""
     data = {"exp_A": [10.0]}
     region_labels = ["R1"]
 
-    plot_bar_metrics(data, region_labels, tavg, show=True)
-    assert mock_show.call_count == 1
+    plot_bar_metrics(data, region_labels, tavg)
+    assert mock_show.call_count == 0
 
-    plot_bar_metrics(data, region_labels, tavg, show=False)
-    assert mock_show.call_count == 1  # No additional call
+
+def test_plot_bar_metrics_draws_on_the_axes_it_is_given():
+    """Which is how a chart shares a figure with another plot, whose layout it leaves alone."""
+
+    fig, (left, right) = plt.subplots(1, 2)
+
+    assert plot_bar_metrics({"exp_A": [10.0]}, ["R1"], tavg, ax=left) is left
+    assert len(left.patches) == 1 and len(right.patches) == 0
+    plt.close(fig)
 
 
 class TestPlotLineMetrics:
@@ -157,7 +165,7 @@ class TestPlotLineMetrics:
     LINES = (("Ocean", [24, 48, 96], [300.0, 180.0, 120.0]), ("Sea ice", [24, 48], [80.0, 60.0]))
 
     def test_each_line_is_drawn_through_its_points(self):
-        fig = plot_line_metrics(self.LINES, tavg, xlabel="Blocks per rank", show=False)
+        fig = plot_line_metrics(self.LINES, tavg, xlabel="Blocks per rank").figure
 
         assert isinstance(fig, Figure)
         lines = fig.axes[0].lines
@@ -166,7 +174,7 @@ class TestPlotLineMetrics:
         assert all(line.get_marker() == "o" for line in lines), "so that a line of one point can be seen"
 
     def test_the_legend_lists_the_lines_in_the_order_they_are_given(self):
-        fig = plot_line_metrics(self.LINES, tavg, xlabel="Blocks per rank", show=False)
+        fig = plot_line_metrics(self.LINES, tavg, xlabel="Blocks per rank").figure
 
         assert legend_labels(fig.axes[0]) == ["Ocean", "Sea ice"]
 
@@ -174,7 +182,7 @@ class TestPlotLineMetrics:
         """Which is why the lines come as a sequence, and not keyed by their labels."""
 
         lines = [("Total", [1, 2], [10.0, 6.0]), ("Total", [1, 2], [4.0, 3.0])]
-        fig = plot_line_metrics(lines, tavg, xlabel="Blocks per rank", show=False)
+        fig = plot_line_metrics(lines, tavg, xlabel="Blocks per rank").figure
 
         assert legend_labels(fig.axes[0]) == ["Total", "Total"]
         assert len(fig.axes[0].lines) == 2
@@ -182,27 +190,31 @@ class TestPlotLineMetrics:
     def test_the_axes_are_linear(self):
         """The quantity along the x axis need not be a number of cores, so nothing here is logarithmic."""
 
-        ax = plot_line_metrics(self.LINES, tavg, xlabel="Blocks per rank", show=False).axes[0]
+        ax = plot_line_metrics(self.LINES, tavg, xlabel="Blocks per rank").figure.axes[0]
 
         assert ax.get_xscale() == "linear" and ax.get_yscale() == "linear"
         assert ax.xaxis.get_gridlines()[0].get_visible()
 
     def test_the_axes_are_labelled_and_the_figure_has_no_title(self):
-        ax = plot_line_metrics(self.LINES, tavg, xlabel="Blocks per rank", show=False).axes[0]
+        ax = plot_line_metrics(self.LINES, tavg, xlabel="Blocks per rank").figure.axes[0]
 
         assert ax.get_xlabel() == "Blocks per rank"
         assert ax.get_ylabel() == f"{tavg.name} ({tavg.units})"
         assert ax.get_title() == ""
 
     def test_a_label_for_the_y_axis_replaces_the_metric(self):
-        fig = plot_line_metrics(self.LINES, tavg, xlabel="Blocks per rank", ylabel="Walltime (s)", show=False)
+        fig = plot_line_metrics(self.LINES, tavg, xlabel="Blocks per rank", ylabel="Walltime (s)").figure
 
         assert fig.axes[0].get_ylabel() == "Walltime (s)"
 
     @mock.patch("access.profiling.plotting_utils.plt.show")
-    def test_it_is_shown_only_when_asked(self, mock_show):
-        plot_line_metrics(self.LINES, tavg, xlabel="Blocks per rank", show=False)
+    def test_it_is_not_shown(self, mock_show):
+        plot_line_metrics(self.LINES, tavg, xlabel="Blocks per rank")
         assert mock_show.call_count == 0
 
-        plot_line_metrics(self.LINES, tavg, xlabel="Blocks per rank")
-        assert mock_show.call_count == 1
+    def test_it_draws_on_the_axes_it_is_given(self):
+        fig, ax = plt.subplots()
+
+        assert plot_line_metrics(self.LINES, tavg, xlabel="Blocks per rank", ax=ax) is ax
+        assert len(ax.lines) == 2
+        plt.close(fig)

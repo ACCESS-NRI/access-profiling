@@ -8,6 +8,9 @@ with what tells each experiment from the others, its labels, its layout and the 
 when the experiment is parsed, while its directory is open, so that nothing is extracted from an archive again, and
 the results need no manager to be read.
 
+The plots return the axes they drew on, and show nothing themselves: a notebook shows the figure at the end of the
+cell, and the axes are what a notebook customises, as `ax.set(yscale="log")` does. A plot given axes draws on them.
+
 Nothing changes a `ProfilingResults` once it is made. A selection or a reduction returns new results, and leaves the
 ones it was called on as they were. A notebook can therefore keep the runs of a study, their best run and their mean
 side by side, and a cell gives the same answer whichever cells ran before it.
@@ -30,7 +33,7 @@ from typing import Any
 import pandas as pd
 import xarray as xr
 from access.config.parallel_component import ComponentLayout
-from matplotlib.figure import Figure
+from matplotlib.axes import Axes
 
 from access.profiling.application import Application
 from access.profiling.experiment import ExperimentCoordinate, component_cores
@@ -696,54 +699,74 @@ class ProfilingResults:
         self,
         regions: "Region | Sequence[Region]",
         *,
+        series: ExperimentCoordinate | str | None = None,
         metric: ProfilingMetric = tmax,
         xlabel: str | None = None,
-        show: bool = True,
-    ) -> Figure:
+    ) -> tuple[Axes, Axes]:
         """Plots speedup and efficiency of the given regions against the cores the whole job occupied.
 
         This is what a scaling study costs: every region is read against what the scheduler charged for,
         whatever share of it the region's own component was given. Each region's `component` is therefore
         ignored here; plot_component_scaling_data is the one that reads it.
 
+        With `series`, the experiments are first divided by the value of a coordinate, such as a setting the study
+        varied, and each region has one curve for each value, labelled with its region and the value. The speedup
+        and the efficiency of a curve are relative to the smallest number of CPUs of its own experiments.
+
+        The figure holds the speedup, the efficiency, and a table of the metric beneath them, and is shown by
+        nothing here: a notebook shows it at the end of the cell.
+
         Args:
             regions (Region | Sequence[Region]): Regions to plot. Each region becomes one line, under its label.
+            series (ExperimentCoordinate | str | None): What the experiments are divided into curves by: the key of
+                a label, or a quantity of the layout. None (the default) draws one curve for each region.
             metric (ProfilingMetric): Metric to use for the scaling plots. Defaults to tmax.
             xlabel (str | None): Optional custom label for the x-axis of both subplots. If None, the
                 default label derived from the x-coordinate is kept.
-            show (bool): Whether to show the generated plot. Default: True.
 
         Returns:
-            Figure: The Matplotlib figure containing the scaling plots.
+            tuple[Axes, Axes]: The axes of the speedup and of the efficiency.
 
         Raises:
             ValueError: If these results hold no experiments, if one has no data for the log, the region or the
                 metric of a region, if two regions have the same label, if the profiling data still has a 'run'
-                dimension, or if several of the experiments use the same number of CPUs.
+                dimension, if two values of `series` are shown alike, or if several of the experiments of one
+                series use the same number of CPUs.
         """
         listed = _region_list(regions)
         exp_names = self._names()
 
         # Find number of cpus used for each experiment
         ncpus = {exp_name: self._ncpus(exp_name) for exp_name in exp_names}
+        by_series = self._series(exp_names, series)
 
-        # Speedup and efficiency are ill-defined if several experiments share the same number of cpus. The counts
-        # are the occupied ones, so two layouts filling the same nodes collide here even if their component core
-        # counts differ; select_best_experiments() groups them the same way and is the way to resolve this.
-        cpu_counts = list(ncpus.values())
-        duplicated_ncpus = sorted({n for n in cpu_counts if cpu_counts.count(n) > 1})
-        if duplicated_ncpus:
-            raise ValueError(
-                f"Several experiments use the same number of CPUs {duplicated_ncpus}, which makes speedup and "
-                "efficiency ill-defined. Use select_best_experiments() to keep only the best performing experiment "
-                "for each number of CPUs, or select_experiments() to keep some of them."
-            )
+        # Speedup and efficiency are ill-defined if several experiments of one curve share the same number of cpus.
+        # The counts are the occupied ones, so two layouts filling the same nodes collide here even if their
+        # component core counts differ; select_best_experiments() groups them the same way and is the way to
+        # resolve this.
+        for key, names in by_series.items():
+            cpu_counts = [ncpus[exp_name] for exp_name in names]
+            duplicated_ncpus = sorted({n for n in cpu_counts if cpu_counts.count(n) > 1})
+            if duplicated_ncpus:
+                within = "" if series is None else f" with '{_coordinate_name(series)}' {key}"
+                per = "" if series is None else f", with per=['ncpus', {_coordinate_name(series)!r}]"
+                raise ValueError(
+                    f"Several experiments{within} use the same number of CPUs {duplicated_ncpus}, which makes speedup "
+                    "and efficiency ill-defined. Use select_best_experiments() to keep only the best performing "
+                    f"experiment for each number of CPUs{per}, or select_experiments() to keep some of them."
+                )
 
         selected = self._region_data(listed, exp_names, metric)
-        data = [ds.expand_dims({"ncpus": [ncpus[exp_name]]}) for exp_name, ds in selected.items()]
-        return plot_scaling_metrics(
-            [xr.concat(data, dim="ncpus", join="outer").sortby("ncpus")], metric, xlabel=xlabel, show=show
-        )
+        stats = []
+        for key, names in by_series.items():
+            data = [selected[exp_name].expand_dims({"ncpus": [ncpus[exp_name]]}) for exp_name in names]
+            stat = xr.concat(data, dim="ncpus", join="outer").sortby("ncpus")
+            if series is not None:
+                stat = stat.assign_coords(
+                    region=[f"{label}, {_coordinate_name(series)} {key}" for label in stat.region.values]
+                )
+            stats.append(stat)
+        return plot_scaling_metrics(stats, metric, xlabel=xlabel)
 
     def _coordinate_value(self, exp_name: str, coordinate: ExperimentCoordinate | str) -> Hashable:
         """Returns the value one coordinate has for one experiment.
@@ -974,8 +997,8 @@ class ProfilingResults:
         metric: ProfilingMetric = tmax,
         xlabel: str | None = None,
         ylabel: str | None = None,
-        show: bool = True,
-    ) -> Figure:
+        ax: Axes | None = None,
+    ) -> Axes:
         """Plots a metric for the given regions against the cores their own component was given.
 
         Where plot_scaling_data reads every component against the whole job, this reads each against its
@@ -1008,10 +1031,11 @@ class ProfilingResults:
             metric (ProfilingMetric): The metric to plot. Defaults to tmax.
             xlabel (str | None): Optional label for the x-axis.
             ylabel (str | None): Optional label for the y-axis. If None, the metric names it.
-            show (bool): Whether to show the generated plot. Default: True.
+            ax (Axes | None): The axes to draw on. None (the default) draws on a figure of its own, which nothing
+                here shows: a notebook shows it at the end of the cell.
 
         Returns:
-            Figure: The Matplotlib figure the lines are plotted on.
+            Axes: The axes the lines are drawn on.
 
         Raises:
             ValueError: If these results hold no experiments, if one has no data for the log, the region or the
@@ -1042,7 +1066,7 @@ class ProfilingResults:
             ]
             scaling_data.append(xr.concat(data, dim="ncpus", join="outer").groupby("ncpus").min())
 
-        return plot_component_scaling(scaling_data, metric, xlabel=xlabel, ylabel=ylabel, show=show)
+        return plot_component_scaling(scaling_data, metric, xlabel=xlabel, ylabel=ylabel, ax=ax)
 
     def plot_bar_chart(
         self,
@@ -1051,8 +1075,8 @@ class ProfilingResults:
         metric: ProfilingMetric = tmax,
         label: ExperimentCoordinate | str | None = None,
         experiment_relabel_map: dict | None = None,
-        show: bool = True,
-    ) -> Figure:
+        ax: Axes | None = None,
+    ) -> Axes:
         """Plots a bar chart of a profiling metric over regions, grouped by experiment.
 
         Regions are placed along the x-axis, in the order they are given, with one bar per experiment within each.
@@ -1073,10 +1097,11 @@ class ProfilingResults:
             experiment_relabel_map (dict | None): Optional mapping to relabel experiments in the plot.
                 Experiments are named by the manager rather than enumerated by the caller, so unlike the
                 regions they have no label of their own.
-            show (bool): Whether to show the generated plot. Default: True.
+            ax (Axes | None): The axes to draw on. None (the default) draws on a figure of its own, sized to the
+                bars, which nothing here shows: a notebook shows it at the end of the cell.
 
         Returns:
-            Figure: The Matplotlib figure containing the bar chart.
+            Axes: The axes the bar chart is drawn on.
 
         Raises:
             ValueError: If both experiment_relabel_map and label are given, if these results hold no experiments, if
@@ -1113,7 +1138,41 @@ class ProfilingResults:
         exp_relabel = experiment_relabel_map or {}
         relabelled_bar_data = {exp_relabel.get(k, k): v for k, v in bar_data.items()}
 
-        return plot_bar_metrics(relabelled_bar_data, [region.label for region in listed], metric, show=show)
+        return plot_bar_metrics(relabelled_bar_data, [region.label for region in listed], metric, ax=ax)
+
+    def _series(self, exp_names: list[str], series: ExperimentCoordinate | str | None) -> dict[str | None, list[str]]:
+        """Returns the experiments of each series, the lines a plot divides the experiments into.
+
+        A line is told apart from the others by its label, so the series are keyed by the text their values are
+        shown as. The values 1, 1.0 and True are equal in Python, but are shown as three lines. Two values shown
+        alike, such as 1 and "1", are refused, since their lines could not be told apart.
+
+        Args:
+            exp_names (list[str]): Experiments to divide.
+            series (ExperimentCoordinate | str | None): What the experiments are divided by, if anything.
+
+        Returns:
+            dict[str | None, list[str]]: The experiments of each series, keyed by the value of the series as it is
+                shown, in the order the experiments give the values. Without a series, the one key is None.
+
+        Raises:
+            ValueError: If the series cannot be read for an experiment, or if two of its values are shown alike.
+        """
+        if series is None:
+            return {None: list(exp_names)}
+        groups: dict[str | None, list[str]] = {}
+        shown: dict[str, Hashable] = {}
+        for exp_name in exp_names:
+            value = self._coordinate_value(exp_name, series)
+            key = str(value)
+            first = shown.setdefault(key, value)
+            if (type(first), first) != (type(value), value):
+                raise ValueError(
+                    f"The values {first!r} and {value!r} of '{_coordinate_name(series)}' are both shown as '{key}', so "
+                    "their lines could not be told apart. Give every experiment a value of the same type."
+                )
+            groups.setdefault(key, []).append(exp_name)
+        return groups
 
     def _points(
         self, exp_names: list[str], x: ExperimentCoordinate | str, series: ExperimentCoordinate | str | None
@@ -1121,11 +1180,7 @@ class ProfilingResults:
         """Returns which experiments are at each point of a plot of a metric against a coordinate.
 
         Says, at INFO, which experiments share a point: the fastest of them is what gets plotted, and a reader
-        of the figure should be told that the point is the best of several.
-
-        A line is told apart from the others by its label, so the series are keyed by the text their values are
-        shown as. The values 1, 1.0 and True are equal in Python, but are shown as three lines. Two values shown
-        alike, such as 1 and "1", are refused, since their lines could not be told apart.
+        of the figure should be told that the point is the best of several. The series are divided by `_series`.
 
         Args:
             exp_names (list[str]): Experiments to place.
@@ -1143,28 +1198,18 @@ class ProfilingResults:
                 boolean, or if two values of the series are shown alike.
         """
         points: dict[str | None, dict[Real, list[str]]] = {}
-        shown: dict[str, Hashable] = {}
-        for exp_name in exp_names:
-            x_value = self._coordinate_value(exp_name, x)
-            # A boolean is a number to Python, but true and false have no place along an axis.
-            if isinstance(x_value, bool) or not isinstance(x_value, Real):
-                raise ValueError(
-                    f"Experiment '{exp_name}' has the value {x_value!r} for '{_coordinate_name(x)}', which is not "
-                    "a number, so it has no place along an x-axis. Use the coordinate as the series instead, or "
-                    "compare the experiments with plot_bar_chart."
-                )
-            key = None
-            if series is not None:
-                series_value = self._coordinate_value(exp_name, series)
-                key = str(series_value)
-                first = shown.setdefault(key, series_value)
-                if (type(first), first) != (type(series_value), series_value):
+        for key, names in self._series(exp_names, series).items():
+            along_x = points.setdefault(key, {})
+            for exp_name in names:
+                x_value = self._coordinate_value(exp_name, x)
+                # A boolean is a number to Python, but true and false have no place along an axis.
+                if isinstance(x_value, bool) or not isinstance(x_value, Real):
                     raise ValueError(
-                        f"The values {first!r} and {series_value!r} of '{_coordinate_name(series)}' are both shown as "
-                        f"'{key}', so their lines could not be told apart. Give every experiment a value of the same "
-                        "type."
+                        f"Experiment '{exp_name}' has the value {x_value!r} for '{_coordinate_name(x)}', which is "
+                        "not a number, so it has no place along an x-axis. Use the coordinate as the series instead, "
+                        "or compare the experiments with plot_bar_chart."
                     )
-            points.setdefault(key, {}).setdefault(x_value, []).append(exp_name)
+                along_x.setdefault(x_value, []).append(exp_name)
 
         for key, along_x in points.items():
             for x_value, names in sorted(along_x.items()):
@@ -1186,8 +1231,8 @@ class ProfilingResults:
         metric: ProfilingMetric = tmax,
         xlabel: str | None = None,
         ylabel: str | None = None,
-        show: bool = True,
-    ) -> Figure:
+        ax: Axes | None = None,
+    ) -> Axes:
         """Plots a metric for the given regions against a coordinate of the experiments.
 
         Where plot_component_scaling_data puts the cores of a component along the x-axis, this puts whatever
@@ -1216,10 +1261,11 @@ class ProfilingResults:
             metric (ProfilingMetric): The metric to plot. Defaults to tmax.
             xlabel (str | None): Optional label for the x-axis. If None, the name of `x` is used.
             ylabel (str | None): Optional label for the y-axis. If None, the metric names it.
-            show (bool): Whether to show the generated plot. Default: True.
+            ax (Axes | None): The axes to draw on. None (the default) draws on a figure of its own, which nothing
+                here shows: a notebook shows it at the end of the cell.
 
         Returns:
-            Figure: The Matplotlib figure the lines are plotted on.
+            Axes: The axes the lines are drawn on.
 
         Raises:
             ValueError: If these results hold no experiments, if one has no data for the log, the region or the
@@ -1257,5 +1303,5 @@ class ProfilingResults:
                 lines.append((line_label, x_values, fastest))
 
         return plot_line_metrics(
-            lines, metric, xlabel=xlabel if xlabel is not None else _coordinate_name(x), ylabel=ylabel, show=show
+            lines, metric, xlabel=xlabel if xlabel is not None else _coordinate_name(x), ylabel=ylabel, ax=ax
         )

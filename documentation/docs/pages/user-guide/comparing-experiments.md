@@ -82,7 +82,7 @@ region, with one bar for each experiment. Read the logs and draw it:
 ```python
 results = manager.parse_profiling_data()
 two = results.select_experiments("experiment", "release", "modified")
-fig = two.plot_bar_chart(regions, experiment_relabel_map={"modified": "Modified build"})
+ax = two.plot_bar_chart(regions, experiment_relabel_map={"modified": "Modified build"})
 ```
 
 The regions appear along the x axis in the order you give them, and the experiments in the order of the results. By

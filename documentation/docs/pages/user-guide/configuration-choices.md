@@ -325,7 +325,7 @@ hold only the experiments with one of the values we give. Then we use the labels
 ```python
 distributed = results.select_experiments("distribution", "cartesian", "roundrobin", "sectrobin")
 
-fig = distributed.plot_bar_chart([whole, cice6], label="distribution")
+ax = distributed.plot_bar_chart([whole, cice6], label="distribution")
 ```
 
 This draws one group of bars for the whole model and one for CICE6, with a bar for each distribution. With
@@ -424,7 +424,7 @@ to.
 the time of CICE6 against the number of blocks of each rank:
 
 ```python
-fig = sized.plot_metric(cice6, "blocks per rank", xlabel="Blocks per rank")
+ax = sized.plot_metric(cice6, "blocks per rank", xlabel="Blocks per rank")
 ```
 
 <figure markdown="span">
@@ -450,7 +450,7 @@ For example, a study may run these block sizes on several layouts. This call the
 of cores of the sea ice:
 
 ```python
-fig = sized.plot_metric(cice6, "blocks per rank", series=component_cores("ice"))
+ax = sized.plot_metric(cice6, "blocks per rank", series=component_cores("ice"))
 ```
 
 Each line is labelled with its region and its value of the series, such as `CICE6, ice cores 24`. The series can

@@ -5,12 +5,17 @@
 
 The bar chart and the line plot that the plotting methods of the results draw, and the helper that sizes the columns
 of the table beside a scaling plot. The regions a plot shows are named with `access.profiling.results.Region`.
+
+Every plot returns the axes it drew on and shows nothing itself. The figure is made with pyplot, so a notebook shows
+it once, at the end of the cell, and the axes are what a caller customises, as `ax.set(xscale="log")` does. A plot
+given axes draws on them instead, which is how two plots share a figure. A script shows the figure with
+`matplotlib.pyplot.show()`, or saves `ax.figure`.
 """
 
 from collections.abc import Sequence
 
 import matplotlib.pyplot as plt
-from matplotlib.figure import Figure
+from matplotlib.axes import Axes
 
 from access.profiling.metrics import ProfilingMetric
 
@@ -85,8 +90,8 @@ def plot_bar_metrics(
     data: dict[str, list[float]],
     region_labels: list[str],
     metric: ProfilingMetric,
-    show: bool = True,
-) -> Figure:
+    ax: Axes | None = None,
+) -> Axes:
     """Plots a grouped bar chart of a profiling metric over regions.
 
     Regions are placed along the x-axis. Within each region group, there is one bar per
@@ -97,16 +102,18 @@ def plot_bar_metrics(
             one per region (in the same order as `region_labels`).
         region_labels (list[str]): Ordered list of region display labels for the x-axis.
         metric (ProfilingMetric): The metric being plotted (used for axis labels and title).
-        show (bool): Whether to call `plt.show()`. Default: True.
+        ax (Axes | None): The axes to draw on. None (the default) draws on a figure of its own, sized to the bars.
 
     Returns:
-        Figure: The Matplotlib figure containing the bar chart.
+        Axes: The axes the bar chart is drawn on.
     """
     exp_names = list(data.keys())
     n_experiments = len(exp_names)
     n_regions = len(region_labels)
 
-    fig, ax = plt.subplots(figsize=(max(8, n_experiments * n_regions * 0.8), 6))
+    own_figure = ax is None
+    if ax is None:
+        _, ax = plt.subplots(figsize=(max(8, n_experiments * n_regions * 0.8), 6))
     bar_width = 0.8 / n_experiments
     group_positions = list(range(n_regions))
 
@@ -121,12 +128,11 @@ def plot_bar_metrics(
     ax.set_title(f"{metric.description}")
     ax.legend(title="Experiment")
     ax.grid(axis="y", linestyle="--", alpha=0.7)
-    fig.tight_layout()
+    # The layout of a figure the caller made is the caller's.
+    if own_figure:
+        ax.figure.tight_layout()
 
-    if show:
-        plt.show()
-
-    return fig
+    return ax
 
 
 def plot_line_metrics(
@@ -134,8 +140,8 @@ def plot_line_metrics(
     metric: ProfilingMetric,
     xlabel: str,
     ylabel: str | None = None,
-    show: bool = True,
-) -> Figure:
+    ax: Axes | None = None,
+) -> Axes:
     """Plots a profiling metric against a quantity of the experiments, one line at a time.
 
     Both axes are linear and no ideal line is drawn, because the quantity along the x-axis need not be a number of
@@ -152,12 +158,14 @@ def plot_line_metrics(
         metric (ProfilingMetric): The metric being plotted, which labels the y-axis unless ylabel is given.
         xlabel (str): Label for the x-axis: what the quantity along it is.
         ylabel (str | None): Optional label for the y-axis. If None, the metric names it.
-        show (bool): Whether to call `plt.show()`. Default: True.
+        ax (Axes | None): The axes to draw on. None (the default) draws on a figure of its own.
 
     Returns:
-        Figure: The Matplotlib figure the lines are plotted on.
+        Axes: The axes the lines are drawn on.
     """
-    fig, ax = plt.subplots(figsize=(10, 6))
+    own_figure = ax is None
+    if ax is None:
+        _, ax = plt.subplots(figsize=(10, 6))
 
     for label, x_values, values in lines:
         ax.plot(x_values, values, marker="o", label=label)
@@ -166,9 +174,7 @@ def plot_line_metrics(
     ax.set_ylabel(ylabel if ylabel is not None else f"{metric.name} ({metric.units})")
     ax.legend()
     ax.grid(linestyle="--", alpha=0.7)
-    fig.tight_layout()
+    if own_figure:
+        ax.figure.tight_layout()
 
-    if show:
-        plt.show()
-
-    return fig
+    return ax

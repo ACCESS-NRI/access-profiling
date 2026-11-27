@@ -9,7 +9,7 @@ from unittest import mock
 
 import pytest
 import xarray as xr
-from conftest import MockApplication, layout_with
+from conftest import MockApplication, layout_with, legend_labels
 
 from access.profiling.experiment import ExperimentCoordinate, component_cores
 from access.profiling.metrics import count, tavg
@@ -191,8 +191,8 @@ def test_bar_chart_data(mock_plot, scaling_data):
     # Verify metric
     assert mock_plot.call_args.args[2] == tavg
 
-    # Verify show kwarg is passed through
-    assert mock_plot.call_args.kwargs["show"] is True
+    # Verify the chart gets a figure of its own unless it is given axes
+    assert mock_plot.call_args.kwargs["ax"] is None
 
     # Test experiment relabelling
     mock_plot.reset_mock()
@@ -211,10 +211,9 @@ def test_bar_chart_all_experiments(mock_plot, scaling_data):
     paths, ncpus, datasets = scaling_data
     study = ParsedStudy(paths, ncpus, datasets)
 
-    study.plot_bar_chart([Region("component", "Region 1")], metric=tavg, show=False)
+    study.plot_bar_chart([Region("component", "Region 1")], metric=tavg)
     bar_data = mock_plot.call_args.args[0]
     assert set(bar_data.keys()) == {"1cpu", "4cpu", "2cpu"}
-    assert mock_plot.call_args.kwargs["show"] is False
 
 
 @pytest.fixture()
@@ -483,7 +482,7 @@ class TestRunsAreRefusedUntilReduced:
     @mock.patch("access.profiling.results.plot_bar_metrics")
     def test_once_reduced_the_plots_work_unchanged(self, mock_plot, run_data):
         best = run_data.select_best_run(Region("component", "Region 1"), metric=tavg)
-        best.plot_bar_chart([Region("component", "Region 1")], metric=tavg, show=False)
+        best.plot_bar_chart([Region("component", "Region 1")], metric=tavg)
 
         assert mock_plot.call_args.args[0] == {"exp1": pytest.approx([200.0])}
 
@@ -508,7 +507,7 @@ def test_bar_chart_of_a_metric_with_more_than_one_value_for_each_region(block_st
     add_per_pe_log(block_study)
 
     with pytest.raises(ValueError, match="has the dimensions \\['pe'\\] .* more values than a chart has bars"):
-        block_study.plot_bar_chart([Region("per_pe", "Region 1")], metric=tavg, show=False)
+        block_study.plot_bar_chart([Region("per_pe", "Region 1")], metric=tavg)
 
 
 @pytest.fixture()
@@ -712,7 +711,7 @@ class TestPlotComponentScalingData:
         study.experiments["large"].layout = layout_with(component=60, other=240)
 
         with caplog.at_level(logging.INFO):
-            study.plot_component_scaling_data([Region("component", "Region 1")], metric=tavg, show=False)
+            study.plot_component_scaling_data([Region("component", "Region 1")], metric=tavg)
 
         assert "['large', 'small']" in caplog.text
         assert "60 cores" in caplog.text
@@ -1207,7 +1206,7 @@ class TestBarChartNamedByACoordinate:
     @mock.patch("access.profiling.results.plot_bar_metrics")
     def test_each_experiment_is_named_by_its_value(self, mock_plot, block_study):
         block_study.select_experiments(component_cores("component"), 120).plot_bar_chart(
-            BLOCK_STUDY_GROUP, metric=tavg, label="blocks", show=False
+            BLOCK_STUDY_GROUP, metric=tavg, label="blocks"
         )
 
         assert mock_plot.call_args.args[0] == {"blocks 4": [50.0, 9.0], "blocks 8": [40.0, 11.0]}
@@ -1220,12 +1219,12 @@ class TestBarChartNamedByACoordinate:
             match="the experiments \\['exp-0001', 'exp-0003'\\] would all be 'component cores 120'; "
             "\\['exp-0002', 'exp-0004'\\] would all be 'component cores 60'",
         ):
-            block_study.plot_bar_chart(BLOCK_STUDY_GROUP, metric=tavg, label=component_cores("component"), show=False)
+            block_study.plot_bar_chart(BLOCK_STUDY_GROUP, metric=tavg, label=component_cores("component"))
 
     def test_a_relabel_map_as_well(self, block_study):
         with pytest.raises(ValueError, match="Give experiment_relabel_map or label, not both"):
             block_study.plot_bar_chart(
-                BLOCK_STUDY_GROUP, metric=tavg, experiment_relabel_map={"exp-0001": "one"}, label="blocks", show=False
+                BLOCK_STUDY_GROUP, metric=tavg, experiment_relabel_map={"exp-0001": "one"}, label="blocks"
             )
 
 
@@ -1325,7 +1324,7 @@ class TestPlotMetric:
         """A point that is the best of several is not the only measurement there was, and says so."""
 
         with caplog.at_level(logging.INFO):
-            block_study.plot_metric(BLOCK_STUDY_GROUP, component_cores("component"), metric=tavg, show=False)
+            block_study.plot_metric(BLOCK_STUDY_GROUP, component_cores("component"), metric=tavg)
 
         assert "Experiments ['exp-0002', 'exp-0004'] all have 'component cores' 60. Plotting the fastest" in caplog.text
         assert "Experiments ['exp-0001', 'exp-0003'] all have 'component cores' 120. Plotting" in caplog.text
@@ -1334,9 +1333,7 @@ class TestPlotMetric:
         block_study.experiments["exp-0003"].labels = {"blocks": 4}
 
         with caplog.at_level(logging.INFO):
-            block_study.plot_metric(
-                BLOCK_STUDY_GROUP, component_cores("component"), metric=tavg, series="blocks", show=False
-            )
+            block_study.plot_metric(BLOCK_STUDY_GROUP, component_cores("component"), metric=tavg, series="blocks")
 
         assert "Experiments ['exp-0001', 'exp-0003'] all have 'component cores' 120 and 'blocks' 4." in caplog.text
         assert caplog.text.count("Plotting the fastest of them") == 1, "no other point is shared"
@@ -1378,9 +1375,7 @@ class TestPlotMetric:
 
     def test_nothing_is_reported_where_no_point_is_shared(self, block_study, caplog):
         with caplog.at_level(logging.INFO):
-            block_study.plot_metric(
-                BLOCK_STUDY_GROUP, component_cores("component"), metric=tavg, series="blocks", show=False
-            )
+            block_study.plot_metric(BLOCK_STUDY_GROUP, component_cores("component"), metric=tavg, series="blocks")
 
         assert "Plotting the fastest of them" not in caplog.text
 
@@ -1394,28 +1389,24 @@ class TestPlotMetric:
         assert mock_plot.call_args.kwargs["xlabel"] == "blocks"
 
     @mock.patch("access.profiling.results.plot_line_metrics")
-    def test_the_axis_labels_the_metric_and_show_are_passed_on(self, mock_plot, block_study):
+    def test_the_axis_labels_the_metric_and_the_axes_are_passed_on(self, mock_plot, block_study):
+        ax = mock.sentinel.ax
         block_study.plot_metric(
-            BLOCK_STUDY_GROUP, "blocks", metric=tavg, xlabel="Blocks per rank", ylabel="Walltime (s)", show=False
+            BLOCK_STUDY_GROUP, "blocks", metric=tavg, xlabel="Blocks per rank", ylabel="Walltime (s)", ax=ax
         )
 
         assert mock_plot.call_args.args[1] is tavg
-        assert mock_plot.call_args.kwargs == {"xlabel": "Blocks per rank", "ylabel": "Walltime (s)", "show": False}
+        assert mock_plot.call_args.kwargs == {"xlabel": "Blocks per rank", "ylabel": "Walltime (s)", "ax": ax}
 
-    @mock.patch("access.profiling.results.plot_line_metrics")
-    def test_it_is_shown_by_default(self, mock_plot, block_study):
-        block_study.plot_metric(BLOCK_STUDY_GROUP, "blocks", metric=tavg)
+    @mock.patch("matplotlib.pyplot.show", autospec=True)
+    def test_it_returns_the_axes_it_drew_on_and_shows_nothing(self, mock_show, block_study):
+        """A notebook shows the figure at the end of the cell, and customises it through the axes."""
 
-        assert mock_plot.call_args.kwargs["show"] is True
+        ax = block_study.plot_metric(BLOCK_STUDY_GROUP, component_cores("component"), metric=tavg, series="blocks")
 
-    def test_it_returns_the_figure_it_drew(self, block_study):
-        fig = block_study.plot_metric(
-            BLOCK_STUDY_GROUP, component_cores("component"), metric=tavg, series="blocks", show=False
-        )
-
-        (ax,) = fig.axes
         assert len(ax.lines) == 4
         assert ax.get_xlabel() == "component cores"
+        mock_show.assert_not_called()
 
     @mock.patch("access.profiling.results.plot_line_metrics")
     def test_the_component_of_a_group_is_ignored(self, mock_plot, block_study):
@@ -1806,3 +1797,63 @@ class TestSplitRuns:
         run_data.split_runs()
 
         assert list(run_data.experiments) == ["exp1"]
+
+
+class TestScalingSeries:
+    """One curve for each region and each value of a coordinate, as for a setting the study varied."""
+
+    @staticmethod
+    def study_of_two_settings():
+        """Two block sizes, each run on 60 and on 120 cores of a component, the job occupying twice as many."""
+        paths = [Path(f"exp-000{number}") for number in (1, 2, 3, 4)]
+        times = [[100.0, 1.0], [60.0, 1.0], [90.0, 1.0], [50.0, 1.0]]
+        study = ParsedStudy(paths, ncpus=[120, 240, 120, 240], datasets=[make_component_dataset(t) for t in times])
+        for path, blocks in zip(paths, [4, 4, 8, 8], strict=True):
+            study.experiments[path.name].labels = {"blocks": blocks}
+        return study
+
+    @mock.patch("access.profiling.results.plot_scaling_metrics")
+    def test_a_curve_for_each_value(self, mock_plot):
+        self.study_of_two_settings().plot_scaling_data(Region("component", "Region 1"), series="blocks", metric=tavg)
+
+        stats = mock_plot.call_args.args[0]
+        assert [list(stat["region"].values) for stat in stats] == [["Region 1, blocks 4"], ["Region 1, blocks 8"]]
+        assert [stat["ncpus"].values.tolist() for stat in stats] == [[120, 240], [120, 240]]
+        assert [stat[tavg].pint.dequantify().values.ravel().tolist() for stat in stats] == [[100.0, 60.0], [90.0, 50.0]]
+
+    def test_two_experiments_of_one_series_on_the_same_cpus(self):
+        study = self.study_of_two_settings()
+        study.experiments["exp-0003"].labels = {"blocks": 4}
+
+        with pytest.raises(
+            ValueError,
+            match="Several experiments with 'blocks' 4 use the same number of CPUs \\[120\\]"
+            ".*per=\\['ncpus', 'blocks'\\]",
+        ):
+            study.plot_scaling_data(Region("component", "Region 1"), series="blocks", metric=tavg)
+
+    @mock.patch("matplotlib.pyplot.show", autospec=True)
+    def test_it_returns_the_axes_of_the_speedup_and_of_the_efficiency(self, mock_show):
+        speedup, efficiency = self.study_of_two_settings().plot_scaling_data(
+            Region("component", "Region 1"), series="blocks", metric=tavg
+        )
+
+        assert (speedup.get_title(), efficiency.get_title()) == ("Parallel Speedup", "Parallel Efficiency")
+        assert "Region 1, blocks 8" in legend_labels(speedup)
+        mock_show.assert_not_called()
+
+
+class TestPlotsDrawOnTheAxesTheyAreGiven:
+    """So that two plots share a figure, or a plot goes into a figure laid out by hand."""
+
+    @mock.patch("access.profiling.results.plot_bar_metrics")
+    def test_the_bar_chart(self, mock_plot, block_study):
+        block_study.plot_bar_chart(BLOCK_STUDY_GROUP, metric=tavg, ax=mock.sentinel.ax)
+
+        assert mock_plot.call_args.kwargs["ax"] is mock.sentinel.ax
+
+    @mock.patch("access.profiling.results.plot_component_scaling")
+    def test_the_component_scaling_plot(self, mock_plot, block_study):
+        block_study.plot_component_scaling_data(BLOCK_STUDY_GROUP, metric=tavg, ax=mock.sentinel.ax)
+
+        assert mock_plot.call_args.kwargs["ax"] is mock.sentinel.ax

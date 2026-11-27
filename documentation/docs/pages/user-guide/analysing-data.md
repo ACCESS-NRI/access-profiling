@@ -97,7 +97,7 @@ give either one of the components, or the name of the whole model, which is `ACC
 ## The plots
 
 The results can make four kinds of plot. Each of them takes the regions, or a single region, and returns the
-Matplotlib figure:
+Matplotlib axes it drew on:
 
 | Method | What it plots | What it needs | Shown in |
 |---|---|---|---|
@@ -120,18 +120,40 @@ two = results.select_experiments("experiment", "exp-0001", "exp-0002")
 hold only the experiments with one of the values you give. It selects by a label or by a quantity of the layout in
 the same way, as [Configuration choices](configuration-choices.md#putting-the-experiments-in-a-table) shows.
 
-## Saving the figures
+## Customising and saving the figures
 
-Every plotting method returns its Matplotlib figure, and also shows it unless you pass `show=False`. In a script,
-or to save a figure, use:
+Every plotting method returns the Matplotlib axes it drew on, and shows nothing itself. In a notebook, the figure is
+shown at the end of the cell. If the call is the last line of the cell, assign what it returns, or end the line with
+a semicolon, so that the axes are not printed as well. The axes are what you change the figure with. For example,
+this puts the times on a logarithmic scale and gives the chart a title:
 
 ```python
-fig = two.plot_bar_chart(regions, show=False)
-fig.savefig("bar-chart.png", dpi=150, bbox_inches="tight")
+ax = two.plot_bar_chart(regions)
+ax.set(yscale="log", title="Two experiments")
+```
+
+In a script, show the figure with `matplotlib.pyplot.show()`, or save it:
+
+```python
+ax.figure.savefig("bar-chart.png", dpi=150, bbox_inches="tight")
 ```
 
 The figure is saved as `bar-chart.png` in the current directory. Adapt the path to where you want to keep your
 figures.
+
+A plot can also draw on axes of your own, given as `ax`. This is how two plots share a figure, here the first
+region and the others side by side:
+
+```python
+import matplotlib.pyplot as plt
+
+fig, (left, right) = plt.subplots(1, 2, figsize=(16, 6))
+two.plot_bar_chart(regions[0], ax=left)
+two.plot_bar_chart(regions[1:], ax=right)
+```
+
+The scaling plot is the exception. It draws the speedup, the efficiency and a table of the timings on a figure of
+its own, and returns the axes of the speedup and of the efficiency.
 
 ## Choosing a metric
 

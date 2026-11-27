@@ -185,6 +185,10 @@ blocks, one page per concept. A new module needs a block on the right page and a
   shown alike are refused. Where several experiments share a point, it keeps the fastest of them, region by region,
   passing over NaN, and reports them at INFO, as `plot_component_scaling_data` does. It has linear axes and no ideal
   line, since x need not be a number of cores.
+- **A plot returns the axes it drew on and never calls `plt.show()`**, which would draw it twice as the last line of a
+  notebook cell (the module docstring of `plotting_utils`). Given `ax`, it draws there and leaves the layout alone.
+  `plot_scaling_data` draws two plots and a table on a figure of its own and returns the two axes. Each of its
+  series is a dataset of its own, relative to its own smallest size, and its table spans every size of any of them.
 - **`table` pivots what `gather` collects, and never picks between experiments.** Its rows are sorted, as
   `plot_metric` sorts x, and its columns keep the order of the group and of the experiments, as `plot_metric` orders
   its series. Two experiments in one cell raise, naming them, rather than one being kept, and so do two regions of

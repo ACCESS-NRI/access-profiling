@@ -1,12 +1,16 @@
 # Copyright 2025 ACCESS-NRI and contributors. See the top-level COPYRIGHT file for details.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Functions to calculate metrics related to parallel scaling of applications."""
+"""Functions to calculate metrics related to parallel scaling of applications, and the plots of them.
+
+The plots return the axes they drew on and show nothing themselves, as the module docstring of
+`access.profiling.plotting_utils` explains.
+"""
 
 import matplotlib.gridspec as gridspec
 import matplotlib.pyplot as plt
 import xarray as xr
-from matplotlib.figure import Figure
+from matplotlib.axes import Axes
 from matplotlib.transforms import Bbox
 
 from access.profiling.metrics import ProfilingMetric
@@ -65,9 +69,15 @@ def plot_scaling_metrics(
     xcoordinate: str = "ncpus",
     xlabel: str | None = None,
     first_col_fraction: float = 0.4,
-    show: bool = True,
-) -> Figure:
-    """Plots parallel speedup and efficiency from a list of datasets.
+) -> tuple[Axes, Axes]:
+    """Plots parallel speedup and efficiency from a list of datasets, with a table of the timings beneath.
+
+    Each dataset is a series of its own, such as the experiments of one setting of a study that varied one: its
+    speedup and its efficiency are relative to its own smallest value of xcoordinate, and its ideal speedup starts
+    there. The table has a column for every value of xcoordinate that any of the datasets has, and leaves a cell
+    empty where a dataset has no value there.
+
+    The figure is made with pyplot and shown by nothing here, as the other plots of this package are not.
 
     Args:
         stats (list[xr.Dataset]): The raw times to plot.
@@ -76,15 +86,14 @@ def plot_scaling_metrics(
         xlabel (str | None): Optional custom label for the x-axis of both subplots. If None, the
             default label derived from xcoordinate is kept.
         first_col_fraction (float): The fraction of table width to assign to the row labels. Default 0.4.
-        show (bool): Whether to show the generated plot. Default: True.
 
     Returns:
-        Figure: The Matplotlib figure on which the scaling plots and table are plotted on.
+        tuple[Axes, Axes]: The axes of the speedup and of the efficiency. The table of timings is on a third axes of
+            the same figure.
 
     Raises:
-        ValueError: If the metric is not a time, if first_col_fraction is not between 0.0 (inclusive) and 1.0
-            (exclusive), or if a dataset holds a different number of xcoordinate values from the first one, which
-            leaves the table of timings with rows of different lengths.
+        ValueError: If the metric is not a time, or if first_col_fraction is not between 0.0 (inclusive) and 1.0
+            (exclusive).
         IndexError: If stats is empty.
     """
 
@@ -95,11 +104,11 @@ def plot_scaling_metrics(
     ax1, ax2 = fig.add_subplot(gs[0, 0]), fig.add_subplot(gs[0, 1])
     ax_tbl = fig.add_subplot(gs[1, :])
 
-    # Everything outside the loop reads the first dataset, so the table header, the ideal lines and the
-    # units of the table's title all describe the same x-axis. Reading whichever dataset the loop happened
-    # to leave behind would describe the last one instead, and the two disagree as soon as a caller passes
-    # datasets with different x values.
+    # The units of the table's title are those of the first dataset, which every dataset of one metric shares.
     reference = stats[0]
+
+    # Every value any dataset has, so that the table has a column for each and the ideal efficiency spans them all.
+    x_values = sorted({x for stat in stats for x in stat[xcoordinate].values.tolist()})
 
     # The ceiling spans every dataset, so it is set once rather than per dataset. Resetting it inside the
     # loop would fit the axis to the last dataset alone and clip the curves of all the others - which is
@@ -107,11 +116,13 @@ def plot_scaling_metrics(
     max_eff = 100
 
     # add table of raw timings
-    tbl = [[xlabel if xlabel is not None else xcoordinate] + list(reference[xcoordinate].values)]  # first row
+    tbl = [[xlabel if xlabel is not None else xcoordinate] + x_values]  # first row
+    starts = []
     for stat in stats:
         # calculate efficiency and speedup
         efficiency = parallel_efficiency(stat, metric, xcoordinate)
         speedup = parallel_speedup(stat, metric, xcoordinate)
+        starts.append(stat[xcoordinate].values.min())
 
         # plots speedup and efficiency on their respective axes. Regions are selected by name, whichever order
         # the dimensions of the data come in.
@@ -123,14 +134,17 @@ def plot_scaling_metrics(
             # than its percent magnitude, so dequantify first or values above 100% get silently dropped.
             max_eff = max(max_eff, float(efficiency.sel(region=region).max().pint.dequantify()))
 
-            tbl.append([region] + [f"{val:.2f}" for val in stat[metric].sel(region=region).pint.dequantify().values])
+            # By value rather than by position, so that a dataset without some of the values leaves their cells
+            # empty instead of moving its timings under the wrong heading.
+            values = stat[metric].sel(region=region).pint.dequantify()
+            timings = dict(zip(stat[xcoordinate].values.tolist(), values.values.tolist(), strict=True))
+            tbl.append([region] + [f"{timings[x]:.2f}" if x in timings else "" for x in x_values])
 
-    # ideal speedup/scaling
-    minx = reference[xcoordinate].values.min()
-    nx = len(reference[xcoordinate].values)
-    ideal_speedups = [i / minx for i in reference[xcoordinate].values]
-    ax1.plot(reference[xcoordinate].values, ideal_speedups, "k:", label="ideal")
-    ax2.plot(reference[xcoordinate].values, [100] * nx, "k:", label="ideal")
+    # ideal speedup/scaling: one line from each point a series starts at, since each is relative to its own start.
+    for index, start in enumerate(sorted(set(starts))):
+        later = [x for x in x_values if x >= start]
+        ax1.plot(later, [x / start for x in later], "k:", label="ideal" if index == 0 else None)
+    ax2.plot(x_values, [100] * len(x_values), "k:", label="ideal")
 
     # formatting
     ax1.legend()
@@ -155,10 +169,7 @@ def plot_scaling_metrics(
     for i in range(len(tbl)):
         tbl_chart[(i, 0)].set_text_props(weight="bold")
 
-    if show:
-        plt.show()
-
-    return fig
+    return ax1, ax2
 
 
 def plot_component_scaling(
@@ -167,8 +178,8 @@ def plot_component_scaling(
     xcoordinate: str = "ncpus",
     xlabel: str | None = None,
     ylabel: str | None = None,
-    show: bool = True,
-) -> Figure:
+    ax: Axes | None = None,
+) -> Axes:
     """Plots a metric against the cores each component was given, one line per region.
 
     This asks a different question from plot_scaling_metrics. That one reads every component against the
@@ -214,12 +225,14 @@ def plot_component_scaling(
         xlabel (str | None): Optional label for the x-axis. If None, a default naming the component's own
             cores is used, since the coordinate name alone reads as the whole job's.
         ylabel (str | None): Optional label for the y-axis. If None, the metric names it.
-        show (bool): Whether to show the generated plot. Default: True.
+        ax (Axes | None): The axes to draw on. None (the default) draws on a figure of its own.
 
     Returns:
-        Figure: The Matplotlib figure the lines are plotted on.
+        Axes: The axes the lines are drawn on.
     """
-    fig, ax = plt.subplots(figsize=(10, 6))
+    own_figure = ax is None
+    if ax is None:
+        _, ax = plt.subplots(figsize=(10, 6))
 
     ideals = []
     for stat in stats:
@@ -249,9 +262,7 @@ def plot_component_scaling(
     ax.set_title("")
     ax.legend()
     ax.grid(linestyle="--", alpha=0.7)
-    fig.tight_layout()
+    if own_figure:
+        ax.figure.tight_layout()
 
-    if show:
-        plt.show()
-
-    return fig
+    return ax

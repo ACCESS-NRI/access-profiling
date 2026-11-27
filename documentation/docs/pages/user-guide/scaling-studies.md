@@ -47,6 +47,8 @@ number of CPUs and each value of the setting with `per`:
 best_per_dt = results.select_best_experiments(by=regions[0], per=["ncpus", "dt"])
 ```
 
+The scaling plot then draws one curve for each region and each time step, with `series`, as the next section shows.
+
 ## Scaling against the whole job
 
 The first plot shows how well each region scales with the size of the job.
@@ -54,8 +56,11 @@ The first plot shows how well each region scales with the size of the job.
 efficiency of every region against the number of CPUs of the whole job, which is what the scheduler charged for:
 
 ```python
-fig = best.plot_scaling_data(regions, xlabel="Cores occupied by the job")
+speedup, efficiency = best.plot_scaling_data(regions, xlabel="Cores occupied by the job")
 ```
+
+The method returns the axes of the two plots, which you can change as
+[Customising and saving the figures](analysing-data.md#customising-and-saving-the-figures) shows.
 
 <figure markdown="span">
   ![Two panels of speedup and parallel efficiency against cores occupied, with a table of timings](../../assets/figures/scaling.png)
@@ -73,6 +78,18 @@ does not show how well the component itself scales, but how its time changes as 
 that the speedup only makes sense with one experiment for each number of cores. If two experiments have the same
 size, the method raises an error, so call it on the results of `select_best_experiments`.
 
+A study that also varied a setting has one curve for each value of the setting, with `series`. For example, with
+the time steps of the previous section:
+
+```python
+speedup, efficiency = best_per_dt.plot_scaling_data(regions[0], series="dt")
+```
+
+Each curve is labelled with its region and its value of the setting, such as `Whole model, dt 900`. Its speedup and
+its efficiency are relative to the smallest number of CPUs of its own experiments, and the table beneath has a column
+for every number of CPUs that any of them ran on. The experiments of one value must still have a number of CPUs
+each, which `per` gives.
+
 ## Scaling against each component's cores
 
 To see how well each component itself scales, use
@@ -80,7 +97,7 @@ To see how well each component itself scales, use
 every region against the number of cores of its own component:
 
 ```python
-fig = results.plot_component_scaling_data(regions, ylabel="Maximum time (s)")
+ax = results.plot_component_scaling_data(regions, ylabel="Maximum time (s)")
 ```
 
 <figure markdown="span">

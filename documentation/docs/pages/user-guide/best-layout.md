@@ -176,7 +176,7 @@ To understand why some layouts are faster than others, we can compare them regio
 
 ```python
 fastest = ours.select_experiments("experiment", *ranking.index[:3])
-fig = fastest.plot_bar_chart(regions)
+ax = fastest.plot_bar_chart(regions)
 ```
 
 <figure markdown="span">

@@ -144,7 +144,7 @@ print(table.describe())
 The bar chart of a few runs puts them side by side, region by region:
 
 ```python
-fig = one.select_experiments("run", 0, 1, 2).plot_bar_chart(runtime, label="run")
+ax = one.select_experiments("run", 0, 1, 2).plot_bar_chart(runtime, label="run")
 ```
 
 There are a few things to keep in mind:
