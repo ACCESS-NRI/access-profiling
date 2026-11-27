@@ -79,7 +79,7 @@ def labelled(ds: xr.Dataset, group: RegionGroup) -> xr.Dataset:
 
 
 def scaling_figure() -> plt.Figure:
-    """The figure ProfilingManager.plot_scaling_data draws: every region against the cores of the whole job."""
+    """The figure ProfilingResults.plot_scaling_data draws: every region against the cores of the whole job."""
     total_cores = np.array(NODES) * CORES_PER_NODE
     values = timings(total_cores)
     whole = RegionGroup("ESMF", ["[ensemble] RunPhase1"], relabel={"[ensemble] RunPhase1": "Whole model"})
@@ -93,7 +93,7 @@ def scaling_figure() -> plt.Figure:
 
 
 def component_scaling_figure() -> plt.Figure:
-    """The figure ProfilingManager.plot_component_scaling_data draws: every region against its own component's
+    """The figure ProfilingResults.plot_component_scaling_data draws: every region against its own component's
     cores."""
     total_cores = np.array(NODES) * CORES_PER_NODE
     values = timings(total_cores)
@@ -113,7 +113,7 @@ def component_scaling_figure() -> plt.Figure:
 
 
 def bar_chart_figure() -> plt.Figure:
-    """The figure ProfilingManager.plot_bar_chart draws: chosen regions of a few experiments side by side."""
+    """The figure ProfilingResults.plot_bar_chart draws: chosen regions of a few experiments side by side."""
     regions = ["[ensemble] RunPhase1", "[OCN] RunPhase1", "[ICE] RunPhase1"]
     group = RegionGroup(
         "ESMF",
@@ -132,7 +132,7 @@ def bar_chart_figure() -> plt.Figure:
 
 
 def line_plot_figure() -> plt.Figure:
-    """The figure ProfilingManager.plot_metric draws: a region against a coordinate of the experiments."""
+    """The figure ProfilingResults.plot_metric draws: a region against a coordinate of the experiments."""
     group = RegionGroup("ESMF", ["[ICE] RunPhase1"], relabel={"[ICE] RunPhase1": "CICE6"})
     # Four block sizes on one layout. With few blocks on each rank the work is shared out unevenly, and with many
     # the ranks spend longer on the boundaries between the blocks.

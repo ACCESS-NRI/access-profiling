@@ -90,8 +90,6 @@ experiments from an earlier study, and here there are none. With the directories
     Working directory: PosixPath('/scratch/tm70/model_scaling/ACCESS-ESM1.6/piControl')
     Archive directory: PosixPath('/g/data/tm70/model_scaling/ACCESS-ESM1.6/piControl/archive')
     Experiments:
-    Data:
-        No parsed data.
 ```
 
 ACCESS-ESM1.6 has three components: the atmosphere, the ocean and the sea ice. A parallelisation layout, or layout for

@@ -115,8 +115,11 @@ When an application runs, it writes profiling logs. These are the timers of each
 records that the workflow engine keeps of each job. Each log is read by a parser, which returns a few numbers,
 called metrics, for every region that the log times.
 [`parse_profiling_data`][access.profiling.manager.ProfilingManager.parse_profiling_data] reads the logs of every
-finished experiment and stores the results in `manager.data`. There you will find one
-[xarray](https://docs.xarray.dev/en/stable/) dataset per log, organised by experiment name and then by log name.
+finished experiment and returns the results, a [`ProfilingResults`][access.profiling.results.ProfilingResults].
+Their `data` holds one [xarray](https://docs.xarray.dev/en/stable/) dataset per log, organised by experiment name
+and then by log name. The results also know the labels, the layout and the number of CPUs of each experiment, and
+they make the tables and the plots. They never change: a selection, or a reduction of the runs, returns new
+results.
 
 For example, here is what the MOM5 timers of a run on 49 PEs look like once parsed:
 
@@ -160,7 +163,8 @@ This prints the value with its unit:
 ```
 
 Be aware that `ds["maximum time"]` raises a `KeyError`, even though that is the name shown when the dataset is
-printed. The values carry their units thanks to [pint-xarray](https://pint-xarray.readthedocs.io/en/stable/), so
+printed. The message suggests the metric to use, such as `ProfilingMetric('maximum time', 'second')`, which is
+`tmax`. The values carry their units thanks to [pint-xarray](https://pint-xarray.readthedocs.io/en/stable/), so
 you can convert them, for example with `ocean.pint.to("hour")`. [Logs and metrics](logs-and-metrics.md) explains
 what each metric means, and [Log formats](../access/log-formats.md) describes the logs of the ACCESS models.
 

@@ -6,10 +6,10 @@ Guidance for AI coding agents working in `access-profiling`.
 
 A Python library from ACCESS-NRI for profiling parallel applications. A study generates one experiment per parallel
 layout over a range of core counts, runs them through a workflow engine, parses the profiling logs they write into
-`xr.Dataset`s quantified with pint, and selects and plots the best layouts. The package is generic in both the
-application and the engine, and ships implementations for the ACCESS climate models: ACCESS-ESM1.5, ACCESS-ESM1.6,
-ACCESS-OM2 and ACCESS-OM3 run with Payu, and the UM suites of ACCESS-AM3, ACCESS-rAM3 and ACCESS-CM3 run with Cylc
-and Rose.
+`xr.Dataset`s quantified with pint, and selects, tabulates and plots them from the results parsing returns. The
+package is generic in both the application and the engine, and ships implementations for the ACCESS climate
+models: ACCESS-ESM1.5, ACCESS-ESM1.6, ACCESS-OM2 and ACCESS-OM3 run with Payu, and the UM suites of ACCESS-AM3,
+ACCESS-rAM3 and ACCESS-CM3 run with Cylc and Rose.
 
 Python >= 3.11.4, which the `filter="data"` tarball extraction in `experiment.py` needs; CI covers 3.11–3.13. The
 layout search (`ParallelComponent`, `iter_layouts`, the allocation strategies and the constraints) and the parsers of
@@ -18,9 +18,11 @@ configuration files (`YAMLParser`, `NUOPCParser`, ...) come from
 experiment-generator and runs them with experiment-runner.
 
 The package is built on two axes. A **manager** (`ProfilingManager`) drives one workflow engine: it generates,
-runs, archives and parses experiments, and reads what the engine and the scheduler wrote. An **application**
-(`Application`) describes what is profiled: its component tree, how a layout is written into its input files and
-read back out, and which logs it writes. A study is a manager of one engine handed one application and a control.
+runs, archives and parses experiments, and reads what the engine and the scheduler wrote. Parsing returns a
+`ProfilingResults`, which holds the data and makes the selections, tables and plots, and which nothing changes. An
+**application** (`Application`) describes what is profiled: its component tree, how a layout is written into its
+input files and read back out, and which logs it writes. A study is a manager of one engine handed one application
+and a control.
 
 **Read the [developer guide](documentation/docs/pages/developer-guide/index.md) first.** It describes the two axes
 at length, the abstract classes and what a subclass of each implements, and how a study is generated, and the
@@ -60,8 +62,9 @@ src/access/profiling/
                         tables and plots are arranged by), find_component, component_cores,
                         ProfilingExperimentStatus, ProfilingExperiment (its record, and its archive to and from a
                         tarball)
-  manager.py            ProfilingManager[AppT]: generation, records and the study file, statuses, parsing,
-                        selection, tables and plotting
+  manager.py            ProfilingManager[AppT]: generation, records and the study file, statuses, parsing
+  results.py            ProfilingResults (what parsing returns: selection, reductions, tables and plotting),
+                        ParsedExperiment (the data, labels, layout and CPUs of one experiment)
   parser.py             ProfilingParser (the ABC), flatten_hierarchical, aggregate_pe_data
   metrics.py            ProfilingMetric and the predefined metrics (tmin, tmax, tavg, count, ...)
   plotting_utils.py     RegionGroup, plot_bar_metrics, plot_line_metrics
@@ -106,8 +109,8 @@ Four boundaries in that graph are load-bearing:
 - **The generic layer names no ACCESS model and no engine.** Whatever knows what a particular runner or code writes
   goes in a module named for it, which is why `payu_model_stdout` is in `payu_configuration` and `um_stdout` in
   `um_parser`, not in `application`.
-- **Only the engine managers import `manager`.** Parsers, applications and the models never do: an application is a
-  value a manager is handed, not a subclass of one.
+- **Only the engine managers import `manager`.** Parsers, applications, the results and the models never do: an
+  application is a value a manager is handed, not a subclass of one, and the results need no manager to be read.
 - **`payu_configuration` does not import the job-submission stack** (`payu_manager`, experiment-generator,
   experiment-runner): describing what is profiled should not need what submits it. `__init__.py` imports
   everything, so this is about dependencies, not import time.
@@ -149,10 +152,16 @@ blocks, one page per concept. A new module needs a block on the right page and a
 ### Runs
 
 - **A `run` dimension appears only where it is needed.** `parse_profiling_data` gives a log one only when more than
-  one run produced it, and selection and plotting refuse it (`_RUN_DIM_ERROR`) until `select_best_run` or
-  `aggregate_runs` has removed it. `gather` given `runs` reduces it for the dataset it returns only, and leaves the
-  parsed data holding every run. `gather` and `table` without `runs` refuse it with `_GATHER_RUN_DIM_ERROR`, which
-  offers `runs` first.
+  one run produced it, and selection, tables and plotting refuse it, naming the experiments, until `select_best_run`
+  or `aggregate_runs` has returned results without it (`_selected_experiments`).
+- **Nothing changes a `ProfilingResults`.** Its mappings are read-only and its experiments' labels are copied whole;
+  a selection or a reduction returns new results (`_with_data`), and `parse_profiling_data` returns new ones at every
+  call. A notebook's cells then give the same answer whichever ran first, so don't add a method that changes the
+  results it is called on.
+- **Parsing reads what tells the experiments apart, once.** While an experiment's directory is open,
+  `parse_profiling_data` reads its CPUs and, where it was given none, its layout, and keeps both on the experiment.
+  One that cannot be read (`OSError`, `ValueError`, as for archiving) is kept as `ncpus_error` or `layout_error`, and
+  raised with the experiment's name by the reader that needs it, so one unreadable count stops no other analysis.
 - **`select_best_run` keeps a run that took place; `aggregate_runs` does not.** The first picks one run by one metric
   and keeps it in every log; the second reduces each region and metric on its own, so its minimum can mix runs.
   They answer different questions, so don't substitute one for the other.
@@ -177,7 +186,7 @@ blocks, one page per concept. A new module needs a block on the right page and a
   the group with one label. The column of values is keyed by the metric, which no coordinate's name can equal. A
   table holds numbers, not quantities, so it names the units of the metric in `attrs["units"]`.
 - **Experiments are picked out and named by coordinates too.** `select_experiments` returns, of the experiments
-  with parsed data, those with one value of a coordinate. An experiment without the label is not one of them, but a
+  of the results, those with one value of a coordinate. An experiment without the label is not one of them, but a
   label that none of them has is refused. `plot_bar_chart(label=...)` names each experiment's bars
   `<name> <value>`, as `plot_metric` names its series, and refuses two experiments with the same value, whose bars
   would otherwise replace one another.
@@ -199,8 +208,8 @@ blocks, one page per concept. A new module needs a block on the right page and a
 - **The records, the study file and the archives are written whole**: to a temporary file beside the target, which
   then replaces it (`_write_whole`, and `ProfilingExperiment.archive` for a tarball). A record cut short stops the
   study being opened, and an archive cut short still has its record readable, being its first member.
-  `delete_experiment` updates the working directory before forgetting the experiment and its parsed data, and where
-  it cannot be written forgets them for the session only, with a warning.
+  `delete_experiment` updates the working directory before forgetting the experiment, and where it cannot be written
+  forgets it for the session only, with a warning.
 - **Each of the two files states the version of its own format** (`RECORD_VERSION`, `STUDY_VERSION`), and
   `read_versioned` refuses a file that states another one, or none, naming the file. The record states its own
   because it is written once and read from an archive long after, by whatever version of the package is installed
@@ -388,7 +397,7 @@ same second leaves the mutant's `.pyc` loaded.
 - **Patch where the name is looked up.** Each module binds its own reference with `from ... import`, so it is
   `mock.patch("access.profiling.payu_manager.ExperimentGenerator")`; patching where the class is defined misses it.
 - **Fake the engine, keep the rest real.** Faked: experiment-generator and experiment-runner (their classes in
-  `payu_manager`), `subprocess.run`, and the plotting functions `manager` calls. Real: the layout search, files
+  `payu_manager`), `subprocess.run`, and the plotting functions `results` calls. Real: the layout search, files
   under `tmp_path`, including Payu's job files (`write_job_file` and `pbs_job_info` in `test_payu_manager.py`), Cylc
   suite databases written with `sqlite3`, control suites copied with `shutil` (`write_control` in
   `test_cylc_manager.py`), and tarballs. A manager that generates, adds or deletes experiments writes records and
@@ -402,7 +411,11 @@ same second leaves the mutant's `.pyc` loaded.
   helpers, imported with `from conftest import ...`: those that narrow an optional result with an assertion message
   rather than an `AttributeError` (`component_of`, `layout_of`, `decomposition_of`, `grid_of`, `legend_labels`), and
   those more than one module needs (`fake_parser`, `select_layouts` for a Payu application, `write_suite_conf`
-  for the variables of a Rose suite, and `leaf_layout` and `layout_with` for a layout built by hand). The import works because `tests/` has no `__init__.py`: don't add one.
+  for the variables of a Rose suite, `leaf_layout` and `layout_with` for a layout built by hand, and
+  `MockApplication`). The import works because `tests/` has no `__init__.py`: don't add one.
+- **The tests of `results.py` describe a study by changing it**, through `ParsedStudy` in `test_results.py`, which
+  keeps the parts of each experiment and makes a `ProfilingResults` of them for every call. A test of what the
+  results themselves do, such as not changing, calls `.results()` and holds on to what it returns.
 - Newer files group tests in `class Test<Behaviour>:` blocks with no base class and no setup, the class docstring
   stating the behaviour. `pytest.raises` gets a `match=`. A test's docstring says what is checked and, where it is
   not obvious, why. Tests carry no type annotations.

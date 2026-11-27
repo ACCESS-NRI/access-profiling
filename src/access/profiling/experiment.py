@@ -239,7 +239,7 @@ class ExperimentCoordinate:
 
     Args:
         name (str): What the quantity is called. It names the coordinate in the data
-            `ProfilingManager.gather` returns, and is the default label of an axis.
+            `ProfilingResults.gather` returns, and is the default label of an axis.
         value (Callable[[ComponentLayout], Hashable]): Returns the quantity for a layout. It raises `ValueError`
             for a layout that does not have the quantity.
     """
@@ -570,15 +570,15 @@ class ProfilingExperiment:
     The number of CPUs the experiment occupied is kept here rather than in the manager, so that it lives
     and dies with the experiment it describes: deleting an experiment takes its count with it, and one
     added later under the same name starts without one. Only a manager can work the count out, since how
-    to read it depends on the workflow engine, so ncpus is filled in on demand by
-    ProfilingManager._ncpus() rather than at construction.
+    to read it depends on the workflow engine, so ncpus is filled in when the manager parses or archives the
+    experiment rather than at construction.
 
     The layout is kept here for the same reason, and arrives one of two ways. An experiment generated
     from a layout search, or from a configuration choice that has a layout, is given the layout it was
     generated from, which is the whole of it, grids included, and its record keeps it, so that the
     experiment has it again in a later session and once it is archived. One that was given no layout -
     generated from a choice without one, added from a directory, or archived before experiments had records -
-    is read back from its configuration on demand by ProfilingManager._layout(), which recovers what each
+    is read back from its configuration when the manager parses the experiment, which recovers what each
     component was given rather than how it divided its domain.
 
     Args:

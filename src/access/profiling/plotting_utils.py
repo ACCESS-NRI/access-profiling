@@ -4,7 +4,7 @@
 """What a plot is to show, and the parts of the plots that are not about scaling.
 
 `RegionGroup` names the regions of one log a plot is to show, what to call them and whose cores they are read
-against, and one list of groups describes a study to every plotting method of a manager. The bar chart and the
+against, and one list of groups describes a study to every plotting method of its results. The bar chart and the
 line plot those methods draw, and the helper that sizes the columns of the table beside a scaling plot, are here
 too.
 """
@@ -34,9 +34,9 @@ class RegionGroup:
     same; many names say nothing at all; and the call stack that would settle it is not kept. Hence this.
 
     One list of groups describes a study to all four plotting methods. Only
-    `ProfilingManager.plot_component_scaling_data` reads `component`, being the only one whose x axis is a
-    component's own cores; `ProfilingManager.plot_scaling_data` reads every region against the whole job,
-    `ProfilingManager.plot_bar_chart` puts no cores on either axis and `ProfilingManager.plot_metric` is told what
+    `ProfilingResults.plot_component_scaling_data` reads `component`, being the only one whose x axis is a
+    component's own cores; `ProfilingResults.plot_scaling_data` reads every region against the whole job,
+    `ProfilingResults.plot_bar_chart` puts no cores on either axis and `ProfilingResults.plot_metric` is told what
     goes on its x axis, so the three ignore it rather than refusing a list that carries it. A component named here
     is still checked by the plot that uses it, so a misspelling is not lost as long as the same list reaches that
     plot.
@@ -46,7 +46,7 @@ class RegionGroup:
             This is the log, never a component: the parsed data is keyed by log throughout.
         regions (Sequence[str]): Regions of that log to plot, each of which becomes a line or a bar.
         component (str | None): Component whose cores these regions are read against, named as the layout
-            names it, and read only by `ProfilingManager.plot_component_scaling_data`. None (the default) takes
+            names it, and read only by `ProfilingResults.plot_component_scaling_data`. None (the default) takes
             the component the application declares for this log, and failing that the log's own name - which is
             enough for a log that is one component's alone. Name it for a log that is no single component's,
             such as a coupled summary covering several.

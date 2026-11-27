@@ -33,9 +33,9 @@ look at the runs of one experiment:
 ```python
 from access.profiling.metrics import tmax
 
-manager.parse_profiling_data()
+results = manager.parse_profiling_data()
 name = "exp-0001"
-runtime = manager.data[name]["payu"][tmax].sel(region="payu_model_run_duration_seconds")
+runtime = results.data[name]["payu"][tmax].sel(region="payu_model_run_duration_seconds")
 print(runtime.run.values)
 print(runtime.pint.to("minute").data)
 ```
@@ -45,7 +45,7 @@ wrote a given log, that log has no `run` dimension. We can now see how much the 
 Here we take the difference between the slowest and the fastest run, relative to the fastest:
 
 ```python
-for name, logs in manager.data.items():
+for name, logs in results.data.items():
     runtime = logs["payu"][tmax].sel(region="payu_model_run_duration_seconds")
     if "run" in runtime.dims:
         spread = (runtime.max("run") - runtime.min("run")) / runtime.min("run")
@@ -54,21 +54,21 @@ for name, logs in manager.data.items():
 
 This prints the spread of each experiment as a percentage, next to its name.
 
-Be aware that the plots and `select_best_experiments` do not accept data with a `run` dimension. If you try, you
-get this message:
+Be aware that the plots, the tables and `select_best_experiments` do not accept data with a `run` dimension. If you
+try, you get a message like this one, which names the experiments that ran several times:
 
 ```text
-Profiling data still has a 'run' dimension. Use select_best_run() to keep the best run of each experiment, or aggregate_runs() to reduce over runs.
+The profiling data of experiments ['exp-0001', 'exp-0002'] still has a 'run' dimension, since they ran several times. Reduce it first: select_best_run() returns results with the best run of each experiment, and aggregate_runs() results with each region reduced over the runs.
 ```
 
 ## Reducing the runs
 
 As the message says, there are two ways of getting one value for each experiment:
 
-- [`select_best_run`][access.profiling.manager.ProfilingManager.select_best_run] keeps the best run of every
+- [`select_best_run`][access.profiling.results.ProfilingResults.select_best_run] keeps the best run of every
   experiment, which is the run where a region you choose was fastest. The same run is kept for all the logs of
   the experiment, so the result is a run that really happened.
-- [`aggregate_runs`][access.profiling.manager.ProfilingManager.aggregate_runs] computes the minimum, the maximum,
+- [`aggregate_runs`][access.profiling.results.ProfilingResults.aggregate_runs] computes the minimum, the maximum,
   the mean or the median over the runs. This is done for each region separately, so the values of different
   regions may come from different runs. Use the minimum to estimate the best timings you can get, the maximum for
   the worst ones, and the mean or the median for the typical ones. Note that integer metrics, such as the number of
@@ -77,42 +77,40 @@ As the message says, there are two ways of getting one value for each experiment
 For example, to keep the run in which the whole model was fastest:
 
 ```python
-manager.select_best_run("payu", "payu_model_run_duration_seconds", tmax)
+best = results.select_best_run("payu", "payu_model_run_duration_seconds", tmax)
 ```
 
-Both methods are applied to all the experiments, and do not touch the datasets that have no `run` dimension.
-Note that they replace the parsed data. If you want the individual runs back, call `parse_profiling_data` again.
+Both methods return new results, for all the experiments, and keep the datasets that have no `run` dimension as
+they are. They leave `results` as it was, so it still holds every run. This means that you can keep the runs, their
+best and their mean side by side, and read each of them as often as you like.
 
-## Reducing the runs without replacing them
+## Measuring the spread of the runs
 
-You can also keep the parsed data as it is, and reduce the runs only for the data that you collect.
-[`gather`][access.profiling.manager.ProfilingManager.gather] takes the statistic as `runs`, with the same four
-choices as `aggregate_runs`. Each region is again reduced on its own. For example, to collect the fastest and the
-slowest run of every experiment:
+Since a reduction leaves the results it is called on as they were, the fastest and the slowest run of every
+experiment come from the same results. For example, to collect both with
+[`gather`][access.profiling.results.ProfilingResults.gather]:
 
 ```python
 from access.profiling import RegionGroup
 
 runtime = RegionGroup("payu", ["payu_model_run_duration_seconds"])
-fastest = manager.gather(runtime, runs="min")[tmax]
-slowest = manager.gather(runtime, runs="max")[tmax]
+fastest = results.aggregate_runs("min").gather(runtime)[tmax]
+slowest = results.aggregate_runs("max").gather(runtime)[tmax]
 spread = (slowest - fastest) / fastest
 ```
 
-The parsed data still holds every run, so you can do this as many times as you like. Without `runs`, `gather`
-refuses data with a `run` dimension, as the plots do, and its message points to `runs`.
+Each region is reduced on its own, as `aggregate_runs` always does.
 [Putting the experiments in a table](configuration-choices.md#putting-the-experiments-in-a-table) shows what
 `gather` collects.
 
-[`table`][access.profiling.manager.ProfilingManager.table] takes `runs` too. This gives the spread of every
-experiment as a table, arranged by what tells the experiments apart. For example, by the cores of the sea ice of
-ACCESS-OM3:
+[`table`][access.profiling.results.ProfilingResults.table] gives the spread of every experiment as a table instead,
+arranged by what tells the experiments apart. For example, by the cores of the sea ice of ACCESS-OM3:
 
 ```python
 from access.profiling import component_cores
 
-fastest = manager.table(runtime, tmax, component_cores("ice"), runs="min")
-slowest = manager.table(runtime, tmax, component_cores("ice"), runs="max")
+fastest = results.aggregate_runs("min").table(runtime, tmax, component_cores("ice"))
+slowest = results.aggregate_runs("max").table(runtime, tmax, component_cores("ice"))
 print(100 * (slowest - fastest) / fastest)
 ```
 

@@ -56,6 +56,7 @@ nav:
     - Applications: pages/api/applications.md
     - Control sources: pages/api/control.md
     - Experiments: pages/api/experiments.md
+    - Results: pages/api/results.md
     - Parsers: pages/api/parsers.md
     - Metrics: pages/api/metrics.md
     - Scaling and plotting: pages/api/plotting.md

@@ -76,14 +76,14 @@ archive directory then finds them again.
 ## Comparing region by region
 
 The easiest way to compare experiments is a bar chart.
-[`plot_bar_chart`][access.profiling.manager.ProfilingManager.plot_bar_chart] draws one group of bars for each
+[`plot_bar_chart`][access.profiling.results.ProfilingResults.plot_bar_chart] draws one group of bars for each
 region, with one bar for each experiment. Read the logs and draw it:
 
 ```python
 from access.profiling.metrics import tmax
 
-manager.parse_profiling_data()
-fig = manager.plot_bar_chart(
+results = manager.parse_profiling_data()
+fig = results.plot_bar_chart(
     groups,
     tmax,
     experiments=["release", "modified"],
@@ -92,7 +92,7 @@ fig = manager.plot_bar_chart(
 ```
 
 The regions appear along the x axis in the order of the groups, and the experiments in the order you give them.
-By default, all the experiments with parsed data are included. The bars are labelled with the names of the
+By default, all the experiments of the results are included. The bars are labelled with the names of the
 experiments, and you can use `experiment_relabel_map` to give them other labels. Experiments with labels can also
 be named by one of them, with `label`, as [Configuration choices](configuration-choices.md#running-and-comparing)
 shows. The title of the chart is the
@@ -109,8 +109,8 @@ A chart is not always enough. You can also compare the numbers directly, for exa
 in every region of Payu's timings:
 
 ```python
-release = manager.data["release"]["payu"][tmax]
-modified = manager.data["modified"]["payu"][tmax]
+release = results.data["release"]["payu"][tmax]
+modified = results.data["modified"]["payu"][tmax]
 change = (modified - release) / release
 for region in change.region.values:
     print(f"{float(change.sel(region=region).pint.dequantify()):+7.1%}  {region}")

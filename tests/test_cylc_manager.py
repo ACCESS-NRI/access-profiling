@@ -26,6 +26,7 @@ from access.profiling.experiment import (
     ExperimentPlan,
     ProfilingExperiment,
     ProfilingExperimentStatus,
+    ProfilingLog,
     component_cores,
 )
 from access.profiling.manager import STUDY_FILENAME, ProfilingManager
@@ -1203,30 +1204,48 @@ def test_a_generated_suite_is_archived_and_found_again(tmp_path, home):
 
 
 class TestLayoutsOfAddedSuites:
-    """A suite added by hand has the layout its variables state, read back as the analyses need it."""
+    """A suite added by hand has the layout its variables state, read back when it is parsed."""
 
     @staticmethod
-    def added(tmp_path, layouts):
-        """Adds one suite per process grid, each stating it in `um_layout`, with a time for its `atmos` task."""
+    def parsed(manager, seconds):
+        """Parses the suites of a manager as finished, each with a time for its `atmos` task.
+
+        Args:
+            manager (CylcRoseManager): The manager, holding the suites.
+            seconds (dict[str, float]): The time of each suite's task, keyed by its name.
+
+        Returns:
+            ProfilingResults: What parsing returns.
+        """
+
+        def logs(path, run_path=None):
+            log = mock.Mock(spec=ProfilingLog, optional=False, filepath=path / "atmos.log")
+            log.parse.return_value = xr.Dataset(
+                {tmax: xr.DataArray([seconds[path.name]], dims=["region"]).pint.quantify(tmax.units)},
+                coords={"region": ["atmos"]},
+            )
+            return {"cylc_tasks": {0: log}}
+
+        for name in seconds:
+            manager.experiments[name].status = ProfilingExperimentStatus.DONE
+        with mock.patch.object(manager, "profiling_logs", side_effect=logs):
+            return manager.parse_profiling_data()
+
+    @classmethod
+    def added(cls, tmp_path, layouts):
+        """Adds and parses one suite per process grid, each stating it in `um_layout`."""
         manager = mock_manager(tmp_path / "work", tmp_path / "archive")
-        for (nx, ny), seconds in layouts.items():
-            name = f"u-{nx}x{ny}"
-            write_suite_conf(manager.work_dir / name, {"um_layout": f"{nx},{ny}"})
-            manager.add_rose_experiment(name)
-            manager.data[name] = {
-                "cylc_tasks": xr.Dataset(
-                    {tmax: xr.DataArray([seconds], dims=["region"]).pint.quantify(tmax.units)},
-                    coords={"region": ["atmos"]},
-                )
-            }
-        return manager
+        for nx, ny in layouts:
+            write_suite_conf(manager.work_dir / f"u-{nx}x{ny}", {"um_layout": f"{nx},{ny}"})
+            manager.add_rose_experiment(f"u-{nx}x{ny}")
+        return manager, cls.parsed(manager, {f"u-{nx}x{ny}": seconds for (nx, ny), seconds in layouts.items()})
 
     def test_the_layout_is_read_from_the_suite_s_variables(self, tmp_path):
         """With its process grid, since the configuration states the grid it decomposes."""
 
-        manager = self.added(tmp_path, {(4, 2): 10.0})
+        manager, results = self.added(tmp_path, {(4, 2): 10.0})
 
-        layout = manager._layout("u-4x2")
+        layout = results.experiments["u-4x2"].layout
 
         assert [(sub.name, sub.n_cores, tuple(sub.decomposition.grid)) for sub in layout.sub_layouts] == [
             ("UM", 8, (4, 2))
@@ -1244,23 +1263,25 @@ class TestLayoutsOfAddedSuites:
         write_suite_conf(run_path, {"um_layout": "2,2"}, "log/rose-suite-run.conf")
         manager.add_rose_experiment("u-aa123", run_path=run_path)
 
-        assert manager._layout("u-aa123").n_cores == 4
-        assert manager._ncpus("u-aa123") == 4
+        results = self.parsed(manager, {"u-aa123": 10.0})
+
+        assert results.experiments["u-aa123"].layout.n_cores == 4
+        assert results.experiments["u-aa123"].ncpus == 4
 
     def test_its_cores_are_a_coordinate(self, tmp_path):
-        manager = self.added(tmp_path, {(4, 2): 10.0, (2, 2): 18.0})
+        _, results = self.added(tmp_path, {(4, 2): 10.0, (2, 2): 18.0})
 
-        gathered = manager.gather(RegionGroup("cylc_tasks", ["atmos"]), [component_cores("UM")])
+        gathered = results.gather(RegionGroup("cylc_tasks", ["atmos"]), [component_cores("UM")])
 
         assert list(gathered["UM cores"].values) == [8, 4]
 
-    @mock.patch("access.profiling.manager.plot_component_scaling")
+    @mock.patch("access.profiling.results.plot_component_scaling")
     def test_the_component_scaling_plot_reads_each_suite_against_its_cores(self, mock_plot, tmp_path):
         """A group of a Rose suite's regions names its component, since no log of a suite declares one."""
 
-        manager = self.added(tmp_path, {(4, 2): 10.0, (2, 2): 18.0})
+        _, results = self.added(tmp_path, {(4, 2): 10.0, (2, 2): 18.0})
 
-        manager.plot_component_scaling_data([RegionGroup("cylc_tasks", ["atmos"], component="UM")], tmax)
+        results.plot_component_scaling_data([RegionGroup("cylc_tasks", ["atmos"], component="UM")], tmax)
 
         (stat,) = mock_plot.call_args.args[0]
         seconds = stat[tmax].pint.dequantify().squeeze("region")

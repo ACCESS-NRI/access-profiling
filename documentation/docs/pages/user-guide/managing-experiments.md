@@ -218,7 +218,7 @@ manager has its own defaults, which you can find on its page: [Payu](../access/p
 
 There are two ways of removing experiments.
 [`delete_experiment`][access.profiling.manager.ProfilingManager.delete_experiment] only makes the manager forget
-an experiment and its parsed data. It removes the record of the experiment and adds the call to the study file, but
+an experiment. It removes the record of the experiment and adds the call to the study file, but
 deletes none of the files of the experiment. Note that the archive of an archived experiment therefore stays, and a
 manager that you create later finds the experiment again from it. On a study that you cannot write to, such as a
 colleague's, the manager forgets the experiment in this session only, with a warning.
@@ -258,13 +258,16 @@ and what they mean:
 | `The record '<file>' states the format version <N>, and this version of access-profiling reads version <M>. ...` | A record or the study file was written in a format that the installed version of the package does not read. Update the package if a later version of it wrote the file. |
 | `The record '<file>' cannot be read, since ...` | A record or the study file is damaged, or was not written by the package. Restore the file. Without its record, an experiment is no longer known to the manager, so it has to be added or generated again. Do not remove the study file: the highest number it records is what keeps the numbers of deleted experiments from being given again. |
 | `Skipping the archive '<file>', which cannot be read: ...` | An archive is damaged, for example because an archiving with an earlier version of the package stopped part way. Archive the experiment again with `overwrite=True`, or remove the file. |
-| `The number of CPUs of experiment '<name>' could not be read (...), ...` | The experiment was archived without its number of CPUs. The manager reads it from the archive when a selection or a plot needs it, and raises an error if it cannot. |
+| `The number of CPUs of experiment '<name>' could not be read (...), ...` | The experiment was archived without its number of CPUs. The manager reads it from the archive when the experiment is parsed. |
+| `The number of CPUs of experiment '<name>' is not known: ...` | The number of CPUs could not be read when the experiment was parsed, for the reason given. A selection or a plot that needs it raises this, and the others work. |
+| `The layout of experiment '<name>' could not be read: ...` | The layout could not be read back when the experiment was parsed, for the reason given. A table or a plot that needs it raises this. |
+| `These results hold no experiments: ...` | No experiment had finished when the logs were parsed. The message lists the experiments that were passed over, with their statuses. |
 | `Could not update the working directory '<work_dir>' (...), so experiment '<name>' is forgotten in this session only, ...` | `delete_experiment` could not remove the record, for example because you cannot write to the study. A manager created later finds the experiment again. |
 | `Experiment name '<name>' is not the name of a single directory, ...` | An experiment was added under a name with a `/`, or under `.` or `..`. Its record is kept in a directory of that name in the working directory, so add it under a name without a `/`. |
 | `Experiment name '<name>' is of the form this manager gives the experiments it generates. ...` | An experiment was added under a name such as `exp-0003`. Add it under another name. |
 | `No new experiments to run. Will skip execution.` | Every experiment has been submitted or has finished. Pass `retry_failed=True` to run the failed ones. |
 | `Experiment '<name>' is not completed (status: RUNNING). Skipping parsing profiling data.` | Only finished experiments are parsed. Wait for the run to finish. |
-| `Profiling data still has a 'run' dimension. ...` | The experiments ran several times. See [Reducing the runs](run-to-run-variability.md#reducing-the-runs). |
+| `The profiling data of experiments [...] still has a 'run' dimension, ...` | The experiments ran several times. See [Reducing the runs](run-to-run-variability.md#reducing-the-runs). |
 | `Several selected experiments use the same number of CPUs ...` | See [Selecting the best layouts](scaling-studies.md#selecting-the-best-layouts). |
 | `Experiment '<name>' has no label '<key>'. ...` | A table or a plot was asked for a label that one of its experiments does not have. Restrict the selection with `experiments=[...]`. |
 | `None of the experiments [...] has a label '<key>'. ...` | `select_experiments` was asked for a label that no experiment has, as with a misspelt key. Check the key against the labels that the message lists. |

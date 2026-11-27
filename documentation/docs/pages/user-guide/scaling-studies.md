@@ -4,7 +4,8 @@ How much faster does your application run if you give it more cores? This is wha
 application is run on several numbers of cores, and we look at how the run time goes down, for the whole
 application and for each of its components. The experiments are created as shown in
 [Generating and running experiments](experiments.md), whose example is a scaling study. In this tutorial we use the
-`manager` of that page and the `groups` of [Choosing the regions](analysing-data.md#choosing-the-regions). The
+`manager` of that page, the `results` of [Parsing the logs](analysing-data.md#parsing-the-logs) and the `groups` of
+[Choosing the regions](analysing-data.md#choosing-the-regions). The
 experiments of a Rose suite are created in the same way, as [Cylc Rose suites](../access/cylc-rose-suites.md)
 shows. The figures are drawn from synthetic data, to show what each plot looks like and how to read it.
 
@@ -20,7 +21,7 @@ creating the study, as [Counting the layouts](experiments.md#counting-the-layout
 
 A study usually has several layouts for each size, but the scaling plot needs exactly one experiment for each
 number of cores. We therefore keep only the fastest experiment of each size, with
-[`select_best_experiments`][access.profiling.manager.ProfilingManager.select_best_experiments]. It needs to know
+[`select_best_experiments`][access.profiling.results.ProfilingResults.select_best_experiments]. It needs to know
 which region to look at, and here we use the time the whole model took:
 
 === "ACCESS-ESM1.6"
@@ -28,7 +29,7 @@ which region to look at, and here we use the time the whole model took:
     ```python
     from access.profiling.metrics import tmax
 
-    best = manager.select_best_experiments("payu", "payu_model_run_duration_seconds", tmax)
+    best = results.select_best_experiments("payu", "payu_model_run_duration_seconds", tmax)
     ```
 
 === "ACCESS-OM3"
@@ -36,7 +37,7 @@ which region to look at, and here we use the time the whole model took:
     ```python
     from access.profiling.metrics import tmax
 
-    best = manager.select_best_experiments("ESMF", "[ensemble] RunPhase1", tmax)
+    best = results.select_best_experiments("ESMF", "[ensemble] RunPhase1", tmax)
     ```
 
 `best` is a list with the names of the experiments, sorted by number of CPUs. We will pass it to the plotting
@@ -46,11 +47,11 @@ fastest.
 ## Scaling against the whole job
 
 The first plot shows how well each region scales with the size of the job.
-[`plot_scaling_data`][access.profiling.manager.ProfilingManager.plot_scaling_data] plots the parallel speedup and
+[`plot_scaling_data`][access.profiling.results.ProfilingResults.plot_scaling_data] plots the parallel speedup and
 efficiency of every region against the number of CPUs of the whole job, which is what the scheduler charged for:
 
 ```python
-fig = manager.plot_scaling_data(groups, tmax, experiments=best, xlabel="Cores occupied by the job")
+fig = results.plot_scaling_data(groups, tmax, experiments=best, xlabel="Cores occupied by the job")
 ```
 
 <figure markdown="span">
@@ -72,11 +73,11 @@ the same size, the method raises an error, so pass the output of `select_best_ex
 ## Scaling against each component's cores
 
 To see how well each component itself scales, use
-[`plot_component_scaling_data`][access.profiling.manager.ProfilingManager.plot_component_scaling_data]. It plots
+[`plot_component_scaling_data`][access.profiling.results.ProfilingResults.plot_component_scaling_data]. It plots
 every region against the number of cores of its own component:
 
 ```python
-fig = manager.plot_component_scaling_data(groups, tmax, ylabel="Maximum time (s)")
+fig = results.plot_component_scaling_data(groups, tmax, ylabel="Maximum time (s)")
 ```
 
 <figure markdown="span">
@@ -100,7 +101,8 @@ fastest value is kept.
 
 You can also compute the speedup and the efficiency yourself. The functions used by the scaling plots are in
 `access.profiling.scaling`, and work on any dataset with an `ncpus` coordinate. Here we build such a dataset from
-the best experiments, whose numbers of CPUs were stored by `select_best_experiments`:
+the best experiments. The number of CPUs of each experiment was read when its logs were parsed, and is in
+`results.experiments`:
 
 ```python
 import xarray as xr
@@ -108,7 +110,7 @@ import xarray as xr
 from access.profiling.scaling import parallel_efficiency
 
 stats = xr.concat(
-    [manager.data[name]["MOM5"].expand_dims(ncpus=[manager.experiments[name].ncpus]) for name in best],
+    [results.data[name]["MOM5"].expand_dims(ncpus=[results.experiments[name].ncpus]) for name in best],
     dim="ncpus",
 )
 efficiency = parallel_efficiency(stats, tmax)

@@ -135,22 +135,22 @@ Then read the logs and select the fastest experiment:
 ```python
 from access.profiling.metrics import tmax
 
-manager.parse_profiling_data()
+results = manager.parse_profiling_data()
 keys = {manager.application.layout_key(layout) for layout in layouts}
-parsed = [name for name in manager.data if manager.layout_key(name) in keys]
-best = manager.select_best_experiments(log, region, tmax, experiments=parsed)
+parsed = [name for name in results.data if manager.layout_key(name) in keys]
+best = results.select_best_experiments(log, region, tmax, experiments=parsed)
 ```
 
 The experiments are numbered, so we find the ones of our layouts by the key of their layout.
 [`layout_key`][access.profiling.manager.ProfilingManager.layout_key] gives the key of the layout an experiment was
 created with.
 
-[`select_best_experiments`][access.profiling.manager.ProfilingManager.select_best_experiments] keeps the fastest
-experiment for each number of CPUs. Here all the layouts use the same number of CPUs, so `best` contains a single
-name. We pass the list of experiments for two reasons. First, the manager may hold other experiments, which we do
-not want to include. Second, some experiments may not have finished. Note that an experiment without parsed data
-would make the method raise a `KeyError`. We recommend choosing a region that covers the whole run, as we do
-here. If you choose the region of a single component, you get the layout that is best for that component only.
+[`select_best_experiments`][access.profiling.results.ProfilingResults.select_best_experiments] keeps the fastest
+experiment for each number of CPUs. Here all the layouts use the same number of CPUs, so `best` contains a single name.
+We pass the list of experiments for two reasons. First, the manager may hold other experiments, which we do not want to
+include. Second, some experiments may not have finished. Note that an experiment without parsed data would make the
+method raise a `ValueError` that names it. We recommend choosing a region that covers the whole run, as we do here. If
+you choose the region of a single component, you get the layout that is best for that component only.
 
 ## Ranking every layout
 
@@ -158,7 +158,7 @@ What if you want to see all the layouts, from the fastest to the slowest? `selec
 the best one, so we use the data directly:
 
 ```python
-times = {name: float(manager.data[name][log][tmax].sel(region=region).pint.dequantify()) for name in parsed}
+times = {name: float(results.data[name][log][tmax].sel(region=region).pint.dequantify()) for name in parsed}
 ranking = sorted(times, key=times.get)
 for name in ranking:
     print(f"{times[name]:8.1f} s  {name}  {manager.layout_key(name)}")
@@ -169,10 +169,10 @@ This prints the experiments from the fastest to the slowest, with the time each 
 ## Comparing the fastest layouts
 
 To understand why some layouts are faster than others, we can compare them region by region with
-[`plot_bar_chart`][access.profiling.manager.ProfilingManager.plot_bar_chart]. We take the three fastest layouts:
+[`plot_bar_chart`][access.profiling.results.ProfilingResults.plot_bar_chart]. We take the three fastest layouts:
 
 ```python
-fig = manager.plot_bar_chart(groups, tmax, experiments=ranking[:3])
+fig = results.plot_bar_chart(groups, tmax, experiments=ranking[:3])
 ```
 
 <figure markdown="span">

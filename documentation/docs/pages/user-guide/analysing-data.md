@@ -14,19 +14,25 @@ ACCESS-ESM1.6 and ACCESS-OM3 presets, which [ACCESS models](../access/index.md) 
 
 The first step is to read the logs. This is done with
 [`parse_profiling_data`][access.profiling.manager.ProfilingManager.parse_profiling_data], which first updates the
-statuses and then reads the logs of every DONE and ARCHIVED experiment:
+statuses and then reads the logs of every DONE and ARCHIVED experiment. It returns the results, a
+[`ProfilingResults`][access.profiling.results.ProfilingResults], which we keep as `results`:
 
 ```python
-manager.parse_profiling_data()
+results = manager.parse_profiling_data()
 ```
 
-The results are now in `manager.data`, with one dataset for each log of each experiment. Take a look at the logs
-of one experiment, and at the regions of one of them:
+Printing `results` lists the experiments it holds, with their logs and labels. It also lists the experiments that
+were not parsed, with the reason, such as a status of RUNNING. The results do not change once they are made. A
+method that selects experiments or reduces their runs returns new results, and leaves `results` as it was. To read
+the experiments that have finished since, parse them again.
+
+The data is in `results.data`, with one dataset for each log of each experiment. Take a look at the logs of one
+experiment, and at the regions of one of them:
 
 ```python
 name = "exp-0001"
-print(list(manager.data[name]))
-print(manager.data[name]["MOM5"].region.values)
+print(list(results.data[name]))
+print(results.data[name]["MOM5"].region.values)
 ```
 
 This prints the names of the logs, and then the regions of the MOM5 timers. An ACCESS-ESM1.6 experiment has five
@@ -92,15 +98,15 @@ second case the regions are plotted against the cores of the whole job.
 
 ## The plots
 
-The manager can make four kinds of plot. Each of them takes the groups, a metric and, optionally, the
+The results can make four kinds of plot. Each of them takes the groups, a metric and, optionally, the
 experiments to include, and returns the Matplotlib figure:
 
 | Method | What it plots | What it needs | Shown in |
 |---|---|---|---|
-| [`plot_scaling_data`][access.profiling.manager.ProfilingManager.plot_scaling_data] | The speedup and parallel efficiency of every region, against the cores the whole job occupied | A single experiment for every number of CPUs | [Scaling studies](scaling-studies.md) |
-| [`plot_component_scaling_data`][access.profiling.manager.ProfilingManager.plot_component_scaling_data] | Every region against the cores of its own component | The layout of every experiment | [Scaling studies](scaling-studies.md) |
-| [`plot_bar_chart`][access.profiling.manager.ProfilingManager.plot_bar_chart] | The regions side by side, with one bar per experiment | | [Best layout for a budget](best-layout.md), [Comparing experiments](comparing-experiments.md) |
-| [`plot_metric`][access.profiling.manager.ProfilingManager.plot_metric] | Every region against a coordinate of the experiments: one of their labels, or a quantity of their layouts | A number for every experiment, in its labels or its layout | [Configuration choices](configuration-choices.md#plotting-against-a-setting) |
+| [`plot_scaling_data`][access.profiling.results.ProfilingResults.plot_scaling_data] | The speedup and parallel efficiency of every region, against the cores the whole job occupied | A single experiment for every number of CPUs | [Scaling studies](scaling-studies.md) |
+| [`plot_component_scaling_data`][access.profiling.results.ProfilingResults.plot_component_scaling_data] | Every region against the cores of its own component | The layout of every experiment | [Scaling studies](scaling-studies.md) |
+| [`plot_bar_chart`][access.profiling.results.ProfilingResults.plot_bar_chart] | The regions side by side, with one bar per experiment | | [Best layout for a budget](best-layout.md), [Comparing experiments](comparing-experiments.md) |
+| [`plot_metric`][access.profiling.results.ProfilingResults.plot_metric] | Every region against a coordinate of the experiments: one of their labels, or a quantity of their layouts | A number for every experiment, in its labels or its layout | [Configuration choices](configuration-choices.md#plotting-against-a-setting) |
 
 Note that none of them accepts data that still has a `run` dimension.
 
@@ -112,7 +118,7 @@ or to save a figure, use:
 ```python
 from access.profiling.metrics import tmax
 
-fig = manager.plot_bar_chart(groups, tmax, experiments=["<experiment>", "<another experiment>"], show=False)
+fig = results.plot_bar_chart(groups, tmax, experiments=["<experiment>", "<another experiment>"], show=False)
 fig.savefig("bar-chart.png", dpi=150, bbox_inches="tight")
 ```
 
@@ -129,27 +135,26 @@ formats](../access/log-formats.md) lists which metrics each log of the ACCESS mo
 
 ## Working with the data directly
 
-The plots do not cover everything, but the datasets in `manager.data` are ordinary xarray datasets, with units,
+The plots do not cover everything, but the datasets in `results.data` are ordinary xarray datasets, with units,
 so you can compute anything else yourself. For example, this is how much longer the slowest PE spent in each
 region of MOM5, compared with the average PE:
 
 ```python
 from access.profiling.metrics import tavg, tmax
 
-mom5 = manager.data[name]["MOM5"]
+mom5 = results.data[name]["MOM5"]
 imbalance = (mom5[tmax] - mom5[tavg]) / mom5[tavg]
 ```
 
-To work with several experiments at once, use [`gather`][access.profiling.manager.ProfilingManager.gather]. It
+To work with several experiments at once, use [`gather`][access.profiling.results.ProfilingResults.gather]. It
 collects the regions of one group, for every experiment, into a single dataset. Here we also ask for the number of
 cores that each experiment gives MOM5, as a coordinate:
 
 ```python
-from access.profiling import RegionGroup
-from access.profiling import component_cores
+from access.profiling import RegionGroup, component_cores
 
 ocean = RegionGroup("MOM5", ["Total runtime"], relabel={"Total runtime": "MOM5"})
-gathered = manager.gather(ocean, [component_cores("MOM5")])
+gathered = results.gather(ocean, [component_cores("MOM5")])
 print(gathered["MOM5 cores"].values)
 print(gathered[tmax].sel(region="MOM5").pint.dequantify().values)
 ```

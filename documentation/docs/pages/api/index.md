@@ -9,6 +9,7 @@ organised: the general modules first, and then those implementing them for the A
 | [Applications](applications.md) | `application` | What a study profiles, and the logs it writes |
 | [Control sources](control.md) | `control` | Where the control configuration comes from |
 | [Experiments](experiments.md) | `experiment` | Experiments, their statuses and their logs, and configuration choices |
+| [Results](results.md) | `results` | The parsed data of a study, and the selections, tables and plots made from it |
 | [Parsers](parsers.md) | `parser` | Reading profiling logs |
 | [Metrics](metrics.md) | `metrics` | The quantities parsed for each region |
 | [Scaling and plotting](plotting.md) | `scaling`, `plotting_utils` | Speedup, efficiency and the plots |
@@ -37,15 +38,16 @@ from access.profiling.models.esm16 import ESM16_PI_CONTROL, ESM16_PI_CONTROL_SOU
 The presets of the ACCESS models and their control sources are imported from their model modules,
 `access.profiling.models.esm16` and so on, which the [Models](models.md) page lists.
 
-The package also exports the other types a study or an application is written with. From the general layer,
-these are the base class of the managers, `ProfilingManager`, and the experiments and their statuses,
-`ProfilingExperiment` and `ProfilingExperimentStatus`. They also include the configurations a study asks
-experiments for, `ConfigurationChoice`, and the logs and how an application declares them, `ProfilingLog`, `LogSpec`
-and `log_at`. `ExperimentCoordinate`, a quantity of a layout that tables and plots are arranged by, is exported too,
-with `component_cores`, the cores of one component, and `find_component`, which finds a component in a layout.
-`show_versions` prints the versions of the packages a study runs with.
-It also exports the application types, the control sources, `ProfilingMetric` and the parsers, and, for the ACCESS
-models, the configuration types, the component types and the CICE partitioning types.
+The package also exports the other types a study or an application is written with. From the general layer, these are
+the base class of the managers, `ProfilingManager`, the experiments and their statuses, `ProfilingExperiment` and
+`ProfilingExperimentStatus`, and the results that parsing returns, `ProfilingResults`, with what they hold of each
+experiment, `ParsedExperiment`. They also include the configurations a study asks experiments for,
+`ConfigurationChoice`, and the logs and how an application declares them, `ProfilingLog`, `LogSpec` and `log_at`.
+`ExperimentCoordinate`, a quantity of a layout that tables and plots are arranged by, is exported too, with
+`component_cores`, the cores of one component, and `find_component`, which finds a component in a layout.
+`show_versions` prints the versions of the packages a study runs with. It also exports the application types, the
+control sources, `ProfilingMetric` and the parsers, and, for the ACCESS models, the configuration types, the component
+types and the CICE partitioning types.
 
 Everything else is imported from the module that defines it. This includes the metrics themselves and the
 functions, such as the scaling functions:

@@ -376,7 +376,7 @@ the CPUs of the larger nest. Next, the manager looks at the job scripts that Cyl
 `log/job/<cycle>/<task>/NN/job`, and takes the smallest `#PBS -l ncpus` request that is large enough for the
 layout. If no job requested that many CPUs, the number of CPUs of the layout is used.
 
-The scaling plot then works as for any other manager, as described in
+The scaling plot then works as for any other study, as described in
 [Scaling studies](../user-guide/scaling-studies.md). Our study has several suites for each number of CPUs, so we
 first keep the best of them with
 [`select_best_experiments`](../user-guide/scaling-studies.md#selecting-the-best-layouts). For example, we plot the
@@ -386,7 +386,7 @@ time that the `atmos_main` task of ACCESS-AM3 took for the first cycle of the ru
 from access.profiling import RegionGroup
 from access.profiling.metrics import tmax
 
-manager.parse_profiling_data()
+results = manager.parse_profiling_data()
 groups = [
     RegionGroup(
         "cylc_tasks",
@@ -395,18 +395,18 @@ groups = [
         relabel={"atmos_main_cycle19820101T0000Z": "UM"},
     )
 ]
-best = manager.select_best_experiments("cylc_tasks", "atmos_main_cycle19820101T0000Z", tmax)
-fig = manager.plot_scaling_data(groups, tmax, experiments=best, xlabel="Cores")
+best = results.select_best_experiments("cylc_tasks", "atmos_main_cycle19820101T0000Z", tmax)
+fig = results.plot_scaling_data(groups, tmax, experiments=best, xlabel="Cores")
 ```
 
-The group names the component of its regions, the UM. The logs of a suite do not say which component they belong
-to, so only the group can say it. The scaling plot does not need it, but the component scaling plot does: it plots
-each region against the cores of its component, which the manager reads from the layout of each suite. Where
-several suites give the UM the same number of cores, it keeps the fastest of them. We plot the same task against
+The group names the component of its regions, the UM. The logs of a suite do not say which component they belong to, so
+only the group can say it. The scaling plot does not need it, but the component scaling plot does: it plots each region
+against the cores of its component, which the manager reads from the layout of each suite when it parses the logs. Where
+several suites give the UM the same number of cores, the plot keeps the fastest of them. We plot the same task against
 the cores of the UM:
 
 ```python
-fig = manager.plot_component_scaling_data(groups, tmax, xlabel="Cores of the UM")
+fig = results.plot_component_scaling_data(groups, tmax, xlabel="Cores of the UM")
 ```
 
 The UM is the only component of ACCESS-AM3, so the two plots differ only where a job asked PBS for more cores than
@@ -420,17 +420,17 @@ them region by region, as in [Comparing experiments](../user-guide/comparing-exp
 
 Tables and plots can also use a quantity of the layout of each suite as a coordinate. To plot the time against the
 cores of the UM, we pass [`component_cores("UM")`][access.profiling.experiment.component_cores] to
-[`plot_metric`][access.profiling.manager.ProfilingManager.plot_metric]:
+[`plot_metric`][access.profiling.results.ProfilingResults.plot_metric]:
 
 ```python
 from access.profiling import component_cores
 
-fig = manager.plot_metric(groups, tmax, component_cores("UM"), xlabel="Cores of the UM")
+fig = results.plot_metric(groups, tmax, component_cores("UM"), xlabel="Cores of the UM")
 ```
 
 The labels of the suites work in the same way: pass the key of a label in place of `component_cores("UM")`.
 [Configuration choices](../user-guide/configuration-choices.md#plotting-against-a-setting) describes this plot, and
-the tables that [`gather`][access.profiling.manager.ProfilingManager.gather] makes from the same coordinates.
+the tables that [`gather`][access.profiling.results.ProfilingResults.gather] makes from the same coordinates.
 
 ## Archiving
 

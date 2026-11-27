@@ -34,14 +34,21 @@ classDiagram
         work_dir
         archive_dir
         experiments
-        data
         generate_scaling_experiments()
         generate_experiments()
         add_experiment_from_directory()
         update_statuses()
         parse_profiling_data()
+    }
+
+    class ProfilingResults {
+        application
+        experiments
+        data
         select_best_experiments()
         select_best_run()
+        aggregate_runs()
+        table()
         plot_scaling_data()
         plot_bar_chart()
     }
@@ -76,13 +83,16 @@ classDiagram
     ProfilingManager --> Application : application
     ProfilingManager --> ControlSource : control
     ProfilingManager --> "*" ProfilingExperiment : experiments
+    ProfilingManager ..> ProfilingResults : parse_profiling_data()
+    ProfilingResults --> "*" ParsedExperiment : experiments
     ProfilingExperiment --> ProfilingExperimentStatus : status
     Application --> "*" LogSpec : logs
     LogSpec --> ProfilingParser : parser
 ```
 
 A manager is generic in the type of application that its workflow engine runs. A control source only says where
-the control is, and does not depend on the workflow engine.
+the control is, and does not depend on the workflow engine. Parsing returns the results, which hold the data of
+each experiment and make the selections, tables and plots. They need no manager to be read, and never change.
 
 ### The implementations for the ACCESS models
 

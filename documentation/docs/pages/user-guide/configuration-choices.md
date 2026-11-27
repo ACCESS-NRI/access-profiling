@@ -309,7 +309,7 @@ finished. We then read the logs and choose the regions to look at, as in
 from access.profiling import RegionGroup
 from access.profiling.metrics import tmax
 
-manager.parse_profiling_data()
+results = manager.parse_profiling_data()
 
 whole = RegionGroup("ESMF", ["[ensemble] RunPhase1"], relabel={"[ensemble] RunPhase1": "Whole model"})
 cice6 = RegionGroup("ESMF", ["[ICE] RunPhase1"], relabel={"[ICE] RunPhase1": "CICE6"})
@@ -322,9 +322,9 @@ To compare the three distributions, we draw a bar chart, as in [Comparing experi
 We select the experiments by their labels, and use the labels to name the bars:
 
 ```python
-distributed = [name for name, experiment in manager.experiments.items() if "distribution" in experiment.labels]
+distributed = [name for name, experiment in results.experiments.items() if "distribution" in experiment.labels]
 
-fig = manager.plot_bar_chart([whole, cice6], tmax, experiments=distributed, label="distribution")
+fig = results.plot_bar_chart([whole, cice6], tmax, experiments=distributed, label="distribution")
 ```
 
 This draws one group of bars for the whole model and one for CICE6, with a bar for each distribution. With
@@ -336,15 +336,15 @@ experiments. To give the bars names of your own instead, use `experiment_relabel
 ## Putting the experiments in a table
 
 The block sizes are numbers, so we can do more with them than name bars.
-[`gather`][access.profiling.manager.ProfilingManager.gather] collects the regions of a group, for several
+[`gather`][access.profiling.results.ProfilingResults.gather] collects the regions of a group, for several
 experiments, into one dataset. The names of the experiments say nothing about them, so we also ask for what tells
 the experiments apart:
 
 ```python
 from access.profiling import component_cores
 
-sized = [name for name, experiment in manager.experiments.items() if "blocks per rank" in experiment.labels]
-gathered = manager.gather(cice6, ["blocks per rank", component_cores("ice")], experiments=sized)
+sized = [name for name, experiment in results.experiments.items() if "blocks per rank" in experiment.labels]
+gathered = results.gather(cice6, ["blocks per rank", component_cores("ice")], experiments=sized)
 ```
 
 What tells the experiments apart is given as a list of coordinates. A coordinate is one of two things:
@@ -366,12 +366,12 @@ for blocks, cores, seconds in zip(times["blocks per rank"].values, times["ice co
 This prints one line for each experiment, with its blocks per rank, the cores of its sea ice and the time that
 CICE6 took.
 
-A table is often easier to read. [`table`][access.profiling.manager.ProfilingManager.table] collects a metric in
+A table is often easier to read. [`table`][access.profiling.results.ProfilingResults.table] collects a metric in
 the same way, and puts it in a pandas `DataFrame`, with a row for each value of one coordinate and a column for
 each value of another:
 
 ```python
-table = manager.table(cice6, tmax, component_cores("ice"), "blocks per rank", experiments=sized)
+table = results.table(cice6, tmax, component_cores("ice"), "blocks per rank", experiments=sized)
 print(table)
 ```
 
@@ -384,20 +384,20 @@ each number of blocks per rank. There are a few things to know about the table:
 - The numbers are in the units of the metric. The table names these units in `table.attrs["units"]`.
 - An empty cell means that no experiment has that pair of values. If two experiments have the same pair, the
   method raises a `ValueError` that names them, since a cell holds one value.
-- Like `gather`, the method takes `runs`, to reduce the runs of each experiment without replacing the parsed data.
-  [Run-to-run variability](run-to-run-variability.md#reducing-the-runs-without-replacing-them) explains this.
+- Like `gather`, the method does not accept data with a `run` dimension. Reduce the runs first, as
+  [Run-to-run variability](run-to-run-variability.md#measuring-the-spread-of-the-runs) explains.
 
 To look at only some of the experiments, pick them out by a value of a coordinate with
-[`select_experiments`][access.profiling.manager.ProfilingManager.select_experiments]. For example, these are the
+[`select_experiments`][access.profiling.results.ProfilingResults.select_experiments]. For example, these are the
 experiments that give the sea ice 24 cores:
 
 ```python
-on_24_cores = manager.select_experiments(component_cores("ice"), 24)
+on_24_cores = results.select_experiments(component_cores("ice"), 24)
 ```
 
 The method returns the names of the experiments, which you can give to a table or a plot as `experiments`. It
-selects from the experiments with parsed data, because those are the ones a table or a plot can read. To select
-from a list of your own instead, give it as `experiments`. An experiment without the label is not selected, since
+selects from all the experiments of the results. To select from a list of your own instead, give it as
+`experiments`. An experiment without the label is not selected, since
 the experiments of a study need not all have the same labels. If none of them has the label, which is what a
 misspelt key gives, the method raises a `ValueError`.
 
@@ -411,16 +411,16 @@ layout_cores = ExperimentCoordinate("layout cores", lambda layout: layout.n_core
 ```
 
 A layout may not have the quantity that a coordinate reads, such as the cores of a component that the layout does
-not hold. The function then has to raise a `ValueError`, and the manager says which experiment the layout belongs
+not hold. The function then has to raise a `ValueError`, and the results say which experiment the layout belongs
 to.
 
 ## Plotting against a setting
 
-[`plot_metric`][access.profiling.manager.ProfilingManager.plot_metric] draws a metric against a coordinate. We plot
+[`plot_metric`][access.profiling.results.ProfilingResults.plot_metric] draws a metric against a coordinate. We plot
 the time of CICE6 against the number of blocks of each rank:
 
 ```python
-fig = manager.plot_metric([cice6], tmax, "blocks per rank", experiments=sized, xlabel="Blocks per rank")
+fig = results.plot_metric([cice6], tmax, "blocks per rank", experiments=sized, xlabel="Blocks per rank")
 ```
 
 <figure markdown="span">
@@ -436,8 +436,8 @@ There are a few things to know about this plot:
 
 - The values of the coordinate must be numbers. If a label holds a string or a boolean, the method raises a
   `ValueError`. Use a bar chart for such a label.
-- If several experiments have the same value of the coordinate, the fastest of them is plotted. The manager
-  names these experiments in an INFO message. An experiment with no value for a region, which is NaN, is passed
+- If several experiments have the same value of the coordinate, the fastest of them is plotted. These experiments
+  are named in an INFO message. An experiment with no value for a region, which is NaN, is passed
   over for that region.
 - With `series`, the experiments are first divided by a second coordinate. Each region then has one line for
   each value of that coordinate.
@@ -446,7 +446,7 @@ For example, a study may run these block sizes on several layouts. This call the
 of cores of the sea ice:
 
 ```python
-fig = manager.plot_metric([cice6], tmax, "blocks per rank", series=component_cores("ice"), experiments=sized)
+fig = results.plot_metric([cice6], tmax, "blocks per rank", series=component_cores("ice"), experiments=sized)
 ```
 
 Each line is labelled with its region and its value of the series, such as `CICE6, ice cores 24`. The series can

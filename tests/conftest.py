@@ -25,6 +25,7 @@ import pytest
 from access.config.parallel_component import ComponentLayout
 from access.config.parallel_domain import DomainDecompositionSpec
 
+from access.profiling.application import Application, LogSpec
 from access.profiling.experiment import find_component
 from access.profiling.parser import ProfilingParser
 from access.profiling.payu_configuration import PayuConfiguration
@@ -84,6 +85,49 @@ def write_suite_conf(directory: Path, variables: dict[str, str], file: str = "ro
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("[jinja2:suite.rc]\n" + "".join(f"{name}={value}\n" for name, value in variables.items()))
     return path
+
+
+class MockApplication(Application):
+    """The application axis these tests do not exercise, with the one member they do.
+
+    What the manager's own tests cover - parsing, archiving, bookkeeping, plotting - takes an application
+    only to read a layout back and to say which component a log belongs to. The rest raises, so a test that
+    reached the layout search by accident would say so.
+
+    Args:
+        layouts (dict[str, ComponentLayout]): What parse_layout reports, keyed by the name of the directory
+            it is asked about. Anything absent reports None, meaning the layout could not be told.
+        log_components (dict[str, str]): The component each log belongs to, keyed by log name.
+    """
+
+    def __init__(self, layouts: dict[str, ComponentLayout] | None = None, log_components: dict[str, str] | None = None):
+        self.layouts = layouts if layouts is not None else {}
+        self.log_components = log_components if log_components is not None else {}
+        self.parse_layout_calls: list[Path] = []
+
+    name = "mock"
+    experiment_prefix = "mock-layout"
+
+    @property
+    def parallel_component(self):
+        raise NotImplementedError
+
+    @property
+    def logs(self):
+        return tuple(
+            LogSpec(name, lambda _: None, mock.Mock(), component=component)
+            for name, component in self.log_components.items()
+        )
+
+    def layout_key(self, layout):
+        raise NotImplementedError
+
+    def config_changes(self, layout):
+        raise NotImplementedError
+
+    def parse_layout(self, output_dir):
+        self.parse_layout_calls.append(output_dir)
+        return self.layouts.get(output_dir.name)
 
 
 def leaf_layout(name: str, n_cores: int) -> ComponentLayout:

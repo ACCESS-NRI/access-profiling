@@ -78,7 +78,7 @@ class ToyAtmosphere(PayuComponent):
         return {"atmosphere/input.nml": {"decomposition_nml": {"nprocx": nx, "nprocy": ny}}}
 ```
 
-A log spec has four parts. The first is the name of the log, which is the name you use in `manager.data` and in a
+A log spec has four parts. The first is the name of the log, which is the name you use in `results.data` and in a
 `RegionGroup`. The second says where to find the file in an output directory. The third is the parser that reads the
 log, and the fourth is the component that the log belongs to. [`log_at`][access.profiling.application.log_at] locates a
 file at a fixed path in the output directory, and
