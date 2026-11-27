@@ -13,9 +13,9 @@ and `wav` - and the mediator, the data components and the sea ice sit under a pa
 cores they take turns on. Those names are the keys of an allocation strategy.
 
 A configuration is put together from the components of `access.profiling.models.components` and of
-`access.profiling.payu_configuration`: CICE6 through the CICE component, and the rest as plain components, since
-ESMF decomposes the data components' meshes over whatever ranks they are given, MOM6 works its own decomposition
-out under AUTO_MASKTABLE and WW3 decomposes its own spectral grid. The arrangement is NUOPC's rather than Payu's,
+`access.profiling.payu_configuration`: CICE6 and MOM6 through their components, and the rest as plain components,
+since ESMF decomposes the data components' meshes over whatever ranks they are given and WW3 decomposes its own
+spectral grid. The arrangement is NUOPC's rather than Payu's,
 so the configuration writes and reads the PE layout itself.
 """
 
@@ -24,23 +24,17 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
 
-from access.config import MOM6InputParser, NUOPCParser
+from access.config import NUOPCParser
 from access.config.parallel_component import ComponentLayout, CoreSharing, ParallelComponent
+from ruamel.yaml.scalarstring import DoubleQuotedScalarString
 
 from access.profiling.application import LogSpec, log_at
 from access.profiling.control import GitControlSource
 from access.profiling.esmf_parser import ESMFSummaryProfilingParser
 from access.profiling.experiment import ConfigurationChoice
-from access.profiling.fms_parser import FMSProfilingParser
 from access.profiling.models.cice import CICEPartitioning
-from access.profiling.models.components import CICEComponent
-from access.profiling.payu_configuration import (
-    PayuComponent,
-    PayuConfiguration,
-    PlainComponent,
-    control_name,
-    payu_model_stdout,
-)
+from access.profiling.models.components import CICEComponent, MOM6Component
+from access.profiling.payu_configuration import PayuComponent, PayuConfiguration, PlainComponent, control_name
 
 logger = logging.getLogger(__name__)
 
@@ -75,26 +69,25 @@ each of its 275 ranks. Every preset chooses its block size from the rank count t
 distribution and the processor shape its control states.
 """
 
-OM3_MOM6: PlainComponent = PlainComponent(
-    name=OM3_OCEAN_NAME,
-    token=OM3_OCEAN_NAME,
-    logs=(
-        LogSpec(
-            "MOM6", payu_model_stdout(), FMSProfilingParser(has_hits=True), component=OM3_OCEAN_NAME, optional=True
-        ),
-    ),
-)
+OM3_MOM6: MOM6Component = MOM6Component(name=OM3_OCEAN_NAME, token=OM3_OCEAN_NAME)
 """MOM6, as every ACCESS-OM3 configuration runs it: decomposing its own grid, and logging its FMS clocks.
 
 MOM6 works its own decomposition out from the ranks it is given, under AUTO_MASKTABLE, so the search chooses its
-cores alone and nothing is written to MOM_input. The log is in the standard output Payu captures, and optional,
-since a run may be configured not to write clocks.
+cores alone, and a generated layout writes AUTO_MASKTABLE into MOM_input and removes any decomposition the control
+pins there.
 """
 
 # The name ESMF gives its summary when ESMF_RUNTIME_PROFILE_OUTPUT is SUMMARY, at the top of the output directory
 # Payu archives a run to. That is where the ACCESS-OM3 25 km scaling study of access-model-scaling (commit 2108c21)
 # read its ESMF timings from. The log is optional, since a run without those settings writes none.
 _ESMF_SUMMARY: LogSpec = LogSpec("ESMF", log_at("ESMF_Profile.summary"), ESMFSummaryProfilingParser(), optional=True)
+
+# What turns that summary on, as config.yaml's env states it. The strings are quoted in the YAML Payu reads, since a
+# bare on would be read as a boolean and not passed to ESMF as the word it expects.
+_ESMF_PROFILING_ENV: dict = {
+    "ESMF_RUNTIME_PROFILE": DoubleQuotedScalarString("on"),
+    "ESMF_RUNTIME_PROFILE_OUTPUT": DoubleQuotedScalarString("SUMMARY"),
+}
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -103,9 +96,9 @@ class OM3Configuration(PayuConfiguration):
 
     The mediator, the data atmosphere and the data runoff are always there, on the range of cores they share with
     the sea ice, and so is the ocean, on a range of its own. MOM6 works its own decomposition out from the ranks
-    it is given, under AUTO_MASKTABLE, so the search chooses its cores alone and config_changes writes no
-    MOM_input: a control that pins a LAYOUT and a MASKTABLE in MOM_input needs them removed, and AUTO_MASKTABLE
-    set, through control_options before a generated ocean core count means anything. Another arrangement - a
+    it is given, under AUTO_MASKTABLE, so the search chooses its cores alone, and config_changes sets
+    AUTO_MASKTABLE in MOM_input and removes any LAYOUT and MASKTABLE a control pins there. Every experiment writes
+    the ESMF profiling summary, which `control_changes` turns on in the control. Another arrangement - a
     pinned MOM6 layout, a data sea ice, a shared realm starting at an offset - is a subclass returning the
     components it wants from `shared` and `concurrent`.
 
@@ -148,8 +141,7 @@ class OM3Configuration(PayuConfiguration):
         `ww3` are the models. The sea ice is read from `ice_in` with the block size the control pins; a study
         choosing the blocks from the rank count, as the presets do, replaces it:
         `replace(sea_ice, block_shape=None, blocks_per_rank_range=OM3_CICE6_BLOCKS_PER_RANK_RANGE)`. `MOM_input`
-        is read only to warn: a LAYOUT or a MASKTABLE pinned there without AUTO_MASKTABLE has to be removed, and
-        AUTO_MASKTABLE set, through `control_options` before a generated ocean core count runs.
+        is not read: a decomposition pinned there is removed from every generated layout by `config_changes`.
 
         Args:
             directory (Path): The control directory, as `clone_control` returns it or as an
@@ -177,7 +169,6 @@ class OM3Configuration(PayuConfiguration):
             raise ValueError(f"The ocean of the control at {directory} is {ocn_model!r}, not MOM6.")
         waves = wav_model is not None and not wav_model.startswith("s")
         sea_ice = CICEPartitioning.from_control(directory, "ice_in")
-        _warn_of_a_pinned_ocean_layout(directory)
         return cls(name=control_name(directory, name), sea_ice=sea_ice, waves=waves)
 
     @property
@@ -238,6 +229,15 @@ class OM3Configuration(PayuConfiguration):
         names no realm and has no cores of its own to be read against.
         """
         return (*self._component_logs(self.shared), *self._component_logs(self.concurrent), _ESMF_SUMMARY)
+
+    @property
+    def control_changes(self) -> dict:
+        """Returns the changes every experiment makes to the control: the environment that turns the ESMF summary on.
+
+        The ESMF summary is the one log that times the whole model, and a control writes it only where
+        `config.yaml` sets ESMF_RUNTIME_PROFILE and ESMF_RUNTIME_PROFILE_OUTPUT in its `env`.
+        """
+        return {"config.yaml": {"env": dict(_ESMF_PROFILING_ENV)}}
 
     def _realm_layouts(self, layout: ComponentLayout) -> dict[str, ComponentLayout]:
         """Returns what each realm was given, keyed by realm.
@@ -533,25 +533,6 @@ class OM3Configuration(PayuConfiguration):
         )
 
 
-def _warn_of_a_pinned_ocean_layout(directory: Path) -> None:
-    """Warns when a control's MOM_input pins MOM6's decomposition, which a generated layout cannot use.
-
-    Args:
-        directory (Path): The control directory.
-    """
-    mom_input_path = directory / "MOM_input"
-    if not mom_input_path.is_file():
-        return
-    mom_input = MOM6InputParser().parse(mom_input_path.read_text())
-    pinned = [key for key in ("LAYOUT", "MASKTABLE") if mom_input.get(key) is not None]
-    if pinned and not mom_input.get("AUTO_MASKTABLE"):
-        logger.warning(
-            f"The MOM_input of the control at {directory} pins {' and '.join(pinned)} without AUTO_MASKTABLE: a "
-            "generated ocean core count will not run until they are removed, and AUTO_MASKTABLE set, through "
-            "control_options."
-        )
-
-
 def _om3_leaf(name: str, n_cores: int, core_offset: int = 0) -> ComponentLayout:
     """Returns the layout of one ACCESS-OM3 realm, which runs one thread per rank throughout."""
 
@@ -600,10 +581,9 @@ biogeochemistry and the core counts they were run with, none of which changes ho
 Note what the mask table costs this configuration. Its controls, `OM3_MC_25KM_JRA_RYF_SOURCE` and the other 25 km
 releases, pin MOM6's decomposition in
 MOM_input with an explicit LAYOUT of 72 x 48 and a MASKTABLE naming a file of 1027 masked blocks, and ocn_ntasks is
-the layout's ranks less the masked ones: 2429. This configuration leaves the ocean's decomposition to MOM6, so a
-study has to remove LAYOUT, IO_LAYOUT and MASKTABLE and set AUTO_MASKTABLE through control_options before a
-generated ocean core count means anything, and the released core counts are then the budget the release occupied
-rather than a layout to reproduce.
+the layout's ranks less the masked ones: 2429. This configuration leaves the ocean's decomposition to MOM6, so every
+generated layout removes LAYOUT, IO_LAYOUT and MASKTABLE and sets AUTO_MASKTABLE, and the released core counts are
+the budget the release occupied rather than a layout to reproduce.
 """
 OM3_MC_25KM_CORES: dict[str, int] = {
     OM3_MEDIATOR_NAME: 275,
@@ -679,9 +659,9 @@ OM3_8KM_CICE6: CICEPartitioning = CICEPartitioning(
 OM3_MC_8KM: OM3Configuration = OM3Configuration(name="MC-8km", sea_ice=OM3_8KM_CICE6)
 """ACCESS-OM3 with MOM6 and CICE6 at 8 km: the dev-MC_8km_jra_ryf configuration, as of November 2026.
 
-Its control pins a LAYOUT of 108 x 96 and a MASKTABLE in MOM_input, which a study removes as for `OM3_MC_25KM`.
-Choosing the sea ice's block size on this grid is slow: every candidate block size of a 4320 x 3360 grid is
-weighed for each rank count the search visits.
+Its control pins a LAYOUT of 108 x 96 and a MASKTABLE in MOM_input, which a generated layout removes as for
+`OM3_MC_25KM`. Choosing the sea ice's block size on this grid is slow: every candidate block size of a 4320 x 3360
+grid is weighed for each rank count the search visits.
 """
 OM3_MC_8KM_CORES: dict[str, int] = {
     OM3_MEDIATOR_NAME: 1749,
@@ -704,7 +684,8 @@ OM3_PANAN4KM_CICE6: CICEPartitioning = CICEPartitioning(
 OM3_MC_PANAN4KM: OM3Configuration = OM3Configuration(name="MC-panan4km", sea_ice=OM3_PANAN4KM_CICE6)
 """The regional pan-Antarctic ACCESS-OM3 at 4 km: the dev-MC_panan4km_jra_ryf configuration, as of November 2026.
 
-Its control pins a LAYOUT of 70 x 35 and a MASKTABLE in MOM_input, which a study removes as for `OM3_MC_25KM`.
+Its control pins a LAYOUT of 70 x 35 and a MASKTABLE in MOM_input, which a generated layout removes as for
+`OM3_MC_25KM`.
 """
 OM3_MC_PANAN4KM_CORES: dict[str, int] = {
     OM3_MEDIATOR_NAME: 256,
@@ -718,7 +699,7 @@ OM3_MC_PANAN4KM_ISF: OM3Configuration = replace(OM3_MC_PANAN4KM, name="MC-panan4
 """The pan-Antarctic ACCESS-OM3 at 4 km with ice shelves: dev-MC_panan4km_jra_ryf+isf, as of November 2026.
 
 The same grid and sea ice scheme as `OM3_MC_PANAN4KM`, so the same configuration under another name; its control
-pins a LAYOUT of 84 x 49 and a MASKTABLE in MOM_input, which a study removes as for `OM3_MC_25KM`.
+pins a LAYOUT of 84 x 49 and a MASKTABLE in MOM_input, which a generated layout removes as for `OM3_MC_25KM`.
 """
 OM3_MC_PANAN4KM_ISF_CORES: dict[str, int] = {
     OM3_MEDIATOR_NAME: 364,

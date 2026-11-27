@@ -1,11 +1,11 @@
 # Managing experiments
 
 Once the experiments of a study have been submitted, there are still a few things to do. In this tutorial we check how
-the experiments are going, see which experiment is which, come back to a study in a later session, rerun the
-experiments that failed, and archive and delete experiments. All of this works in the same way for every workflow
-engine. We use the `manager`, `allocations` and `control_options` of [Generating and running
-experiments](experiments.md). The details that are specific to one workflow engine are on its own page: [Experiments
-with Payu](../access/payu.md) and [Cylc Rose suites](../access/cylc-rose-suites.md).
+the experiments are going, see which experiment is which, come back to a study in a later session, rerun the experiments
+that failed, and archive and delete experiments. All of this works in the same way for every workflow engine. We use the
+`manager` and the `allocations` of [Generating and running experiments](experiments.md). The details that are specific
+to one workflow engine are on its own page: [Experiments with Payu](../access/payu.md) and [Cylc Rose
+suites](../access/cylc-rose-suites.md).
 
 The manager tells you what it is doing through Python's `logging` module. By default you only see the warnings.
 To see more, turn on the INFO messages:
@@ -18,17 +18,16 @@ logging.basicConfig(level=logging.INFO)
 
 ## Following the experiments
 
-To see how the experiments are going, call
-[`update_statuses`][access.profiling.manager.ProfilingManager.update_statuses], which checks how each run went.
-The experiments are in `manager.experiments`, by name, so you can then print their statuses:
+To see how the experiments are going, call [`status`][access.profiling.manager.ProfilingManager.status], which
+checks how each run went:
 
 ```python
-manager.update_statuses()
-for name, experiment in manager.experiments.items():
-    print(name, experiment.status.name)
+manager.status()
 ```
 
-This prints the name and the status of every experiment. The status always refers to the latest run:
+This returns a table with one row for each experiment, under its name. The columns are its status, the number of
+CPUs its job occupied where this is known, the key of its layout, and one column for each of its labels. The status
+always refers to the latest run:
 
 | Status | Meaning |
 |---|---|
@@ -61,7 +60,7 @@ exp-0003 esm1p6-layout_piControl_atm_10x5_mom_7x7_ice_3
 ```
 
 The key says how each component divides its cores. The layout itself is also there, as
-`manager.experiments[name].layout`. Printing the manager shows both the experiments and the keys.
+`manager.experiments[name].layout`. The table of `status` and the printed manager show the keys too.
 
 ## What the manager keeps on disk
 
@@ -118,8 +117,8 @@ archive of the archive directory. The statuses are only kept in memory, so the e
 come back with the status NEW, and the manager then checks how their runs went. This is done by `update_statuses`,
 which `run_experiments` and `parse_profiling_data` also call first.
 
-You can also call `generate_scaling_experiments` or `generate_experiments` again with the same arguments. Do not
-worry, nothing is created or submitted twice. The manager recognises the layouts and the configuration choices that
+You can also plan and generate the study again with the same arguments. Do not worry, nothing is created or
+submitted twice. The manager recognises the layouts and the configuration choices that
 already have an experiment from the records, not from the names of the experiments.
 
 Note that a study has one application. The study file records the application of every call, so the manager
@@ -154,27 +153,28 @@ then compare these experiments with each other, and with the ones the manager cr
     Experiments created with an earlier version of the package have no record. Their archives are still found,
     parsed and plotted. Those that are still in the working directory have to be added once, with
     `add_experiment_from_directory`. The manager does not recognise either as the experiment of a layout, so
-    `generate_scaling_experiments` creates their layouts again, under new names.
+    `plan_scaling_experiments` plans their layouts again, under new names.
 
 ## Running failed experiments again
 
 Sometimes experiments fail. Once you know why, fix the problem and create the failed experiments again:
 
 ```python
-manager.generate_scaling_experiments(
+plan = manager.plan_scaling_experiments(
     num_nodes_list=[1, 2, 3, 4, 5, 6, 8],
     cores_per_node=104,
     walltime=lambda num_nodes: 4 * 4 / num_nodes,  # a longer walltime than the first time
     allocations=allocations,
-    control_options=control_options,
     regenerate_failed=True,
 )
+manager.generate(plan)
 manager.run_experiments(retry_failed=True)
 ```
 
-With `regenerate_failed=True`, the failed experiments are updated using the new arguments. The manager first asks the
-workflow engine how each run went, so this also finds the experiments that failed in an earlier session. The experiments
-that are running or that have finished are not touched. Note that an updated experiment keeps the status FAILED until it
+With `regenerate_failed=True`, the plan updates the failed experiments using the new arguments, and its column
+`regenerates` names each of them. The manager first asks the workflow engine how each run went, so this also finds
+the experiments that failed in an earlier session. The experiments that are running or that have finished are not
+touched. Note that an updated experiment keeps the status FAILED until it
 runs again. `run_experiments(retry_failed=True)` then submits the failed experiments, together with any new ones. See
 [Experiments with Payu](../access/payu.md#running-failed-experiments-again) to find out where Payu leaves the outputs of
 a failed run, and how it cleans up before running again. For a Rose suite, see
@@ -185,15 +185,16 @@ that case you only need `run_experiments(retry_failed=True)`.
 
 Note that `regenerate_failed` is only for the experiments of a scaling study. An experiment created from a
 [configuration choice](configuration-choices.md) is what its changes say, so corrected changes are another
-experiment. Delete the failed experiment and create the corrected one with `generate_experiments`.
+experiment. Delete the failed experiment and create the corrected one with `plan_experiments`.
 
 ## Archiving
 
 When an experiment has finished, you can archive it. This keeps its results in a safe place, and lets you find
 them again in a later session.
 [`archive_experiments`][access.profiling.manager.ProfilingManager.archive_experiments] writes every DONE
-experiment to a `<experiment>.tar.gz` file in the archive directory and marks it ARCHIVED. From then on, the
-manager reads the experiment from its archive. Note that the directory of the experiment is not deleted.
+experiment to a `<experiment>.tar.gz` file in the archive directory and marks it ARCHIVED. It returns a table of
+the experiments it archived. From then on, the manager reads the experiment from its archive. Note that the
+directory of the experiment is not deleted.
 
 The archive starts with the record of the experiment, now with its number of CPUs, so the manager reads both
 without extracting the archive. If the number of CPUs cannot be read, the record leaves it `null`, with a warning,
@@ -217,7 +218,7 @@ manager has its own defaults, which you can find on its page: [Payu](../access/p
 ## Deleting experiments
 
 There are two ways of removing experiments.
-[`delete_experiment`][access.profiling.manager.ProfilingManager.delete_experiment] only makes the manager forget
+[`forget_experiment`][access.profiling.manager.ProfilingManager.forget_experiment] only makes the manager forget
 an experiment. It removes the record of the experiment and adds the call to the study file, but
 deletes none of the files of the experiment. Note that the archive of an archived experiment therefore stays, and a
 manager that you create later finds the experiment again from it. On a study that you cannot write to, such as a
@@ -246,8 +247,10 @@ and what they mean:
 |---|---|
 | `No layouts found for N nodes (C cores). Check the bounds and the constraints of the allocation strategy.` | The strategy admits no parallelisation layout at that size. Loosen its bounds or constraints, which [Counting the layouts](experiments.md#counting-the-layouts) shows how to check. |
 | `More than M layouts found for C cores. Only the first M enumerated will be used, ...` | `max_layouts` truncated the search, keeping the first layouts found rather than the best ones. Tighten the strategy instead. |
-| `Experiment <name> already exists for layout <key>. Skipping addition.` | Generation found a layout the manager already has an experiment for. Expected when generating a study again. |
-| `Experiment <name> already exists for this configuration choice. Skipping addition.` | `generate_experiments` found a choice the manager already has an experiment for. Expected when generating a study again. |
+| `Experiment <name> already exists for layout <key>. Skipping addition.` | Planning found a layout the manager already has an experiment for. Expected when planning a study again. |
+| `Experiment <name> already exists for this configuration choice. Skipping addition.` | `plan_experiments` found a choice the manager already has an experiment for. Expected when planning a study again. |
+| `Experiment <name> has been created for this configuration since the plan was made.` | A plan was generated after the study had come to have one of its experiments, for example because the plan was generated twice. That experiment is not created again. |
+| `The plan regenerates experiment <name>, which this study no longer holds. ...` | The experiment was forgotten or deleted after the plan was made. Make the plan again. |
 | `Experiment <name> keeps the labels it has, ...` | A choice the manager already has an experiment for was given with other labels. The experiment keeps its own. |
 | `Two of the configuration choices are the same configuration: ...` | Two choices of one call have the same layout and the same changes. Give each configuration once. |
 | `Both the layout and the configuration choice give a list for <file> > <key>, ...` | A choice with a layout gives a list for a key the application also gives a list for. Leave the list out of the choice. |
@@ -262,7 +265,7 @@ and what they mean:
 | `The number of CPUs of experiment '<name>' is not known: ...` | The number of CPUs could not be read when the experiment was parsed, for the reason given. A selection or a plot that needs it raises this, and the others work. |
 | `The layout of experiment '<name>' could not be read: ...` | The layout could not be read back when the experiment was parsed, for the reason given. A table or a plot that needs it raises this. |
 | `These results hold no experiments: ...` | No experiment had finished when the logs were parsed. The message lists the experiments that were passed over, with their statuses. |
-| `Could not update the working directory '<work_dir>' (...), so experiment '<name>' is forgotten in this session only, ...` | `delete_experiment` could not remove the record, for example because you cannot write to the study. A manager created later finds the experiment again. |
+| `Could not update the working directory '<work_dir>' (...), so experiment '<name>' is forgotten in this session only, ...` | `forget_experiment` could not remove the record, for example because you cannot write to the study. A manager created later finds the experiment again. |
 | `Experiment name '<name>' is not the name of a single directory, ...` | An experiment was added under a name with a `/`, or under `.` or `..`. Its record is kept in a directory of that name in the working directory, so add it under a name without a `/`. |
 | `Experiment name '<name>' is of the form this manager gives the experiments it generates. ...` | An experiment was added under a name such as `exp-0003`. Add it under another name. |
 | `No new experiments to run. Will skip execution.` | Every experiment has been submitted or has finished. Pass `retry_failed=True` to run the failed ones. |

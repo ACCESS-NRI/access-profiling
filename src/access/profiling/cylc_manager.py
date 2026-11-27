@@ -24,6 +24,7 @@ import subprocess
 from contextlib import closing
 from pathlib import Path
 
+import pandas as pd
 from access.config import RoseConfParser
 from access.config.parallel_component import ComponentLayout
 
@@ -258,11 +259,16 @@ class CylcRoseManager(ProfilingManager[RoseSuiteConfiguration]):
             `ExistingDirectoryControlSource`, and otherwise at `<work_dir>/<control.directory>`, `git clone` or
             `rosie checkout` having been run in a terminal, where a credentials prompt can be answered. None (the
             default) is enough to add, read and plot suites, but not to generate any.
+        control_options (dict | None): Changes made to every copy of the control suite before its own, in the shapes
+            `_create_experiments` describes and keyed by file, such as `{"rose-suite.conf": {"jinja2:suite.rc":
+            {"RUNLEN": "'P1D'"}}}`. They are merged over the control changes of the application. None (the default)
+            makes none beyond the application's.
     """
 
-    # The edits `_refuse_plans` worked out last, with the plans, the control options and the control directory they
-    # are of. `_generate` calls `_create_experiments` next with the same plans, which writes these rather than work
-    # them out again, since reading a large Rose configuration takes seconds: 20 for the UM app of ACCESS-AM3.
+    # The edits `_refuse_plans` worked out last, with the plans, the changes made to the control and the control
+    # directory they are of. `_generate` calls `_create_experiments` next with the same plans, which writes these
+    # rather than work them out again, since reading a large Rose configuration takes seconds: 20 for the UM app of
+    # ACCESS-AM3.
     _checked: tuple[list[ExperimentPlan], dict | None, Path, dict[str, dict[str, str]]] | None = None
 
     def _control_directory(self) -> Path:
@@ -296,7 +302,7 @@ class CylcRoseManager(ProfilingManager[RoseSuiteConfiguration]):
         return directory
 
     def _edits(
-        self, control_dir: Path, plans: list[ExperimentPlan], control_options: dict | None
+        self, control_dir: Path, plans: list[ExperimentPlan], control_options: dict
     ) -> dict[str, dict[str, str]]:
         """Returns the text of every file each planned experiment changes, as it is to be written, writing nothing.
 
@@ -309,7 +315,7 @@ class CylcRoseManager(ProfilingManager[RoseSuiteConfiguration]):
         Args:
             control_dir (Path): The directory of the control suite.
             plans (list[ExperimentPlan]): The experiments to create.
-            control_options (dict | None): The changes made to every experiment before its own, or None.
+            control_options (dict): The changes made to every experiment before its own.
 
         Returns:
             dict[str, dict[str, str]]: The text of each file, keyed by experiment and then by the file's path relative
@@ -317,7 +323,7 @@ class CylcRoseManager(ProfilingManager[RoseSuiteConfiguration]):
 
         Raises:
             ValueError: If the application's name cannot begin the name of a suite, if a plan states a walltime and
-                the application no `walltime_variable`, or if a change cannot be made.
+                the application no `walltime_variable` or the plan's changes set it, or if a change cannot be made.
         """
         if _SUITE_NAME.fullmatch(self.application.name) is None:
             raise ValueError(
@@ -329,14 +335,21 @@ class CylcRoseManager(ProfilingManager[RoseSuiteConfiguration]):
         texts: dict[tuple[Path, str], str] = {}
         edits = {}
         for plan in plans:
-            layers = [control_options or {}, plan.changes]
+            layers = [control_options, plan.changes]
             if plan.walltime_hours is not None:
                 if walltime_variable is None:
                     raise ValueError(
                         f"{self.application.name} states its walltime in no variable of {SUITE_CONF}, so a walltime "
-                        "cannot be written for it. Generate the experiments with generate_experiments instead, with "
-                        "the layouts select_layouts returns and the walltime among the changes, in the file the "
-                        "suite states it in."
+                        "cannot be written for it. Plan the experiments with plan_experiments instead, with the "
+                        "layouts select_layouts returns and the walltime among the changes, in the file the suite "
+                        "states it in."
+                    )
+                # A scaling study gives each size its walltime, which would silently replace the one the changes state.
+                if walltime_variable in plan.changes.get(SUITE_CONF, {}).get(SUITE_VARIABLES, {}):
+                    raise ValueError(
+                        f"The changes of a scaling study set {walltime_variable} in {SUITE_CONF}, which the walltime "
+                        "of the plan sets for each size. Give the walltime as the walltime argument of "
+                        "plan_scaling_experiments, and remove it from the changes."
                     )
                 walltime = _walltime_duration(plan.walltime_hours)
                 layers.append({SUITE_CONF: {SUITE_VARIABLES: {walltime_variable: walltime}}})
@@ -361,7 +374,7 @@ class CylcRoseManager(ProfilingManager[RoseSuiteConfiguration]):
             edits[plan.name] = files
         return edits
 
-    def _refuse_plans(self, plans: list[ExperimentPlan], control_options: dict | None = None, **runner_options) -> None:
+    def _refuse_plans(self, plans: list[ExperimentPlan]) -> None:
         """Refuses the planned experiments whose changes could not be written into a copy of the control suite.
 
         Everything `_create_experiments` would write is worked out, and nothing is written, so that a call refused
@@ -369,20 +382,15 @@ class CylcRoseManager(ProfilingManager[RoseSuiteConfiguration]):
 
         Args:
             plans (list[ExperimentPlan]): The experiments about to be created.
-            control_options (dict | None): The changes made to every experiment before its own. None (the default)
-                makes none.
-            **runner_options: Ignored. Accepted so that this stays substitutable for the base method, whose
-                callers may pass options other runners take.
 
         Raises:
             ValueError: For the reasons `_create_experiments` gives.
         """
         control_dir = self._control_directory()
-        self._checked = (plans, control_options, control_dir, self._edits(control_dir, plans, control_options))
+        options = self._control_options()
+        self._checked = (plans, options, control_dir, self._edits(control_dir, plans, options))
 
-    def _create_experiments(
-        self, plans: list[ExperimentPlan], control_options: dict | None = None, **runner_options
-    ) -> dict[str, ProfilingExperiment]:
+    def _create_experiments(self, plans: list[ExperimentPlan]) -> dict[str, ProfilingExperiment]:
         """Creates the planned experiments as copies of the control suite, with their changes written into their files.
 
         A new experiment is a copy of the control suite at `<work_dir>/<experiment>/<suite name>`, as `_suite_name`
@@ -401,16 +409,13 @@ class CylcRoseManager(ProfilingManager[RoseSuiteConfiguration]):
         - any other file takes texts to replace, `{old text: new text}`. Every occurrence is replaced, and a text
           that does not occur is refused.
 
-        The control options are made first, then the plan's changes, and then its walltime, which is written into the
+        The changes made to the control are made first, the control changes of the application with the control
+        options merged over them, then the plan's changes, and then its walltime, which is written into the
         application's `walltime_variable` as an ISO 8601 duration. What `_refuse_plans` worked out for these very
-        plans, with the same control options, is written as it is, and is otherwise worked out here.
+        plans, with the same changes to the control, is written as it is, and is otherwise worked out here.
 
         Args:
             plans (list[ExperimentPlan]): The experiments to create.
-            control_options (dict | None): The changes made to every experiment before its own, in the same shapes.
-                None (the default) makes none.
-            **runner_options: Ignored. Accepted so that this stays substitutable for the base method, whose
-                callers may pass options other runners take.
 
         Returns:
             dict[str, ProfilingExperiment]: The experiments new to this manager, keyed by name, each with its suite
@@ -419,18 +424,20 @@ class CylcRoseManager(ProfilingManager[RoseSuiteConfiguration]):
         Raises:
             ValueError: If this manager has no control, if the control suite is not in its directory, if the
                 application's name cannot begin the name of a suite, if a plan states a walltime and the application
-                no `walltime_variable`, or if a change cannot be made: a file it names is not a file of the suite,
+                no `walltime_variable` or the plan's changes set it, or if a change cannot be made: a file it names is
+                not a file of the suite,
                 or is reached through a symbolic link to a directory, a section it names is not in the file, a value
                 is not one line of text, or a text to replace does not occur.
             OSError: If a copy cannot be made, as where its directory exists already.
         """
         control_dir = self._control_directory()
+        options = self._control_options()
         # Taken once, so that a later call with the same plans, the files having changed since, works them out again.
         checked, self._checked = self._checked, None
-        if checked is not None and checked[0] is plans and checked[1:3] == (control_options, control_dir):
+        if checked is not None and checked[0] is plans and checked[1:3] == (options, control_dir):
             edits = checked[3]
         else:
-            edits = self._edits(control_dir, plans, control_options)
+            edits = self._edits(control_dir, plans, options)
         created = {}
         for plan in plans:
             if plan.regenerating:
@@ -618,7 +625,7 @@ class CylcRoseManager(ProfilingManager[RoseSuiteConfiguration]):
         self._write_record(rose)
         self._log("add_rose_experiment", [rose])
 
-    def run_experiments(self, retry_failed: bool = False) -> None:
+    def run_experiments(self, retry_failed: bool = False) -> pd.DataFrame:
         """Runs Rose Cylc experiments via `rose suite-run` for profiling data generation.
 
         An experiment whose suite failed is run where retry_failed asks for it, with `rose suite-run --new`. This
@@ -630,6 +637,10 @@ class CylcRoseManager(ProfilingManager[RoseSuiteConfiguration]):
         Args:
             retry_failed (bool): Whether to run the experiments whose suites failed as well as the new ones.
                 False (the default) runs only the new ones.
+
+        Returns:
+            pd.DataFrame: The experiments run, one row each, as status() shows them. It has no rows when there was
+                nothing to run.
 
         Raises:
             subprocess.CalledProcessError: If `rose suite-run` fails, as for a failed suite still running, once what
@@ -648,7 +659,7 @@ class CylcRoseManager(ProfilingManager[RoseSuiteConfiguration]):
 
         if not to_run:
             logger.info("No new experiments to run. Will skip execution.")
-            return
+            return self._table([])
 
         for name, exp in to_run.items():
             # The database of a failed run records the task that failed, and a run over it would still read as
@@ -670,6 +681,7 @@ class CylcRoseManager(ProfilingManager[RoseSuiteConfiguration]):
             for line in result.stderr.splitlines():
                 logger.warning(f"[{name}] {line}")
             exp.status = ProfilingExperimentStatus.RUNNING
+        return self._table(list(to_run))
 
     def _delete_experiments(self, names: list[str], dry_run: bool, **kwargs) -> None:
         """Deletes the experiment and run directories of Rose Cylc experiments.
@@ -721,7 +733,7 @@ class CylcRoseManager(ProfilingManager[RoseSuiteConfiguration]):
         exclude_files: list[str] | None = None,
         follow_symlinks: bool = False,
         overwrite: bool = False,
-    ) -> None:
+    ) -> pd.DataFrame:
         """Archives completed experiments to the specified archive path.
 
         Args:
@@ -731,12 +743,15 @@ class CylcRoseManager(ProfilingManager[RoseSuiteConfiguration]):
                 ["*.nc"] if not provided.
             follow_symlinks (bool): Whether to follow symlinks when archiving. Defaults to False.
             overwrite (bool): Whether to overwrite existing archives. Defaults to False.
+
+        Returns:
+            pd.DataFrame: The experiments archived by this call, one row each, as status() shows them.
         """
         if exclude_dirs is None:
             exclude_dirs = [".svn", "share"]
         if exclude_files is None:
             exclude_files = ["*.nc"]
-        super().archive_experiments(
+        return super().archive_experiments(
             exclude_dirs=exclude_dirs,
             exclude_files=exclude_files,
             follow_symlinks=follow_symlinks,

@@ -17,6 +17,7 @@ import re
 import subprocess
 from pathlib import Path
 
+import pandas as pd
 from access.config import YAMLParser
 from experiment_generator.experiment_generator import ExperimentGenerator
 from experiment_runner.experiment_runner import ExperimentRunner
@@ -202,10 +203,11 @@ class PayuManager(ProfilingManager[PayuConfiguration]):
             Payu runs the study's experiments in `<lab_dir>/<model type>-<8 hex digits>`, and keeps their outputs
             there. One directory can hold the laboratories of any number of studies. None (the default) is enough
             to read, plot, archive and delete experiments that already exist, but not to generate any.
+        control_options (dict | None): Changes made to the control before any experiment is branched from it, in
+            the experiment generator's format and keyed by file, such as `{"config.yaml": {"umask": 0o2}}`. They are
+            merged over the control changes of the application, and may not name a `laboratory`, which is the
+            study's own. None (the default) makes none beyond the application's.
     """
-
-    _nruns: int = 1  # Number of repetitions for the Payu experiments.
-    _startfrom_restart: str = "cold"  # Restart option for the Payu experiments.
 
     def __init__(
         self,
@@ -215,8 +217,9 @@ class PayuManager(ProfilingManager[PayuConfiguration]):
         control: ControlSource | None = None,
         *,
         lab_dir: Path | str | None = None,
+        control_options: dict | None = None,
     ):
-        super().__init__(work_dir, archive_dir, application, control)
+        super().__init__(work_dir, archive_dir, application, control, control_options=control_options)
         self.lab_dir = Path(lab_dir) if lab_dir is not None else None
 
     @property
@@ -231,21 +234,15 @@ class PayuManager(ProfilingManager[PayuConfiguration]):
             return None
         return _study_laboratory(self.lab_dir, self.application.model_type, self.work_dir)
 
-    def _engine_record(self, **runner_options) -> dict:
+    def _engine_record(self) -> dict:
         """Returns what Payu adds to the history entry of a call that generated experiments.
-
-        Args:
-            **runner_options: The options the call was given, such as the control options.
 
         Returns:
             dict: The laboratory the experiments run in, which a later session with no `lab_dir` cannot work out,
-                and the options themselves.
+                and the changes made to the control.
         """
         laboratory = self.laboratory
-        return {
-            "laboratory": None if laboratory is None else str(laboratory),
-            **super()._engine_record(**runner_options),
-        }
+        return {"laboratory": None if laboratory is None else str(laboratory), **super()._engine_record()}
 
     @property
     def _repository_directory(self) -> str:
@@ -259,47 +256,6 @@ class PayuManager(ProfilingManager[PayuConfiguration]):
             str: The directory name, relative to the working directory.
         """
         return self.control.directory if self.control is not None else "config"
-
-    @property
-    def nruns(self) -> int:
-        """Returns the number of repetitions for the Payu experiments.
-
-        Returns:
-            int: Number of repetitions.
-        """
-        return self._nruns
-
-    @nruns.setter
-    def nruns(self, value: int) -> None:
-        """Sets the number of repetitions for the Payu experiments.
-
-        Args:
-            value (int): Number of repetitions.
-
-        Raises:
-            ValueError: If value is negative.
-        """
-        if value < 0:
-            raise ValueError("Number of runs must be at least 0.")
-        self._nruns = value
-
-    @property
-    def startfrom_restart(self) -> str:
-        """Returns the restart option for the Payu experiments.
-
-        Returns:
-            str: Restart option.
-        """
-        return self._startfrom_restart
-
-    @startfrom_restart.setter
-    def startfrom_restart(self, value: str) -> None:
-        """Sets the restart option for the Payu experiments.
-
-        Args:
-            value (str): Restart option.
-        """
-        self._startfrom_restart = value
 
     def _perturbation_block(self, plan: ExperimentPlan) -> dict:
         """Returns what the experiment generator is to make of one planned experiment.
@@ -334,21 +290,18 @@ class PayuManager(ProfilingManager[PayuConfiguration]):
         pert_config.update(changes_by_file)
         return pert_config
 
-    def _refuse_plans(self, plans: list[ExperimentPlan], control_options: dict | None = None, **runner_options) -> None:
+    def _refuse_plans(self, plans: list[ExperimentPlan]) -> None:
         """Refuses the planned experiments that could not be created to run in the study's own laboratory.
 
         Args:
             plans (list[ExperimentPlan]): The experiments about to be created. Their changes to `config.yaml` must
-                name neither a laboratory nor an experiment, which `_create_experiments` sets.
-            control_options (dict | None): Options of the control experiment, which must not name a laboratory.
-                None (the default) is none.
-            **runner_options: Ignored. Accepted so that this stays substitutable for the base method, whose
-                callers may pass options other runners take.
+                name neither a laboratory nor an experiment, which `_create_experiments` sets, nor a walltime where
+                the plan has one of its own.
 
         Raises:
             ValueError: If this manager has no `lab_dir`, if the control states no start point, which the generator
-                needs to branch from, if the control options name a laboratory, or if the changes of a plan name a
-                laboratory or an experiment.
+                needs to branch from, if the control options name a laboratory, if the changes of a plan name a
+                laboratory or an experiment, or if they name a walltime and the plan has one of its own.
             RuntimeError: If `PAYU_LAB_PATH` is set in the environment.
         """
         if self.laboratory is None:
@@ -360,24 +313,30 @@ class PayuManager(ProfilingManager[PayuConfiguration]):
         # The base class refuses a manager with no control before planning, so there is one to check here.
         if self.control is not None:
             _refuse_no_start_point(self.control)
-        if control_options is not None and "laboratory" in control_options.get("config.yaml", {}):
+        if "laboratory" in self._control_options().get("config.yaml", {}):
             raise ValueError(
                 "The control options name a Payu laboratory, but each study runs in a laboratory of its own, under "
                 "the manager's lab_dir. Remove 'laboratory' from the control options, and pass the directory to put "
                 "the study's laboratory in as lab_dir."
             )
         for plan in plans:
-            reserved = sorted({"laboratory", "experiment"} & plan.changes.get("config.yaml", {}).keys())
+            config_changes = plan.changes.get("config.yaml", {})
+            reserved = sorted({"laboratory", "experiment"} & config_changes.keys())
             if reserved:
                 raise ValueError(
                     f"The changes of an experiment set {reserved} in config.yaml, which the manager sets itself: "
                     "every experiment of a study runs in the study's laboratory, under its own name. Remove "
                     f"{reserved} from the changes."
                 )
+            # A scaling study gives each size its walltime, which would silently replace the one the changes state.
+            if plan.walltime_hours is not None and "walltime" in config_changes:
+                raise ValueError(
+                    "The changes of a scaling study set the walltime in config.yaml, which the walltime of the plan "
+                    "sets for each size. Give the walltime as the walltime argument of plan_scaling_experiments, and "
+                    "remove it from the changes."
+                )
 
-    def _create_experiments(
-        self, plans: list[ExperimentPlan], control_options: dict | None = None, **runner_options
-    ) -> dict[str, ProfilingExperiment]:
+    def _create_experiments(self, plans: list[ExperimentPlan]) -> dict[str, ProfilingExperiment]:
         """Creates the planned experiments as branches of a Payu control clone.
 
         Every plan becomes one perturbation of the control, and the generator is invoked once with all of
@@ -389,28 +348,25 @@ class PayuManager(ProfilingManager[PayuConfiguration]):
         are in the generator's format: what one branch of a perturbation states, keyed by file. A value that is
         a list is therefore wrapped in another list, the generator reading a plain list as one value for each
         branch, `"REMOVE"` deletes a key, `"PRESERVE"` keeps an item of a list as the control has it, and a
-        string of a Fortran namelist carries its own quotes, as `"'roundrobin'"` does.
+        string of a Fortran namelist carries its own quotes, as `"'roundrobin'"` does. The control is changed
+        first, by the control changes of the application with the study's control options merged over them, and
+        by the study's laboratory.
 
         Args:
             plans (list[ExperimentPlan]): The experiments to create. Their changes to `config.yaml` must name
-                neither a laboratory nor an experiment, which are set here.
-            control_options (dict | None): Options of the control experiment, passed to the experiment
-                generator together with the study's laboratory, which they must not name. None (the default)
-                passes none.
-            **runner_options: Ignored. Accepted so that this stays substitutable for the base method, whose
-                callers may pass options other runners take.
+                neither a laboratory nor an experiment, which are set here, nor a walltime where the plan has one.
 
         Returns:
             dict[str, ProfilingExperiment]: The experiments new to this manager, keyed by branch name.
 
         Raises:
             ValueError: If this manager has no control or no `lab_dir`, if the control states no start point,
-                which the generator needs to branch from, if the control options name a laboratory, or if the
-                changes of a plan name a laboratory or an experiment.
+                which the generator needs to branch from, if the control options name a laboratory, if the
+                changes of a plan name a laboratory or an experiment, or if they name a walltime and the plan has one.
             RuntimeError: If `PAYU_LAB_PATH` is set in the environment.
             Exception: Whatever the experiment generator raises, unchanged.
         """
-        # Bound once, and checked before anything is read off it. generate_scaling_experiments refuses a
+        # Bound once, and checked before anything is read off it. generate refuses a
         # missing control before it ever gets here, but this hook is callable on its own and `control` is a
         # settable property, so the check belongs where the attribute is actually used. For the same reason, what
         # _refuse_plans refuses is refused here again.
@@ -420,9 +376,9 @@ class PayuManager(ProfilingManager[PayuConfiguration]):
                 "Cannot create experiments without a control: every experiment is a branch of one, so there "
                 "is nothing to clone. Pass a ControlSource to this manager."
             )
-        self._refuse_plans(plans, control_options)
+        self._refuse_plans(plans)
         laboratory = self.laboratory
-        control_options = control_options if control_options is not None else {}
+        control_options = self._control_options()
         config_options = control_options.get("config.yaml", {})
         # Payu runs every experiment in a laboratory, and with PAYU_LAB_PATH unset, as _refuse_plans requires, every
         # Payu step reads it from config.yaml, on the login node and in the PBS job. The default,
@@ -431,7 +387,7 @@ class PayuManager(ProfilingManager[PayuConfiguration]):
         # experiment another study already ran, and a hard sweep would delete another study's runs. The generator's
         # and the runner's lab_path reaches Payu only while it checks a branch out, and the runner's `payu run`
         # passes no laboratory, so PAYU_LAB_PATH never reaches the PBS job. The laboratory is therefore written into
-        # the control, which every experiment branches from. The caller's dict is left as it is.
+        # the control, which every experiment branches from. The manager's options are left as they are.
         control_options = {**control_options, "config.yaml": {**config_options, "laboratory": str(laboratory)}}
         generator_config = _generator_config(
             self.application.model_type,
@@ -505,7 +461,9 @@ class PayuManager(ProfilingManager[PayuConfiguration]):
         logger.info(f"Experiment '{branch}' failed with output already archived. Sweeping it to run it again.")
         subprocess.run(["payu", "sweep", "--hard"], cwd=path, check=True, capture_output=True, text=True)
 
-    def run_experiments(self, retry_failed: bool = False) -> None:
+    def run_experiments(
+        self, retry_failed: bool = False, nruns: int = 1, startfrom_restart: str = "cold"
+    ) -> pd.DataFrame:
         """Runs Payu experiments for profiling data generation.
 
         Every experiment this manager holds as NEW is submitted, and only those that the runner returned
@@ -515,8 +473,8 @@ class PayuManager(ProfilingManager[PayuConfiguration]):
         to nruns rather than starting it afresh.
 
         An experiment that failed is submitted too where retry_failed asks for it, which is what runs it
-        again after whatever went wrong has been put right - by hand on its branch, or by
-        generate_scaling_experiments(regenerate_failed=True), whose corrections the runner brings into the
+        again after whatever went wrong has been put right - by hand on its branch, or by generating the plan of
+        plan_scaling_experiments(regenerate_failed=True), whose corrections the runner brings into the
         run directory when it submits. One that failed having already archived output is swept first, since
         the runner counts what is archived against the runs asked for and would otherwise submit nothing
         while this method went on to call the experiment running.
@@ -524,13 +482,25 @@ class PayuManager(ProfilingManager[PayuConfiguration]):
         Args:
             retry_failed (bool): Whether to submit the experiments whose runs failed as well as the new
                 ones. False (the default) submits only the new ones.
+            nruns (int): How many runs each experiment is to have, counting those it has archived already. Several
+                runs of one experiment measure how much its timings vary from run to run. Defaults to 1.
+            startfrom_restart (str): What every experiment submitted starts from, in experiment-runner's words:
+                "cold" (the default) for the initial conditions of the control, and `"<experiment>/restart<NNN>"` for
+                a restart that experiment archived, which each one submitted then links to.
+
+        Returns:
+            pd.DataFrame: The experiments submitted, one row each, as status() shows them. It has no rows when there
+                was nothing to submit.
 
         Raises:
+            ValueError: If nruns is negative. Nothing is submitted when it is.
             RuntimeError: If `PAYU_LAB_PATH` is set in the environment. Nothing is submitted when it is.
             Exception: Whatever the experiment runner raises, unchanged. No status is advanced when it does.
             subprocess.CalledProcessError: If Payu could not sweep an experiment being run again. Nothing is
                 submitted and no status is advanced when it does.
         """
+        if nruns < 0:
+            raise ValueError(f"The number of runs must be at least 0, not {nruns}.")
         _refuse_payu_lab_path()
 
         # An experiment is only new as far as this manager knows: a status does not outlive the session, so
@@ -538,8 +508,8 @@ class PayuManager(ProfilingManager[PayuConfiguration]):
         self.update_statuses()
 
         # No keep_uuid: it would have every clone reuse one experiment_uuid, so each run's metadata.yaml
-        # would claim to be the same experiment as all the others. Each experiment is named outright in
-        # generate_scaling_experiments, so nothing here depends on the uuid to tell the runs apart.
+        # would claim to be the same experiment as all the others. Each experiment is named outright when it is
+        # generated, so nothing here depends on the uuid to tell the runs apart.
         runner_config = {
             "test_path": self.work_dir,
             "repository_directory": self._repository_directory,
@@ -558,12 +528,12 @@ class PayuManager(ProfilingManager[PayuConfiguration]):
             if exp.status == ProfilingExperimentStatus.FAILED and self._archived_output(exp.path):
                 self._sweep_for_resubmission(branch, exp.path)
             runner_config["running_branches"].append(branch)
-            runner_config["nruns"].append(self.nruns)
-            runner_config["startfrom_restart"].append(self.startfrom_restart)
+            runner_config["nruns"].append(nruns)
+            runner_config["startfrom_restart"].append(startfrom_restart)
 
         if not runner_config["running_branches"]:
             logger.info("No new experiments to run. Will skip execution.")
-            return
+            return self._table([])
 
         ExperimentRunner(runner_config).run()
 
@@ -575,6 +545,7 @@ class PayuManager(ProfilingManager[PayuConfiguration]):
         # leaves it be and this method would never offer it again.
         for branch in runner_config["running_branches"]:
             self.experiments[branch].status = ProfilingExperimentStatus.RUNNING
+        return self._table(runner_config["running_branches"])
 
     def delete_experiments(  # pyright: ignore[reportIncompatibleMethodOverride]
         self,
@@ -670,7 +641,7 @@ class PayuManager(ProfilingManager[PayuConfiguration]):
         exclude_files: list[str] | None = None,
         follow_symlinks: bool = True,
         overwrite: bool = False,
-    ) -> None:
+    ) -> pd.DataFrame:
         """Archives completed experiments to the specified archive path.
 
         Args:
@@ -680,12 +651,15 @@ class PayuManager(ProfilingManager[PayuConfiguration]):
                 ["*.nc"] if not provided.
             follow_symlinks (bool): Whether to follow symlinks when archiving experiments. Defaults to True.
             overwrite (bool): Whether to overwrite existing archives. Defaults to False.
+
+        Returns:
+            pd.DataFrame: The experiments archived by this call, one row each, as status() shows them.
         """
         if exclude_dirs is None:
             exclude_dirs = [".git", "restart*"]
         if exclude_files is None:
             exclude_files = ["*.nc"]
-        super().archive_experiments(
+        return super().archive_experiments(
             exclude_dirs=exclude_dirs, exclude_files=exclude_files, follow_symlinks=follow_symlinks, overwrite=overwrite
         )
 

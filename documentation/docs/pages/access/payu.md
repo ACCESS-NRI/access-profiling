@@ -7,8 +7,8 @@ submits them on NCI's Gadi with [experiment-runner](https://access-experiment-ru
 uses the records that Payu keeps of every run. If you are new to the package, start with
 [Generating and running experiments](../user-guide/experiments.md) and
 [Managing experiments](../user-guide/managing-experiments.md), which go through a whole study with Payu. Here you
-will find the details that are specific to Payu. The examples below are based on the `manager` and the `control_options`
-of the first of those pages.
+will find the details that are specific to Payu. The examples below are based on the `manager` of the first of those
+pages.
 
 ## Before you start
 
@@ -27,13 +27,16 @@ To run a study, you need:
 
 ## Generating the experiments
 
-With Payu, [`generate_scaling_experiments`][access.profiling.manager.ProfilingManager.generate_scaling_experiments]
-and [`generate_experiments`][access.profiling.manager.ProfilingManager.generate_experiments] take one extra option,
-`control_options`. These are changes that are applied to the control before the experiments are created, given for
-each file. They use the format of
+The control options of a study are given to the manager, as its `control_options`. These are changes that are applied
+to the control before the experiments are created, given for each file. They use the format of
 [experiment-generator](https://access-experiment-generator.access-hive.org.au/), where `"REMOVE"` deletes a key.
-[Generating the experiments](../user-guide/experiments.md#generating-the-experiments) shows the options the releases of
+[Creating the manager](../user-guide/experiments.md#creating-the-manager) shows the options the releases of
 ACCESS-ESM1.6 and ACCESS-OM3 need.
+
+The application can also need changes of its own, which it applies to the control whatever the study, as its
+[`control_changes`][access.profiling.application.Application.control_changes]. ACCESS-OM3 turns on the ESMF profiling
+summary in this way, through two environment variables of `config.yaml`. The control options are merged over these
+changes, key by key, so where both change the same setting, the control options win. Printing the manager shows both.
 
 The releases of ACCESS-OM2 need two more options. The first one concerns the ocean. In the releases, MOM5 runs a
 parallelisation layout with a mask. A mask table, which is one of the inputs of the ocean submodel, lists the ranks
@@ -41,7 +44,7 @@ that only hold land, so that they are not run. The table is named after the proc
 refuses to run any other process grid with it. The generated layouts run without a mask, so the table has to be
 removed from the inputs. The `input` list of a submodel is merged item by item. The option therefore gives the inputs
 of the ocean again, without the table, in the position of the ocean among the submodels. In this example, `...`
-stands for those inputs:
+stands for those inputs, and the dictionary is the one you give the manager as `control_options`:
 
 ```python
 control_options = {"config.yaml": {"submodels": ["PRESERVE", {"input": [...]}, "PRESERVE"]}}
@@ -60,10 +63,10 @@ control_options["config.yaml"]["modules"] = {"use": ["/g/data/vk83/modules"], "l
 ```
 
 So what happens when the experiments are created? First, the control is cloned into the working directory, under
-`config`, and the control options are committed there on a branch named `ctrl`, together with the laboratory of the
-study. Then one branch is created from `ctrl` for each experiment. The branch has the name of the experiment, such
-as `exp-0001`. It contains the changes for its parallelisation layout, the changes of its configuration choice, its
-walltime and its name.
+`config`. The control changes of the application and the control options are committed there on a branch named `ctrl`,
+together with the laboratory of the study. Then one branch is created from `ctrl` for each experiment. The branch has
+the name of the experiment, such as `exp-0001`. It contains the changes for its parallelisation layout, the changes of
+its configuration choice, its walltime and its name.
 
 ### The changes of a choice
 
@@ -97,7 +100,9 @@ choice = ConfigurationChoice(
 
 The walltime of an experiment is the `walltime` of its `config.yaml`, as a string. A choice that gives none keeps
 the walltime of the control. A choice cannot set the `laboratory` or the `experiment` of `config.yaml`. The manager
-sets both itself, and raises a `ValueError` if a choice names one of them.
+sets both itself, and raises a `ValueError` if a choice names one of them. The same rules hold for the `changes` of
+[`plan_scaling_experiments`][access.profiling.manager.ProfilingManager.plan_scaling_experiments], which may not set
+the walltime either, since its `walltime` argument gives the walltime of each size.
 
 If the choice has a layout, its changes are merged over the changes that the application makes for the layout.
 Mappings are merged key by key, and where both give a value, the value of the choice is used. If both give a list
@@ -203,23 +208,33 @@ keeps the outputs of each run in the archive of the experiment, under `archive/o
 jobs under `archive/payu_jobs`.
 
 By default, the experiments start from the initial conditions of the control. It is also possible to start them
-from the restart files of another experiment. To do this, set `startfrom_restart` to
-`"<experiment>/restartNNN"` before running them. Its default value is `"cold"`.
+from the restart files of another experiment. To do this, run them with `startfrom_restart` set to
+`"<experiment>/restartNNN"`. Its default value is `"cold"`:
+
+```python
+manager.run_experiments(startfrom_restart="exp-0001/restart000")
+```
 
 ### Running an experiment several times
 
-You can run each experiment more than once by setting
-[`nruns`][access.profiling.payu_manager.PayuManager.nruns], which is 1 by default. The runs that are still missing
-are submitted together, as one `payu run -n <runs>`. By default, Payu runs them one after the other, and each run
-continues the simulation from the restart files of the previous one. This means that the runs simulate consecutive
-periods of the same length. They are not exactly the same simulation.
+You can run each experiment more than once with the `nruns` argument of `run_experiments`, which is 1 by default.
+It counts the runs that the experiment has archived already, so asking for 3 runs of an experiment that has one
+submits the two that are missing:
+
+```python
+manager.run_experiments(nruns=3)
+```
+
+The runs that are still missing are submitted together, as one `payu run -n <runs>`. By default, Payu runs them one
+after the other, and each run continues the simulation from the restart files of the previous one. This means that the
+runs simulate consecutive periods of the same length. They are not exactly the same simulation.
 
 If you want all the runs to time exactly the same simulation, use the `repeat` option of Payu. Every run then
 starts from the same initial conditions as the first one. This is a setting of `config.yaml`, so it goes in the
-control options. To turn it on:
+control options that you give the manager. To turn it on:
 
 ```python
-control_options["config.yaml"]["repeat"] = True
+control_options = {"config.yaml": {"repeat": True}}
 ```
 
 Note that a repeat run does not keep restart files. Its outputs are still numbered `output000`, `output001` and so
@@ -227,7 +242,7 @@ on.
 
 !!! warning "Set `repeat` when the study is first generated"
     Changing the control options later has no effect on the experiments that already exist. You therefore have
-    to set `repeat` the first time you create the study. Payu also refuses to start a repeat run if there are
+    to set `repeat` the first time you generate the study. Payu also refuses to start a repeat run if there are
     archived restart files, so keep `startfrom_restart` at its default value, `"cold"`.
 
 The first run of a model is often not like the ones that follow. For example, a model that starts without sea ice
@@ -236,8 +251,7 @@ once to spin the model up, and start every repeat from the restart files of that
 setting of `config.yaml`, which names a directory of restart files outside the archive of the experiment:
 
 ```python
-control_options["config.yaml"]["repeat"] = True
-control_options["config.yaml"]["restart"] = "/scratch/tm70/spinup/archive/restart000"
+control_options = {"config.yaml": {"repeat": True, "restart": "/scratch/tm70/spinup/archive/restart000"}}
 ```
 
 The path is only an example, so adapt it to the restart files of your own spin-up run. Every run of every experiment
@@ -269,8 +283,8 @@ stays RUNNING.
 
 In a later session, the manager finds your experiments again from their records, as described in
 [Managing experiments](../user-guide/managing-experiments.md#picking-a-study-up-in-a-later-session). You can also
-create the study again with the same arguments. This is safe: the layouts that already have an experiment are
-skipped, so the generator is not called for them.
+plan and generate the study again with the same arguments. This is safe: the layouts that already have an experiment
+are skipped, so the generator is not called for them.
 
 ## Running failed experiments again
 
@@ -319,3 +333,4 @@ These are the messages of Payu and of experiment-runner you may see, and what th
 | `PAYU_LAB_PATH is set, to '...'. ...` | Payu would run the experiments in another laboratory than the one the manager reads. Unset the variable, for example with `del os.environ["PAYU_LAB_PATH"]`, and try again. |
 | `The control options name a Payu laboratory, ...` | The laboratory of a study is the manager's to choose. Remove `laboratory` from the control options, and give the manager the directory that is to hold it as `lab_dir`. |
 | `The changes of an experiment set ['laboratory'] in config.yaml, which the manager sets itself: ...` | A configuration choice names the `laboratory` or the `experiment` of `config.yaml`. Remove it from the changes of the choice. |
+| `The changes of a scaling study set the walltime in config.yaml, ...` | The `changes` of `plan_scaling_experiments` set the walltime, which its `walltime` argument gives. Remove it from the changes. |

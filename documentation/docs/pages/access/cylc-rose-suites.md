@@ -10,9 +10,9 @@ see [Other suites](#other-suites).
 ## What is supported
 
 With [`CylcRoseManager`][access.profiling.cylc_manager.CylcRoseManager] you can generate experiments, run them, read
-their logs, plot and compare them, and archive and delete them. Both ways of generating experiments work:
-[`generate_scaling_experiments`][access.profiling.manager.ProfilingManager.generate_scaling_experiments] and
-[`generate_experiments`][access.profiling.manager.ProfilingManager.generate_experiments]. A suite that failed can be
+their logs, plot and compare them, and archive and delete them. Both ways of planning experiments work:
+[`plan_scaling_experiments`][access.profiling.manager.ProfilingManager.plan_scaling_experiments] and
+[`plan_experiments`][access.profiling.manager.ProfilingManager.plan_experiments]. A suite that failed can be
 created again with corrected changes, and run again from the beginning. The package can search for the layouts of
 ACCESS-AM3 and ACCESS-rAM3. It also reads the layout of each suite from its configuration. This means that the
 component scaling plot works, and that tables and plots can use a quantity of the layout as a coordinate.
@@ -95,7 +95,8 @@ Nothing is fetched: the suite has to be on disk already.
 
 ## Creating the manager
 
-The manager is created like any other manager, with the configuration of the suite and its control:
+The manager is created like any other manager, with the configuration of the suite, its control, and the control
+options of the study:
 
 ```python
 from access.profiling import CylcRoseManager
@@ -106,11 +107,25 @@ manager = CylcRoseManager(
     archive_dir=Path("/g/data/tm70/model_scaling/ACCESS-AM3/release-n96e-3.0"),
     application=AM3_N96E,
     control=AM3_N96E_SOURCE,
+    control_options={
+        "rose-suite.conf": {
+            "jinja2:suite.rc": {
+                "STORAGE_PROJECT": "'tm70'",
+                "COMPUTE_PROJECT": "'tm70'",
+                "EXPT_RUNLEN": "'P1M'",
+            },
+        },
+        "site/nci_gadi.rc": {"per_cpu=2": "per_cpu=4"},
+    },
 )
 ```
 
-As before, adapt the working directory and the archive directory to your own setup. The control tells the manager
-where the control suite is. For a [`GitControlSource`][access.profiling.control.GitControlSource], such as
+As before, adapt the working directory and the archive directory to your own setup, and replace `tm70` with your own
+project. A study usually changes a few things in every suite, such as the project that the jobs are charged to and
+the length of the run. These changes are the control options, and are made to every copy before its own changes.
+The change to `site/nci_gadi.rc` raises the memory that each job asks for per CPU.
+[The changes of an experiment](#the-changes-of-an-experiment) describes what you can give. The control tells the
+manager where the control suite is. For a [`GitControlSource`][access.profiling.control.GitControlSource], such as
 `AM3_N96E_SOURCE`, this is its `directory` in the working directory, `config` by default. Its repository and its
 release are only kept as a record of what the study was based on: nothing is cloned.
 
@@ -168,30 +183,19 @@ since its preset does not state the grid of its UM.
 
 ## Generating the experiments
 
-We now generate the experiments of a scaling study on 3, 6 and 12 nodes of 48 cores, with
-[`generate_scaling_experiments`][access.profiling.manager.ProfilingManager.generate_scaling_experiments]. A study
-usually changes a few other things in every suite too, such as the project that the jobs are charged to and the
-length of the run. These changes go in `control_options`, and are made to every copy before its own changes:
+We now plan the experiments of a scaling study on 3, 6 and 12 nodes of 48 cores, with
+[`plan_scaling_experiments`][access.profiling.manager.ProfilingManager.plan_scaling_experiments], and generate them
+with [`generate`][access.profiling.manager.ProfilingManager.generate], as
+[Generating and running experiments](../user-guide/experiments.md#planning-the-experiments) describes:
 
 ```python
-control_options = {
-    "rose-suite.conf": {
-        "jinja2:suite.rc": {
-            "STORAGE_PROJECT": "'tm70'",
-            "COMPUTE_PROJECT": "'tm70'",
-            "EXPT_RUNLEN": "'P1M'",
-        },
-    },
-    "site/nci_gadi.rc": {"per_cpu=2": "per_cpu=4"},
-}
-manager.generate_scaling_experiments(
-    [3, 6, 12], cores_per_node=48, walltime=2.0, allocations=allocations, control_options=control_options
-)
+plan = manager.plan_scaling_experiments([3, 6, 12], cores_per_node=48, walltime=2.0, allocations=allocations)
+manager.generate(plan)
 print(len(manager.experiments))
 print(manager.experiments["exp-0001"].path)
 ```
 
-Replace `tm70` with your own project. This prints the number of experiments, and where the first of them is:
+This prints the number of experiments, and where the first of them is:
 
 ```
 17
@@ -200,9 +204,8 @@ Replace `tm70` with your own project. This prints the number of experiments, and
 
 There is one experiment for each layout: five of 144 cores, and six each of 288 and 576 cores. Each copy of the
 suite states its process grid in `MAIN_ATM_PROCX` and `MAIN_ATM_PROCY`, and the walltime of two hours in
-`MAIN_CLOCK`, as `'PT2H00M'`. The change to `site/nci_gadi.rc` raises the memory that each job asks for per CPU.
-As for any manager, you can call `generate_scaling_experiments` again safely: the layouts that already have an
-experiment are skipped.
+`MAIN_CLOCK`, as `'PT2H00M'`. As for any manager, you can plan and generate the study again safely: the layouts that
+already have an experiment are skipped.
 
 ### The changes of an experiment
 
@@ -235,7 +238,9 @@ control options for `rose-suite.conf` include this setting:
 
 Adapt the directory to your own project. In any other file, a text is replaced wherever it occurs. The changes are
 made in this order: the control options, then the changes of the experiment, then its walltime. Each change is made
-in the file as the changes before it left it, so where two of them set the same setting, the later one wins.
+in the file as the changes before it left it, so where two of them set the same setting, the later one wins. The
+`changes` of `plan_scaling_experiments` may not set the variable that states the walltime, which its `walltime`
+argument gives.
 
 A file that you change can be a symbolic link, as `rose-suite.conf` is in the suites of ACCESS-AM3. The file is read
 through the link, and the copy has the changed file in place of the link, with the permissions of the file that the
@@ -248,26 +253,33 @@ link to a directory, since writing it would change a file in the directory that 
 [Troubleshooting](#troubleshooting) lists the messages.
 
 ACCESS-rAM3 states the walltime of its jobs in `site/nci-gadi/suite-adds.rc`, and not in a variable of
-`rose-suite.conf`. `generate_scaling_experiments` therefore refuses to write a walltime for it. Instead, you
-generate its experiments with [`generate_experiments`][access.profiling.manager.ProfilingManager.generate_experiments],
-with one [`ConfigurationChoice`][access.profiling.experiment.ConfigurationChoice] for each layout that
-`select_layouts` returns. The walltime is then a text to replace, among the control options. For example, with a
-`manager` created with `RAM3`:
+`rose-suite.conf`. A scaling study of it therefore cannot be given a walltime. Instead, you plan its experiments
+with [`plan_experiments`][access.profiling.manager.ProfilingManager.plan_experiments], with one
+[`ConfigurationChoice`][access.profiling.experiment.ConfigurationChoice] for each layout that `select_layouts`
+returns. The walltime is then a text to replace, among the control options. For example, with the suite checked out
+as in [Getting the control suite](#getting-the-control-suite):
 
 ```python
 from access.config.parallel_allocation_strategies import WholeRangeAllocation
 
-from access.profiling import ConfigurationChoice
+from access.profiling import ConfigurationChoice, ExistingDirectoryControlSource
+from access.profiling.models.um_suites import RAM3
 
+ram3 = CylcRoseManager(
+    work_dir=Path("/scratch/tm70/model_scaling/ACCESS-rAM3"),
+    archive_dir=Path("/g/data/tm70/model_scaling/ACCESS-rAM3"),
+    application=RAM3,
+    control=ExistingDirectoryControlSource(Path.home() / "roses" / "u-by395"),
+    control_options={"site/nci-gadi/suite-adds.rc": {"-l walltime = 3600": "-l walltime = 6:0:0"}},
+)
 allocations = RootAllocation(subcomponents={"UM rs01": WholeRangeAllocation(), "UM rs02": WholeRangeAllocation()})
-layouts = manager.select_layouts(576, allocations=allocations)
-walltime = {"site/nci-gadi/suite-adds.rc": {"-l walltime = 3600": "-l walltime = 6:0:0"}}
-manager.generate_experiments([ConfigurationChoice(layout=layout) for layout in layouts], control_options=walltime)
+layouts = ram3.select_layouts(576, allocations=allocations)
+ram3.generate(ram3.plan_experiments([ConfigurationChoice(layout=layout) for layout in layouts]))
 ```
 
-The walltime is in the control options, and not in the choices, so these experiments are those of their layouts,
-as the experiments of a scaling study are. Calling `generate_scaling_experiments` or `generate_experiments` again
-for the same layouts creates nothing new.
+Adapt the two directories to your own setup. The walltime is in the control options, and not in the choices, so
+these experiments are those of their layouts, as the experiments of a scaling study are. Planning the same layouts
+again, with either method, plans nothing new.
 
 ### Where the experiments are
 
@@ -337,14 +349,10 @@ failed experiments again, as
 example, we give every suite twice as long:
 
 ```python
-manager.generate_scaling_experiments(
-    [3, 6, 12],
-    cores_per_node=48,
-    walltime=4.0,
-    allocations=allocations,
-    control_options=control_options,
-    regenerate_failed=True,
+plan = manager.plan_scaling_experiments(
+    [3, 6, 12], cores_per_node=48, walltime=4.0, allocations=allocations, regenerate_failed=True
 )
+manager.generate(plan)
 manager.run_experiments(retry_failed=True)
 ```
 
@@ -407,8 +415,8 @@ For example, a process grid of 16 by 16 puts 256 cores to work, which are not a 
 48 or 104 cores. A job of that suite that asked for whole nodes therefore asked for more.
 
 You can also compare suites that differ in something other than their layout, such as their OpenMP threads or
-their I/O server. Generate them with `generate_experiments`, with one configuration choice for each, and compare
-them region by region, as in [Comparing experiments](../user-guide/comparing-experiments.md).
+their I/O server. Plan them with `plan_experiments`, with one configuration choice for each, generate the plan, and
+compare them region by region, as in [Comparing experiments](../user-guide/comparing-experiments.md).
 
 Tables and plots can also use a quantity of the layout of each suite as a coordinate. To plot the time against the
 cores of the UM, we pass [`component_cores("UM")`][access.profiling.experiment.component_cores] to
@@ -475,7 +483,8 @@ These are the messages you may see when you generate and run the experiments of 
 | Message | What it means |
 |---|---|
 | `The control suite is not in ...: there is no rose-suite.conf there. ...` | The manager has no suite to copy. Check the suite out into the directory that the message names, and try again. |
-| `... states its walltime in no variable of rose-suite.conf, ...` | The suite states its walltime in another file, as ACCESS-rAM3 does. Generate its experiments with `generate_experiments`, as in [The changes of an experiment](#the-changes-of-an-experiment). |
+| `... states its walltime in no variable of rose-suite.conf, ...` | The suite states its walltime in another file, as ACCESS-rAM3 does. Plan its experiments with `plan_experiments`, as in [The changes of an experiment](#the-changes-of-an-experiment). |
+| `The changes of a scaling study set <variable> in rose-suite.conf, ...` | The `changes` of `plan_scaling_experiments` set the variable that states the walltime, which its `walltime` argument gives. Remove it from the changes. |
 | `... has no section [...] in use, ...` | The file has no such section, or ignores it. Check the name of the section in the file. |
 | `The changes to ... replace '...', which does not occur in it. ...` | The control writes the text in another way, or an earlier change has replaced it already. Copy the text from the file. |
 | `The changes set ... to ..., which is not a string. ...` | A value of a Rose configuration is given as a number. Give it as a string, as the file is to state it. |

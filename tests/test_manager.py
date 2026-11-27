@@ -46,6 +46,7 @@ class MockProfilingManager(ProfilingManager[MockApplication]):
         work_dir (Path): The working directory. A test that generates, adds or deletes experiments gives a real
             one, since the manager writes their records and the study file into it.
         archive_dir (Path): The archive directory.
+        control_options (dict | None): The study's own changes to the control.
     """
 
     def __init__(
@@ -55,8 +56,9 @@ class MockProfilingManager(ProfilingManager[MockApplication]):
         datasets: list[dict[str, xr.Dataset]] | None = None,
         work_dir: Path = Path("/fake/work_dir"),
         archive_dir: Path = Path("/fake/archive_dir"),
+        control_options: dict | None = None,
     ):
-        super().__init__(work_dir, archive_dir, MockApplication())
+        super().__init__(work_dir, archive_dir, MockApplication(), control_options=control_options)
 
         # Pre-generate experiments
         for path in paths:
@@ -105,7 +107,7 @@ class MockProfilingManager(ProfilingManager[MockApplication]):
     def run_experiments(self, retry_failed=False):
         """Nothing to run: these tests drive the experiments' statuses themselves."""
 
-    def _create_experiments(self, plans, **runner_options):
+    def _create_experiments(self, plans):
         """Record what generation decided, and register everything new."""
         self._created_plans.append(plans)
         return {
@@ -203,6 +205,78 @@ def test_repr_names_the_control_the_study_perturbs():
         'work_dir': ProfilingExperiment(path=PosixPath('/fake/work_dir'), status=DONE)
 """
     assert repr(manager) == expected
+
+
+class TestControlChanges:
+    """What the application needs changed in the control, with the study's own options merged over it."""
+
+    NEEDED = {"config.yaml": {"env": {"PROFILE": "on", "OUTPUT": "SUMMARY"}, "queue": "normal"}}
+
+    @pytest.fixture
+    def needing(self):
+        with mock.patch.object(
+            MockApplication, "control_changes", new_callable=mock.PropertyMock, return_value=self.NEEDED
+        ):
+            yield
+
+    def test_the_study_wins_where_both_change_a_setting(self, needing, tmp_path):
+        options = {"config.yaml": {"env": {"OUTPUT": "BINARY"}, "umask": 18}}
+        manager = MockProfilingManager([], work_dir=tmp_path, control_options=options)
+
+        assert manager._control_options() == {
+            "config.yaml": {"env": {"PROFILE": "on", "OUTPUT": "BINARY"}, "queue": "normal", "umask": 18}
+        }
+        assert manager._engine_record() == {"control_options": manager._control_options()}
+        assert options == {"config.yaml": {"env": {"OUTPUT": "BINARY"}, "umask": 18}}, "and changes neither"
+        assert self.NEEDED["config.yaml"]["env"] == {"PROFILE": "on", "OUTPUT": "SUMMARY"}
+
+    def test_two_lists_for_one_setting_are_refused(self, tmp_path):
+        manager = MockProfilingManager([], work_dir=tmp_path, control_options={"config.yaml": {"modules": [["load"]]}})
+
+        with (
+            mock.patch.object(
+                MockApplication,
+                "control_changes",
+                new_callable=mock.PropertyMock,
+                return_value={"config.yaml": {"modules": [["use"]]}},
+            ),
+            pytest.raises(ValueError, match="the control changes of the application and the control options"),
+        ):
+            manager._control_options()
+
+    def test_the_manager_keeps_a_copy_of_the_options_it_is_given(self, tmp_path):
+        """A notebook may go on editing the dictionary, which then does not change what the study generates."""
+        options = {"config.yaml": {"umask": 18}}
+        manager = MockProfilingManager([], work_dir=tmp_path, control_options=options)
+
+        options["config.yaml"]["umask"] = 0
+
+        assert manager.control_options == {"config.yaml": {"umask": 18}}
+
+    def test_the_manager_says_both(self, needing):
+        """What the application adds is not in the notebook that made the manager, so the manager says it."""
+        manager = MockProfilingManager([], control_options={"config.yaml": {"umask": 18}})
+
+        lines = repr(manager).splitlines()
+
+        assert f"    Control changes of the application: {self.NEEDED}" in lines
+        assert "    Control options: {'config.yaml': {'umask': 18}}" in lines
+
+
+def test_status_asks_the_engine_and_shows_the_labels():
+    """A status does not outlive the session, so the table of them is read afresh, and says what the names do not."""
+    manager = MockProfilingManager([Path("/fake/work_dir/a"), Path("/fake/work_dir/b")], ncpus=[4, 8])
+    manager.experiments["a"].status = ProfilingExperimentStatus.RUNNING
+    manager.experiments["b"].labels = {"dt": 900}
+    manager._mock_status = {"a": ProfilingExperimentStatus.DONE}
+
+    status = manager.status()
+
+    assert list(status.index) == ["a", "b"]
+    assert list(status["status"]) == ["DONE", "DONE"]
+    assert status.loc["b", "dt"] == 900
+    assert list(status.columns) == ["status", "ncpus", "layout", "dt"]
+    assert MockProfilingManager([]).status().empty
 
 
 def test_archive_discovery(tmp_path):
@@ -508,20 +582,20 @@ class TestDirectoriesGivenAsStrings:
         assert found.experiments["added"].path == tmp_path / "work" / "added"
 
 
-def test_delete_experiment(caplog, tmp_path):
-    """Test the delete_experiment method of ProfilingManager."""
+def test_forget_experiment(caplog, tmp_path):
+    """Test the forget_experiment method of ProfilingManager."""
 
     # Setup mock experiments
     exp_paths = [tmp_path / "exp1", tmp_path / "exp2"]
     manager = MockProfilingManager(exp_paths, work_dir=tmp_path)
 
     # Delete an existing experiment
-    manager.delete_experiment("exp1")
+    manager.forget_experiment("exp1")
     assert "exp1" not in manager.experiments, "Experiment 'exp1' should be deleted."
 
     # Attempt to delete a non-existing experiment
     with caplog.at_level(logging.WARNING):
-        manager.delete_experiment("non_existing_exp")
+        manager.forget_experiment("non_existing_exp")
     assert len(caplog.records) == 1
     assert caplog.records[0].levelname == "WARNING"
     assert len(manager.experiments) == 1 and "exp2" in manager.experiments, (
@@ -759,7 +833,7 @@ def test_a_replacement_experiment_does_not_inherit_a_deleted_count(tmp_path):
     manager = MockProfilingManager([Path("2cpu"), Path("1cpu")], ncpus=[2, 1], work_dir=tmp_path)
     assert manager._ncpus("1cpu") == 1
 
-    manager.delete_experiment("1cpu")
+    manager.forget_experiment("1cpu")
 
     # A different experiment that happens to reuse the name, and that ran on more CPUs.
     manager._mock_ncpus["1cpu"] = 8
@@ -1016,7 +1090,7 @@ class TestRecords:
     def test_forgetting_an_experiment_removes_its_record_and_nothing_else(self, tmp_path):
         manager = added(tmp_path)
 
-        manager.delete_experiment("release")
+        manager.forget_experiment("release")
 
         assert not (manager.work_dir / "release" / RECORD_FILENAME).exists()
         assert (manager.work_dir / "release" / "config.yaml").exists(), "the experiment's own files are not touched"
@@ -1030,7 +1104,7 @@ class TestRecords:
             mock.patch.object(Path, "unlink", side_effect=PermissionError("read-only")),
             caplog.at_level(logging.WARNING),
         ):
-            manager.delete_experiment("release")
+            manager.forget_experiment("release")
 
         assert "release" not in manager.experiments
         assert f"Could not update the working directory '{manager.work_dir}' (read-only)" in caplog.text
@@ -1045,7 +1119,7 @@ class TestRecords:
             mock.patch("access.profiling.manager._write_whole", side_effect=OSError("disk full")),
             caplog.at_level(logging.WARNING),
         ):
-            manager.delete_experiment("release")
+            manager.forget_experiment("release")
 
         assert "release" not in manager.experiments
         assert "(disk full), so experiment 'release' is forgotten in this session only" in caplog.text
@@ -1056,7 +1130,7 @@ class TestRecords:
         manager = MockProfilingManager([], work_dir=work_dir)
         manager.add_experiment_from_directory("release", Path("runs/release-1.0"))
 
-        manager.delete_experiment("release")
+        manager.forget_experiment("release")
 
         assert not (work_dir / "release").exists()
         assert (work_dir / "runs" / "release-1.0").is_dir()
@@ -1269,13 +1343,13 @@ class TestStudyFile:
 
     def test_each_call_is_written_into_the_history(self, tmp_path):
         manager = added(tmp_path)
-        manager.delete_experiment("release")
+        manager.forget_experiment("release")
         added(tmp_path / "again").delete_experiments(experiments=["release"])
 
         history = json.loads((manager.work_dir / STUDY_FILENAME).read_text())["history"]
         again = json.loads((tmp_path / "again" / "work" / STUDY_FILENAME).read_text())["history"]
 
-        assert [entry["call"] for entry in history] == ["add_experiment_from_directory", "delete_experiment"]
+        assert [entry["call"] for entry in history] == ["add_experiment_from_directory", "forget_experiment"]
         assert [entry["call"] for entry in again] == ["add_experiment_from_directory", "delete_experiments"]
         assert all(entry["experiments"] == ["release"] for entry in history + again)
 
@@ -1300,7 +1374,7 @@ class TestStudyFile:
         manager = added(tmp_path)
 
         manager.delete_experiments(experiments=["release"], dry_run=True)
-        manager.delete_experiment("not-held")
+        manager.forget_experiment("not-held")
 
         assert len(manager._read_study()["history"]) == 1
 
@@ -1347,7 +1421,7 @@ def choosing(tmp_path):
     return manager
 
 
-class TestGenerateExperiments:
+class TestPlanExperiments:
     """One experiment for each configuration choice, recognised afterwards by what the choice states.
 
     The choices here have no layout, so the application, which raises when it is asked anything, is never
@@ -1357,7 +1431,7 @@ class TestGenerateExperiments:
     def test_each_choice_becomes_an_experiment_numbered_in_order(self, tmp_path):
         manager = choosing(tmp_path)
 
-        manager.generate_experiments([ConfigurationChoice(CARTESIAN), ConfigurationChoice(ROUNDROBIN)])
+        manager.generate(manager.plan_experiments([ConfigurationChoice(CARTESIAN), ConfigurationChoice(ROUNDROBIN)]))
 
         (plans,) = manager._created_plans
         assert [plan.name for plan in plans] == ["exp-0001", "exp-0002"]
@@ -1367,7 +1441,7 @@ class TestGenerateExperiments:
     def test_a_choice_without_a_layout_changes_what_it_states_and_nothing_else(self, tmp_path):
         manager = choosing(tmp_path)
 
-        manager.generate_experiments([ConfigurationChoice(ROUNDROBIN)])
+        manager.generate(manager.plan_experiments([ConfigurationChoice(ROUNDROBIN)]))
 
         ((plan,),) = manager._created_plans
         assert plan.changes == ROUNDROBIN
@@ -1379,7 +1453,9 @@ class TestGenerateExperiments:
     def test_the_record_keeps_the_changes_and_the_labels(self, tmp_path):
         manager = choosing(tmp_path)
 
-        manager.generate_experiments([ConfigurationChoice(ROUNDROBIN, labels={"distribution": "roundrobin"})])
+        manager.generate(
+            manager.plan_experiments([ConfigurationChoice(ROUNDROBIN, labels={"distribution": "roundrobin"})])
+        )
 
         record = json.loads((manager.work_dir / "exp-0001" / RECORD_FILENAME).read_text())
         assert record["changes"] == ROUNDROBIN
@@ -1394,7 +1470,7 @@ class TestGenerateExperiments:
         """
         manager = choosing(tmp_path)
         choice = ConfigurationChoice({"config.yaml": {"walltime": "2:00:00"}}, labels={"grid": [12, 16]})
-        manager.generate_experiments([choice])
+        manager.generate(manager.plan_experiments([choice]))
 
         choice.changes["config.yaml"]["walltime"] = "4:00:00"
         choice.labels["grid"].append(1)
@@ -1402,15 +1478,17 @@ class TestGenerateExperiments:
         experiment = manager.experiments["exp-0001"]
         assert experiment.changes == {"config.yaml": {"walltime": "2:00:00"}}
         assert experiment.labels == {"grid": [12, 16]}
-        manager.generate_experiments([choice])
+        manager.generate(manager.plan_experiments([choice]))
         assert list(manager.experiments) == ["exp-0001", "exp-0002"], "four hours is another configuration"
 
     def test_a_choice_the_study_has_is_skipped(self, tmp_path, caplog):
         manager = choosing(tmp_path)
-        manager.generate_experiments([ConfigurationChoice(CARTESIAN)])
+        manager.generate(manager.plan_experiments([ConfigurationChoice(CARTESIAN)]))
 
         with caplog.at_level(logging.INFO):
-            manager.generate_experiments([ConfigurationChoice(CARTESIAN), ConfigurationChoice(ROUNDROBIN)])
+            manager.generate(
+                manager.plan_experiments([ConfigurationChoice(CARTESIAN), ConfigurationChoice(ROUNDROBIN)])
+            )
 
         assert "Experiment exp-0001 already exists for this configuration choice. Skipping addition." in caplog.text
         assert [[plan.name for plan in plans] for plans in manager._created_plans] == [["exp-0001"], ["exp-0002"]]
@@ -1418,9 +1496,9 @@ class TestGenerateExperiments:
 
     def test_nothing_new_generates_nothing(self, tmp_path, caplog):
         manager = choosing(tmp_path)
-        manager.generate_experiments([ConfigurationChoice(CARTESIAN)])
+        manager.generate(manager.plan_experiments([ConfigurationChoice(CARTESIAN)]))
 
-        manager.generate_experiments([ConfigurationChoice(CARTESIAN)])
+        manager.generate(manager.plan_experiments([ConfigurationChoice(CARTESIAN)]))
 
         assert "No new experiments to generate. Will skip generation." in caplog.text
         assert len(manager._created_plans) == 1
@@ -1428,20 +1506,20 @@ class TestGenerateExperiments:
 
     def test_a_later_manager_recognises_the_choice_from_the_record(self, tmp_path):
         manager = choosing(tmp_path)
-        manager.generate_experiments([ConfigurationChoice(CARTESIAN)])
+        manager.generate(manager.plan_experiments([ConfigurationChoice(CARTESIAN)]))
 
         resumed = later(manager)
         resumed.control = manager.control
-        resumed.generate_experiments([ConfigurationChoice(CARTESIAN), ConfigurationChoice(ROUNDROBIN)])
+        resumed.generate(resumed.plan_experiments([ConfigurationChoice(CARTESIAN), ConfigurationChoice(ROUNDROBIN)]))
 
         ((plan,),) = resumed._created_plans
         assert (plan.name, plan.changes) == ("exp-0002", ROUNDROBIN)
 
     def test_changes_are_the_same_whatever_the_order_of_their_keys(self, tmp_path):
         manager = choosing(tmp_path)
-        manager.generate_experiments([ConfigurationChoice({"a": {"x": 1, "y": 2}, "b": {"z": 3}})])
+        manager.generate(manager.plan_experiments([ConfigurationChoice({"a": {"x": 1, "y": 2}, "b": {"z": 3}})]))
 
-        manager.generate_experiments([ConfigurationChoice({"b": {"z": 3}, "a": {"y": 2, "x": 1}})])
+        manager.generate(manager.plan_experiments([ConfigurationChoice({"b": {"z": 3}, "a": {"y": 2, "x": 1}})]))
 
         assert list(manager.experiments) == ["exp-0001"]
 
@@ -1449,11 +1527,13 @@ class TestGenerateExperiments:
         manager = choosing(tmp_path)
 
         with pytest.raises(ValueError, match="Two of the configuration choices are the same configuration"):
-            manager.generate_experiments(
-                [
-                    ConfigurationChoice(CARTESIAN, labels={"attempt": 1}),
-                    ConfigurationChoice(CARTESIAN, labels={"attempt": 2}),
-                ]
+            manager.generate(
+                manager.plan_experiments(
+                    [
+                        ConfigurationChoice(CARTESIAN, labels={"attempt": 1}),
+                        ConfigurationChoice(CARTESIAN, labels={"attempt": 2}),
+                    ]
+                )
             )
 
         assert manager._created_plans == [] and manager.experiments == {}
@@ -1461,16 +1541,20 @@ class TestGenerateExperiments:
 
     def test_it_is_refused_even_where_the_study_already_has_the_experiment(self, tmp_path):
         manager = choosing(tmp_path)
-        manager.generate_experiments([ConfigurationChoice(CARTESIAN)])
+        manager.generate(manager.plan_experiments([ConfigurationChoice(CARTESIAN)]))
 
         with pytest.raises(ValueError, match="Two of the configuration choices are the same configuration"):
-            manager.generate_experiments([ConfigurationChoice(CARTESIAN), ConfigurationChoice(CARTESIAN)])
+            manager.generate(manager.plan_experiments([ConfigurationChoice(CARTESIAN), ConfigurationChoice(CARTESIAN)]))
 
     def test_a_held_experiment_keeps_its_labels(self, tmp_path, caplog):
         manager = choosing(tmp_path)
-        manager.generate_experiments([ConfigurationChoice(CARTESIAN, labels={"distribution": "cartesian"})])
+        manager.generate(
+            manager.plan_experiments([ConfigurationChoice(CARTESIAN, labels={"distribution": "cartesian"})])
+        )
 
-        manager.generate_experiments([ConfigurationChoice(CARTESIAN, labels={"distribution": "the default"})])
+        manager.generate(
+            manager.plan_experiments([ConfigurationChoice(CARTESIAN, labels={"distribution": "the default"})])
+        )
 
         assert manager.experiments["exp-0001"].labels == {"distribution": "cartesian"}
         assert (
@@ -1480,9 +1564,13 @@ class TestGenerateExperiments:
 
     def test_the_same_labels_again_say_nothing(self, tmp_path, caplog):
         manager = choosing(tmp_path)
-        manager.generate_experiments([ConfigurationChoice(CARTESIAN, labels={"distribution": "cartesian"})])
+        manager.generate(
+            manager.plan_experiments([ConfigurationChoice(CARTESIAN, labels={"distribution": "cartesian"})])
+        )
 
-        manager.generate_experiments([ConfigurationChoice(CARTESIAN, labels={"distribution": "cartesian"})])
+        manager.generate(
+            manager.plan_experiments([ConfigurationChoice(CARTESIAN, labels={"distribution": "cartesian"})])
+        )
 
         assert "keeps the labels" not in caplog.text
 
@@ -1491,20 +1579,23 @@ class TestGenerateExperiments:
         manager = added(tmp_path)
         manager.control = GitControlSource("https://example.com/repo", "commit")
 
-        manager.generate_experiments([ConfigurationChoice()])
+        manager.generate(manager.plan_experiments([ConfigurationChoice()]))
 
         assert list(manager.experiments) == ["release", "exp-0001"]
         assert manager.experiments["exp-0001"].changes == {}
 
     def test_the_history_says_which_method_was_called(self, tmp_path):
-        manager = choosing(tmp_path)
+        manager = MockProfilingManager(
+            [], work_dir=tmp_path / "work", archive_dir=tmp_path / "archive", control_options={"q": {"queue": "x"}}
+        )
+        manager.control = GitControlSource("https://example.com/repo", "commit")
 
-        manager.generate_experiments([ConfigurationChoice(CARTESIAN)], some_option="value")
+        manager.generate(manager.plan_experiments([ConfigurationChoice(CARTESIAN)]))
 
         (entry,) = manager._read_study()["history"]
-        assert entry["call"] == "generate_experiments"
+        assert entry["call"] == "generate(plan_experiments)"
         assert entry["control"] == manager.control.provenance()
-        assert entry["engine"] == {"some_option": "value"}
+        assert entry["engine"] == {"control_options": {"q": {"queue": "x"}}}
         assert entry["experiments"] == ["exp-0001"]
         assert manager._read_study()["last_number"] == 1
 
@@ -1512,7 +1603,7 @@ class TestGenerateExperiments:
         manager = MockProfilingManager([], work_dir=tmp_path / "work", archive_dir=tmp_path / "archive")
 
         with pytest.raises(ValueError, match="Cannot generate experiments without a control"):
-            manager.generate_experiments([ConfigurationChoice(CARTESIAN)])
+            manager.generate(manager.plan_experiments([ConfigurationChoice(CARTESIAN)]))
 
         assert manager._created_plans == []
 
@@ -1523,13 +1614,15 @@ class TestGenerateExperiments:
             mock.patch.object(MockProfilingManager, "_create_experiments", side_effect=RuntimeError("engine")),
             pytest.raises(RuntimeError, match="engine"),
         ):
-            manager.generate_experiments([ConfigurationChoice(CARTESIAN), ConfigurationChoice(ROUNDROBIN)])
+            manager.generate(
+                manager.plan_experiments([ConfigurationChoice(CARTESIAN), ConfigurationChoice(ROUNDROBIN)])
+            )
 
         assert manager.experiments == {}
         assert "none of ['exp-0001', 'exp-0002'] were added to this manager" in caplog.text
         assert not (manager.work_dir / "exp-0001").exists()
 
-        manager.generate_experiments([ConfigurationChoice(CARTESIAN)])
+        manager.generate(manager.plan_experiments([ConfigurationChoice(CARTESIAN)]))
         assert list(manager.experiments) == ["exp-0003"]
 
     def test_what_the_engine_refuses_beforehand_takes_no_number(self, tmp_path, caplog):
@@ -1540,24 +1633,23 @@ class TestGenerateExperiments:
             mock.patch.object(MockProfilingManager, "_refuse_plans", side_effect=ValueError("refused")) as refuse,
             pytest.raises(ValueError, match="refused"),
         ):
-            manager.generate_experiments([ConfigurationChoice(CARTESIAN)], some_option="value")
+            manager.generate(manager.plan_experiments([ConfigurationChoice(CARTESIAN)]))
 
         (plans,) = refuse.call_args.args
         assert [plan.name for plan in plans] == ["exp-0001"], "it is asked about what is about to be created"
-        assert refuse.call_args.kwargs == {"some_option": "value"}
         assert manager._created_plans == [], "the engine is not asked to create what it refused"
         assert not (manager.work_dir / STUDY_FILENAME).exists()
         assert "were added to this manager" not in caplog.text, "nothing may exist that was never started"
 
-        manager.generate_experiments([ConfigurationChoice(CARTESIAN)])
+        manager.generate(manager.plan_experiments([ConfigurationChoice(CARTESIAN)]))
         assert list(manager.experiments) == ["exp-0001"]
 
     def test_the_engine_is_not_asked_about_nothing(self, tmp_path):
         """A call that has nothing left to create is not refused for what creating would have needed."""
         manager = choosing(tmp_path)
-        manager.generate_experiments([ConfigurationChoice(CARTESIAN)])
+        manager.generate(manager.plan_experiments([ConfigurationChoice(CARTESIAN)]))
 
         with mock.patch.object(MockProfilingManager, "_refuse_plans", side_effect=ValueError("refused")) as refuse:
-            manager.generate_experiments([ConfigurationChoice(CARTESIAN)])
+            manager.generate(manager.plan_experiments([ConfigurationChoice(CARTESIAN)]))
 
         refuse.assert_not_called()

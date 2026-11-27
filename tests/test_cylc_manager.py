@@ -718,7 +718,9 @@ class TestGeneratingSuites:
         """Each copy states its layout and the walltime, and runs in `~/cylc-run` under its own name."""
         manager = generating_manager(tmp_path)
 
-        manager.generate_scaling_experiments([1.0], cores_per_node=4, walltime=2.0, allocations=WHOLE_BUDGET)
+        manager.generate(
+            manager.plan_scaling_experiments([1.0], cores_per_node=4, walltime=2.0, allocations=WHOLE_BUDGET)
+        )
 
         assert list(manager.experiments) == ["exp-0001", "exp-0002", "exp-0003"]
         grids = []
@@ -740,7 +742,9 @@ class TestGeneratingSuites:
         manager = generating_manager(tmp_path)
         control = manager.work_dir / "config"
 
-        manager.generate_scaling_experiments([1.0], cores_per_node=4, walltime=2.0, allocations=WHOLE_BUDGET)
+        manager.generate(
+            manager.plan_scaling_experiments([1.0], cores_per_node=4, walltime=2.0, allocations=WHOLE_BUDGET)
+        )
 
         suite = manager.experiments["exp-0001"].path
         assert sorted(path.name for path in suite.iterdir()) == [
@@ -762,8 +766,9 @@ class TestGeneratingSuites:
         manager = generating_manager(tmp_path)
         options = {"rose-suite.conf": {"jinja2:suite.rc": {"PROJECT": "'tm70'"}}}
 
-        manager.generate_scaling_experiments(
-            [1.0], cores_per_node=4, walltime=2.0, allocations=WHOLE_BUDGET, control_options=options
+        manager.control_options = options
+        manager.generate(
+            manager.plan_scaling_experiments([1.0], cores_per_node=4, walltime=2.0, allocations=WHOLE_BUDGET)
         )
 
         record = json.loads((manager.work_dir / "exp-0001" / RECORD_FILENAME).read_text())
@@ -777,13 +782,31 @@ class TestGeneratingSuites:
             "start_point": "release-1.0",
         }
 
+    def test_the_control_changes_of_the_application_are_made_under_the_control_options(self, tmp_path, home):
+        """The control options win where both set a variable."""
+        manager = generating_manager(tmp_path)
+        manager.control_options = {"rose-suite.conf": {"jinja2:suite.rc": {"PROJECT": "'tm70'"}}}
+        needed = {"rose-suite.conf": {"jinja2:suite.rc": {"PROJECT": "'xx00'", "IOS_NPROC": "2"}}}
+
+        with mock.patch.object(
+            RoseSuiteConfiguration, "control_changes", new_callable=mock.PropertyMock, return_value=needed
+        ):
+            manager.generate(manager.plan_experiments([ConfigurationChoice()]))
+
+        settings = read_section(manager.experiments["exp-0001"].path / "rose-suite.conf", "jinja2:suite.rc")
+        assert (settings["PROJECT"], settings["IOS_NPROC"]) == ("'tm70'", "2")
+
     def test_a_later_manager_generates_nothing_twice(self, tmp_path, home, caplog):
         manager = generating_manager(tmp_path)
-        manager.generate_scaling_experiments([1.0], cores_per_node=4, walltime=2.0, allocations=WHOLE_BUDGET)
+        manager.generate(
+            manager.plan_scaling_experiments([1.0], cores_per_node=4, walltime=2.0, allocations=WHOLE_BUDGET)
+        )
 
         later = CylcRoseManager(manager.work_dir, manager.archive_dir, manager.application, control=manager.control)
         with caplog.at_level(logging.WARNING):
-            later.generate_scaling_experiments([1.0], cores_per_node=4, walltime=2.0, allocations=WHOLE_BUDGET)
+            later.generate(
+                later.plan_scaling_experiments([1.0], cores_per_node=4, walltime=2.0, allocations=WHOLE_BUDGET)
+            )
 
         assert list(later.experiments) == ["exp-0001", "exp-0002", "exp-0003"]
         assert "No new experiments to generate" in caplog.text
@@ -809,7 +832,8 @@ class TestGeneratingSuites:
             layout=layout,
         )
 
-        manager.generate_experiments([choice], control_options=options)
+        manager.control_options = options
+        manager.generate(manager.plan_experiments([choice]))
 
         suite = manager.experiments["exp-0001"].path
         assert (suite / "rose-suite.conf").read_text() == (
@@ -831,7 +855,9 @@ class TestGeneratingSuites:
         conf = manager.work_dir / "config/rose-suite.conf"
         conf.write_text(conf.read_text() + "EMPTY=\n")
 
-        manager.generate_experiments([ConfigurationChoice({"rose-suite.conf": {"jinja2:suite.rc": {"EMPTY": "1"}}})])
+        manager.generate(
+            manager.plan_experiments([ConfigurationChoice({"rose-suite.conf": {"jinja2:suite.rc": {"EMPTY": "1"}}})])
+        )
 
         variables = read_section(manager.experiments["exp-0001"].path / "rose-suite.conf", "jinja2:suite.rc")
         assert variables["EMPTY"] == "1"
@@ -845,7 +871,7 @@ class TestGeneratingSuites:
             control=ExistingDirectoryControlSource(control),
         )
 
-        manager.generate_experiments([ConfigurationChoice({"site/gadi.rc": {"3600": "7200"}})])
+        manager.generate(manager.plan_experiments([ConfigurationChoice({"site/gadi.rc": {"3600": "7200"}})]))
 
         suite = manager.experiments["exp-0001"].path
         assert suite.parent == manager.work_dir / "exp-0001"
@@ -866,7 +892,9 @@ class TestChangingAFileNamedByALink:
         (control / "rose-suite.conf").rename(control / "rose-suite.conf_nci_gadi")
         (control / "rose-suite.conf").symlink_to("rose-suite.conf_nci_gadi")
 
-        manager.generate_scaling_experiments([1.0], cores_per_node=4, walltime=2.0, allocations=WHOLE_BUDGET)
+        manager.generate(
+            manager.plan_scaling_experiments([1.0], cores_per_node=4, walltime=2.0, allocations=WHOLE_BUDGET)
+        )
 
         for experiment in manager.experiments.values():
             assert not (experiment.path / "rose-suite.conf").is_symlink()
@@ -891,7 +919,7 @@ class TestChangingAFileNamedByALink:
         link.unlink()
         link.symlink_to(Path("../../shared/gadi.rc") if relative else shared)
 
-        manager.generate_experiments([ConfigurationChoice({"site.rc": {"3600": "7200"}})])
+        manager.generate(manager.plan_experiments([ConfigurationChoice({"site.rc": {"3600": "7200"}})]))
 
         copy = manager.experiments["exp-0001"].path / "site.rc"
         assert not copy.is_symlink()
@@ -912,7 +940,9 @@ class TestTheEditsAreWorkedOutOnce:
         manager = generating_manager(tmp_path)
 
         with mock.patch.object(CylcRoseManager, "_edits", autospec=True, side_effect=CylcRoseManager._edits) as edits:
-            manager.generate_scaling_experiments([1.0], cores_per_node=4, walltime=2.0, allocations=WHOLE_BUDGET)
+            manager.generate(
+                manager.plan_scaling_experiments([1.0], cores_per_node=4, walltime=2.0, allocations=WHOLE_BUDGET)
+            )
 
         assert edits.call_count == 1
         for experiment in manager.experiments.values():
@@ -930,18 +960,18 @@ class TestTheEditsAreWorkedOutOnce:
         """The hook can be called on its own, with what `_refuse_plans` did not check."""
         manager = generating_manager(tmp_path)
         plans = self.plans({"site/gadi.rc": {"3600": "7200"}})
-        options = {"site/gadi.rc": {"per_cpu=2": "per_cpu=4"}}
-        manager._refuse_plans(plans, control_options=options)
+        manager.control_options = {"site/gadi.rc": {"per_cpu=2": "per_cpu=4"}}
+        manager._refuse_plans(plans)
         if differs == "plans":
             plans = self.plans({"site/gadi.rc": {"3600": "1800"}})
         elif differs == "control options":
-            options = None
+            manager.control_options = {}
         else:
             other = write_control(tmp_path / "other")
             (other / "site/gadi.rc").write_text(CONTROL_SITE_RC + "# another control\n")
             manager.control = ExistingDirectoryControlSource(other)
 
-        created = manager._create_experiments(plans, control_options=options)
+        created = manager._create_experiments(plans)
 
         site = (created["exp-0001"].path / "site/gadi.rc").read_text()
         assert all(text in site for text in expected), site
@@ -1015,7 +1045,7 @@ class TestRefusedBeforeANumberIsTaken:
         manager = generating_manager(tmp_path)
 
         with pytest.raises(ValueError, match=match):
-            manager.generate_experiments([ConfigurationChoice(changes)])
+            manager.generate(manager.plan_experiments([ConfigurationChoice(changes)]))
 
         self.assert_nothing_was_written(manager)
 
@@ -1023,9 +1053,8 @@ class TestRefusedBeforeANumberIsTaken:
         manager = generating_manager(tmp_path)
 
         with pytest.raises(ValueError, match="replace 'walltime = 7200', which does not occur"):
-            manager.generate_experiments(
-                [ConfigurationChoice({})], control_options={"site/gadi.rc": {"walltime = 7200": "x"}}
-            )
+            manager.control_options = {"site/gadi.rc": {"walltime = 7200": "x"}}
+            manager.generate(manager.plan_experiments([ConfigurationChoice({})]))
 
         self.assert_nothing_was_written(manager)
 
@@ -1034,10 +1063,8 @@ class TestRefusedBeforeANumberIsTaken:
         manager = generating_manager(tmp_path)
 
         with pytest.raises(ValueError, match="replace '3600', which does not occur"):
-            manager.generate_experiments(
-                [ConfigurationChoice({"site/gadi.rc": {"3600": "7200"}})],
-                control_options={"site/gadi.rc": {"3600": "1800"}},
-            )
+            manager.control_options = {"site/gadi.rc": {"3600": "1800"}}
+            manager.generate(manager.plan_experiments([ConfigurationChoice({"site/gadi.rc": {"3600": "7200"}})]))
 
         self.assert_nothing_was_written(manager)
 
@@ -1051,16 +1078,47 @@ class TestRefusedBeforeANumberIsTaken:
             match=r"The control suite is not in .*/work/config: there is no rose-suite.conf there\. Nothing here "
             r"fetches a suite, so check out git@github.com:ACCESS-NRI/mock-configs.git at release-1.0 into",
         ):
-            manager.generate_experiments([ConfigurationChoice({})])
+            manager.generate(manager.plan_experiments([ConfigurationChoice({})]))
 
         self.assert_nothing_was_written(manager)
 
     def test_a_walltime_the_suite_states_in_no_variable(self, tmp_path, home):
-        """As rAM3 does not: its walltime is a change of the study's own, given with generate_experiments."""
+        """As rAM3 does not: its walltime is a change of the study's own, given with plan_experiments."""
         manager = generating_manager(tmp_path, walltime_variable=None)
 
         with pytest.raises(ValueError, match="states its walltime in no variable of rose-suite.conf"):
-            manager.generate_scaling_experiments([1.0], cores_per_node=4, walltime=2.0, allocations=WHOLE_BUDGET)
+            manager.generate(
+                manager.plan_scaling_experiments([1.0], cores_per_node=4, walltime=2.0, allocations=WHOLE_BUDGET)
+            )
+
+        self.assert_nothing_was_written(manager)
+
+    def test_a_control_change_of_the_application_that_cannot_be_made(self, tmp_path, home):
+        """It is checked with the control options, before a number is taken."""
+        manager = generating_manager(tmp_path)
+        needed = {"site/gadi.rc": {"walltime = 7200": "x"}}
+
+        with (
+            mock.patch.object(
+                RoseSuiteConfiguration, "control_changes", new_callable=mock.PropertyMock, return_value=needed
+            ),
+            pytest.raises(ValueError, match="replace 'walltime = 7200', which does not occur in it"),
+        ):
+            manager.generate(manager.plan_experiments([ConfigurationChoice({})]))
+
+        self.assert_nothing_was_written(manager)
+
+    def test_a_walltime_among_the_changes_of_a_scaling_study(self, tmp_path, home):
+        """The walltime of each size would silently replace it, so it is given once, as the walltime."""
+        manager = generating_manager(tmp_path)
+        changes = {"rose-suite.conf": {"jinja2:suite.rc": {"CLOCK": "'PT1H'"}}}
+
+        with pytest.raises(ValueError, match="The changes of a scaling study set CLOCK in rose-suite.conf"):
+            manager.generate(
+                manager.plan_scaling_experiments(
+                    [1.0], cores_per_node=4, walltime=2.0, allocations=WHOLE_BUDGET, changes=changes
+                )
+            )
 
         self.assert_nothing_was_written(manager)
 
@@ -1068,7 +1126,7 @@ class TestRefusedBeforeANumberIsTaken:
         manager = generating_manager(tmp_path, name="n96e test")
 
         with pytest.raises(ValueError, match="The name of the application, 'n96e test', cannot begin the name"):
-            manager.generate_experiments([ConfigurationChoice({})])
+            manager.generate(manager.plan_experiments([ConfigurationChoice({})]))
 
         self.assert_nothing_was_written(manager)
 
@@ -1089,8 +1147,9 @@ class TestRegeneratingSuites:
         """A study of three suites, the first of which failed after its rose-suite.conf was corrected by hand."""
         manager = generating_manager(tmp_path)
         options = {"site/gadi.rc": {"3600": "36000"}}
-        manager.generate_scaling_experiments(
-            [1.0], cores_per_node=4, walltime=2.0, allocations=WHOLE_BUDGET, control_options=options
+        manager.control_options = options
+        manager.generate(
+            manager.plan_scaling_experiments([1.0], cores_per_node=4, walltime=2.0, allocations=WHOLE_BUDGET)
         )
         TestParseStatus._suite_db(manager.experiments["exp-0001"].run_path, [0, 1])
         conf = manager.experiments["exp-0001"].path / "rose-suite.conf"
@@ -1100,13 +1159,11 @@ class TestRegeneratingSuites:
     def test_the_correction_reaches_the_failed_suite_only(self, tmp_path, home):
         manager, options = self.failed_study(tmp_path)
 
-        manager.generate_scaling_experiments(
-            [1.0],
-            cores_per_node=4,
-            walltime=3.0,
-            allocations=WHOLE_BUDGET,
-            regenerate_failed=True,
-            control_options=options,
+        manager.control_options = options
+        manager.generate(
+            manager.plan_scaling_experiments(
+                [1.0], cores_per_node=4, walltime=3.0, allocations=WHOLE_BUDGET, regenerate_failed=True
+            )
         )
 
         assert list(manager.experiments) == ["exp-0001", "exp-0002", "exp-0003"]
@@ -1123,13 +1180,11 @@ class TestRegeneratingSuites:
         """A correction made by hand in the copy's rose-suite.conf is kept, and a text is not replaced twice."""
         manager, options = self.failed_study(tmp_path)
 
-        manager.generate_scaling_experiments(
-            [1.0],
-            cores_per_node=4,
-            walltime=3.0,
-            allocations=WHOLE_BUDGET,
-            regenerate_failed=True,
-            control_options=options,
+        manager.control_options = options
+        manager.generate(
+            manager.plan_scaling_experiments(
+                [1.0], cores_per_node=4, walltime=3.0, allocations=WHOLE_BUDGET, regenerate_failed=True
+            )
         )
 
         suite = manager.experiments["exp-0001"].path
@@ -1142,7 +1197,7 @@ class TestDeletingThroughALink:
 
     def test_the_run_the_link_leads_to_and_the_link(self, tmp_path, home):
         manager = generating_manager(tmp_path)
-        manager.generate_experiments([ConfigurationChoice({})])
+        manager.generate(manager.plan_experiments([ConfigurationChoice({})]))
         run_path = manager.experiments["exp-0001"].run_path
         run = tmp_path / "scratch/cylc-run" / run_path.name
         (run / "log").mkdir(parents=True)
@@ -1158,7 +1213,7 @@ class TestDeletingThroughALink:
 
     def test_a_link_leading_nowhere(self, tmp_path, home, caplog):
         manager = generating_manager(tmp_path)
-        manager.generate_experiments([ConfigurationChoice({})])
+        manager.generate(manager.plan_experiments([ConfigurationChoice({})]))
         run_path = manager.experiments["exp-0001"].run_path
         run_path.parent.mkdir(parents=True)
         run_path.symlink_to(tmp_path / "scratch/gone")
@@ -1173,7 +1228,7 @@ class TestDeletingThroughALink:
     def test_a_dry_run_names_where_the_link_leads(self, tmp_path, home, caplog):
         """What the deletion would remove, on /scratch where Rose put the run, and not only the link in ~/cylc-run."""
         manager = generating_manager(tmp_path)
-        manager.generate_experiments([ConfigurationChoice({})])
+        manager.generate(manager.plan_experiments([ConfigurationChoice({})]))
         run_path = manager.experiments["exp-0001"].run_path
         run = tmp_path / "scratch/cylc-run" / run_path.name
         run.mkdir(parents=True)
@@ -1192,7 +1247,7 @@ def test_a_generated_suite_is_archived_and_found_again(tmp_path, home):
     """With the layout it was given, and the CPUs its rose-suite.conf states."""
     manager = generating_manager(tmp_path)
     layout = manager.select_layouts(4, allocations=WHOLE_BUDGET)[1]
-    manager.generate_experiments([ConfigurationChoice(layout=layout)])
+    manager.generate(manager.plan_experiments([ConfigurationChoice(layout=layout)]))
     TestParseStatus._suite_db(manager.experiments["exp-0001"].run_path, [0])
 
     manager.archive_experiments()

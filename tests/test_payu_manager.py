@@ -90,34 +90,6 @@ def manager(tmp_path):
     )
 
 
-def test_nruns(manager):
-    """Test the nruns property of PayuManager."""
-    # Default value
-    assert manager.nruns == 1
-
-    # Set valid value
-    manager.nruns = 5
-    assert manager.nruns == 5
-
-    # Zero value is also valid
-    manager.nruns = 0
-    assert manager.nruns == 0
-
-    # Set invalid value
-    with pytest.raises(ValueError):
-        manager.nruns = -1
-
-
-def test_startfrom_restart(manager):
-    """Test the startfrom_restart property of PayuManager."""
-    # Default value
-    assert manager.startfrom_restart == "cold"
-
-    # Set value
-    manager.startfrom_restart = "restart000"
-    assert manager.startfrom_restart == "restart000"
-
-
 def test_the_control_decides_the_clone_directory():
     """Both the generator and the runner are told the control's own directory name."""
     manager = PayuManager(Path("/fake/test_path"), Path("/fake/archive_path"), MockPayuConfiguration())
@@ -133,11 +105,11 @@ def test_generation_without_a_control_is_refused():
     manager = PayuManager(Path("/fake/test_path"), Path("/fake/archive_path"), MockPayuConfiguration())
 
     with pytest.raises(ValueError, match="without a control"):
-        manager.generate_scaling_experiments(num_nodes_list=[1.0], cores_per_node=4, walltime=2.0)
+        manager.generate(manager.plan_scaling_experiments(num_nodes_list=[1.0], cores_per_node=4, walltime=2.0))
 
 
 def test_creating_experiments_without_a_control_is_refused():
-    """generate_scaling_experiments refuses it first, but the hook is reachable on its own.
+    """Generating refuses it first, but the hook is reachable on its own.
 
     `control` is a settable property, deliberately, so a manager can be pointed at a second control without
     being rebuilt - which means the hook cannot assume the public entry point checked for it.
@@ -159,8 +131,10 @@ def test_generation_needs_the_control_to_state_a_start_point(mock_experiment_gen
     manager.control = ExistingDirectoryControlSource(Path("/fake/control"))
 
     with pytest.raises(ValueError, match="states no start point"):
-        manager.generate_scaling_experiments(
-            num_nodes_list=[1.0], cores_per_node=4, walltime=2.0, allocations=MOCK_ALLOCATIONS
+        manager.generate(
+            manager.plan_scaling_experiments(
+                num_nodes_list=[1.0], cores_per_node=4, walltime=2.0, allocations=MOCK_ALLOCATIONS
+            )
         )
     mock_experiment_generator.assert_not_called()
     assert not (manager.work_dir / STUDY_FILENAME).exists(), "nor is a number taken"
@@ -643,14 +617,16 @@ def test_select_layouts(manager):
 
 @mock.patch("access.profiling.payu_manager.ExperimentGenerator")
 def test_generate_scaling_experiments(mock_experiment_generator, manager):
-    """Test the generate_scaling_experiments method of PayuManager."""
+    """Test planning and generating a scaling study with PayuManager."""
 
-    manager.generate_scaling_experiments(
-        num_nodes_list=[1.0],
-        control_options={"some": "option"},
-        cores_per_node=4,
-        walltime=2.0,  # hrs
-        allocations=MOCK_ALLOCATIONS,
+    manager.control_options = {"some": "option"}
+    manager.generate(
+        manager.plan_scaling_experiments(
+            num_nodes_list=[1.0],
+            cores_per_node=4,
+            walltime=2.0,  # hrs
+            allocations=MOCK_ALLOCATIONS,
+        )
     )
 
     mock_experiment_generator.assert_called_once()
@@ -696,12 +672,13 @@ def test_generate_scaling_experiments_for_a_model_changing_nothing_in_config_yam
     with mock.patch.object(
         manager.application, "config_changes", side_effect=lambda layout: {"MOM_input": {"DT": 1800.0}}
     ):
-        manager.generate_scaling_experiments(
-            num_nodes_list=[1.0],
-            control_options={},
-            cores_per_node=4,
-            walltime=2.0,  # hrs
-            allocations=MOCK_ALLOCATIONS,
+        manager.generate(
+            manager.plan_scaling_experiments(
+                num_nodes_list=[1.0],
+                cores_per_node=4,
+                walltime=2.0,  # hrs
+                allocations=MOCK_ALLOCATIONS,
+            )
         )
 
     perturbations = mock_experiment_generator.call_args[0][0]["Perturbation_Experiment"]
@@ -713,13 +690,15 @@ def test_generate_scaling_experiments_for_a_model_changing_nothing_in_config_yam
 
 @mock.patch("access.profiling.payu_manager.ExperimentGenerator")
 def test_generate_scaling_experiments_callables(mock_experiment_generator, manager):
-    """Test that generate_scaling_experiments evaluates its callable arguments with the number of nodes."""
+    """Test that planning a scaling study evaluates its callable arguments with the number of nodes."""
 
     walltime = mock.MagicMock(return_value=1.5)
     allocations = mock.MagicMock(return_value=MOCK_ALLOCATIONS)
 
-    manager.generate_scaling_experiments(
-        num_nodes_list=[1.0], control_options={}, cores_per_node=4, walltime=walltime, allocations=allocations
+    manager.generate(
+        manager.plan_scaling_experiments(
+            num_nodes_list=[1.0], cores_per_node=4, walltime=walltime, allocations=allocations
+        )
     )
 
     walltime.assert_called_once_with(1.0)
@@ -732,8 +711,10 @@ def test_generate_scaling_experiments_callables(mock_experiment_generator, manag
 def test_generate_scaling_experiments_attaches_the_layout(mock_experiment_generator, manager):
     """An experiment keeps the layout it was generated from, so nothing has to read it back later."""
 
-    manager.generate_scaling_experiments(
-        num_nodes_list=[1.0], control_options={}, cores_per_node=4, walltime=2.0, allocations=MOCK_ALLOCATIONS
+    manager.generate(
+        manager.plan_scaling_experiments(
+            num_nodes_list=[1.0], cores_per_node=4, walltime=2.0, allocations=MOCK_ALLOCATIONS
+        )
     )
 
     layouts = {branch: exp.layout for branch, exp in manager.experiments.items()}
@@ -747,17 +728,21 @@ def test_generate_scaling_experiments_attaches_the_layout(mock_experiment_genera
 
 @mock.patch("access.profiling.payu_manager.ExperimentGenerator")
 def test_generate_scaling_experiments_duplicates(mock_experiment_generator, manager):
-    """Test that generate_scaling_experiments skips layouts whose experiment already exists."""
+    """Test that planning a scaling study skips layouts whose experiment already exists."""
 
-    manager.generate_scaling_experiments(
-        num_nodes_list=[1.0], control_options={}, cores_per_node=4, walltime=2.0, allocations=MOCK_ALLOCATIONS
+    manager.generate(
+        manager.plan_scaling_experiments(
+            num_nodes_list=[1.0], cores_per_node=4, walltime=2.0, allocations=MOCK_ALLOCATIONS
+        )
     )
     assert len(manager.experiments) == 4
     mock_experiment_generator.reset_mock()
 
     # The same layouts are found again, so there is nothing left to generate
-    manager.generate_scaling_experiments(
-        num_nodes_list=[1.0], control_options={}, cores_per_node=4, walltime=2.0, allocations=MOCK_ALLOCATIONS
+    manager.generate(
+        manager.plan_scaling_experiments(
+            num_nodes_list=[1.0], cores_per_node=4, walltime=2.0, allocations=MOCK_ALLOCATIONS
+        )
     )
     assert len(manager.experiments) == 4
     mock_experiment_generator.assert_not_called()
@@ -768,13 +753,10 @@ class TestRegenerateFailed:
 
     @staticmethod
     def _generate(manager, walltime=2.0, **kwargs) -> None:
-        manager.generate_scaling_experiments(
-            num_nodes_list=[1.0],
-            control_options={},
-            cores_per_node=4,
-            walltime=walltime,
-            allocations=MOCK_ALLOCATIONS,
-            **kwargs,
+        manager.generate(
+            manager.plan_scaling_experiments(
+                num_nodes_list=[1.0], cores_per_node=4, walltime=walltime, allocations=MOCK_ALLOCATIONS, **kwargs
+            )
         )
 
     @staticmethod
@@ -859,13 +841,14 @@ class TestRegenerateFailed:
         self._fail(manager, branch)
         mock_experiment_generator.reset_mock()
 
-        manager.generate_scaling_experiments(
-            num_nodes_list=[1.0, 1.0],
-            control_options={},
-            cores_per_node=4,
-            walltime=2.0,
-            allocations=MOCK_ALLOCATIONS,
-            regenerate_failed=True,
+        manager.generate(
+            manager.plan_scaling_experiments(
+                num_nodes_list=[1.0, 1.0],
+                cores_per_node=4,
+                walltime=2.0,
+                allocations=MOCK_ALLOCATIONS,
+                regenerate_failed=True,
+            )
         )
 
         perturbations = mock_experiment_generator.call_args[0][0]["Perturbation_Experiment"]
@@ -898,8 +881,10 @@ def test_generate_scaling_experiments_duplicates_across_node_counts(mock_experim
 
     # The allocation is stated in cores rather than fractions, so both budgets admit the same four-core
     # layouts; the larger one simply leaves two of its six cores idle.
-    manager.generate_scaling_experiments(
-        num_nodes_list=[1.0, 1.5], control_options={}, cores_per_node=4, walltime=2.0, allocations=MOCK_ALLOCATIONS
+    manager.generate(
+        manager.plan_scaling_experiments(
+            num_nodes_list=[1.0, 1.5], cores_per_node=4, walltime=2.0, allocations=MOCK_ALLOCATIONS
+        )
     )
 
     assert len(manager.experiments) == 4
@@ -920,8 +905,10 @@ def test_generate_scaling_experiments_registers_nothing_when_generation_fails(
     mock_experiment_generator.return_value.run.side_effect = RuntimeError("the generator gave up")
 
     with caplog.at_level(logging.WARNING), pytest.raises(RuntimeError, match="the generator gave up"):
-        manager.generate_scaling_experiments(
-            num_nodes_list=[1.0], control_options={}, cores_per_node=4, walltime=2.0, allocations=MOCK_ALLOCATIONS
+        manager.generate(
+            manager.plan_scaling_experiments(
+                num_nodes_list=[1.0], cores_per_node=4, walltime=2.0, allocations=MOCK_ALLOCATIONS
+            )
         )
 
     assert manager.experiments == {}
@@ -945,12 +932,10 @@ def test_generate_scaling_experiments_registers_nothing_when_a_later_node_count_
     """
 
     with pytest.raises(ValueError, match="Number of nodes must be > 0"):
-        manager.generate_scaling_experiments(
-            num_nodes_list=[1.0, -1.0],
-            control_options={},
-            cores_per_node=4,
-            walltime=2.0,
-            allocations=MOCK_ALLOCATIONS,
+        manager.generate(
+            manager.plan_scaling_experiments(
+                num_nodes_list=[1.0, -1.0], cores_per_node=4, walltime=2.0, allocations=MOCK_ALLOCATIONS
+            )
         )
 
     assert manager.experiments == {}
@@ -967,15 +952,19 @@ def test_generate_scaling_experiments_retries_after_a_failed_generation(mock_exp
 
     mock_experiment_generator.return_value.run.side_effect = RuntimeError("the generator gave up")
     with pytest.raises(RuntimeError):
-        manager.generate_scaling_experiments(
-            num_nodes_list=[1.0], control_options={}, cores_per_node=4, walltime=2.0, allocations=MOCK_ALLOCATIONS
+        manager.generate(
+            manager.plan_scaling_experiments(
+                num_nodes_list=[1.0], cores_per_node=4, walltime=2.0, allocations=MOCK_ALLOCATIONS
+            )
         )
 
     mock_experiment_generator.return_value.run.side_effect = None
     mock_experiment_generator.reset_mock()
 
-    manager.generate_scaling_experiments(
-        num_nodes_list=[1.0], control_options={}, cores_per_node=4, walltime=2.0, allocations=MOCK_ALLOCATIONS
+    manager.generate(
+        manager.plan_scaling_experiments(
+            num_nodes_list=[1.0], cores_per_node=4, walltime=2.0, allocations=MOCK_ALLOCATIONS
+        )
     )
 
     perturbations = mock_experiment_generator.call_args[0][0]["Perturbation_Experiment"]
@@ -997,8 +986,10 @@ def test_generate_scaling_experiments_registers_only_after_generation(mock_exper
 
     mock_experiment_generator.return_value.run.side_effect = record_what_the_manager_holds
 
-    manager.generate_scaling_experiments(
-        num_nodes_list=[1.0], control_options={}, cores_per_node=4, walltime=2.0, allocations=MOCK_ALLOCATIONS
+    manager.generate(
+        manager.plan_scaling_experiments(
+            num_nodes_list=[1.0], cores_per_node=4, walltime=2.0, allocations=MOCK_ALLOCATIONS
+        )
     )
 
     assert seen["experiments"] == {}, "the experiments are registered only once the generator has returned"
@@ -1007,12 +998,12 @@ def test_generate_scaling_experiments_registers_only_after_generation(mock_exper
 
 @mock.patch("access.profiling.payu_manager.ExperimentGenerator")
 def test_generate_scaling_experiments_no_layouts(mock_experiment_generator, manager):
-    """Test that generate_scaling_experiments does nothing when no layout can be found."""
+    """Test that a scaling study generates nothing when no layout can be found."""
 
     too_big = RootAllocation(subcomponents={"atm": FixedAllocation(100), "ocn": FixedAllocation(100)})
 
-    manager.generate_scaling_experiments(
-        num_nodes_list=[1.0], control_options={}, cores_per_node=4, walltime=2.0, allocations=too_big
+    manager.generate(
+        manager.plan_scaling_experiments(num_nodes_list=[1.0], cores_per_node=4, walltime=2.0, allocations=too_big)
     )
 
     assert manager.experiments == {}
@@ -1024,8 +1015,10 @@ def test_generate_scaling_experiments_fractional_nodes(mock_experiment_generator
     """Test that a fractional node count reaches the layout search as the truncated number of cores."""
 
     # Half of an 8 core node is the same 4 core budget as a whole 4 core one
-    manager.generate_scaling_experiments(
-        num_nodes_list=[0.5], control_options={}, cores_per_node=8, walltime=2.0, allocations=MOCK_ALLOCATIONS
+    manager.generate(
+        manager.plan_scaling_experiments(
+            num_nodes_list=[0.5], cores_per_node=8, walltime=2.0, allocations=MOCK_ALLOCATIONS
+        )
     )
 
     config = mock_experiment_generator.call_args[0][0]
@@ -1033,26 +1026,22 @@ def test_generate_scaling_experiments_fractional_nodes(mock_experiment_generator
 
 
 def test_generate_scaling_experiments_invalid_inputs(manager):
-    """Test that generate_scaling_experiments rejects node counts and node sizes it cannot use."""
+    """Test that planning a scaling study rejects node counts and node sizes it cannot use."""
 
     for cores_per_node in (0, -4, 4.0):
         with pytest.raises(ValueError):
-            manager.generate_scaling_experiments(
-                num_nodes_list=[1.0],
-                control_options={},
-                cores_per_node=cores_per_node,
-                walltime=2.0,
-                allocations=MOCK_ALLOCATIONS,
+            manager.generate(
+                manager.plan_scaling_experiments(
+                    num_nodes_list=[1.0], cores_per_node=cores_per_node, walltime=2.0, allocations=MOCK_ALLOCATIONS
+                )
             )
 
     for num_nodes in (0.0, -1.0):
         with pytest.raises(ValueError):
-            manager.generate_scaling_experiments(
-                num_nodes_list=[num_nodes],
-                control_options={},
-                cores_per_node=4,
-                walltime=2.0,
-                allocations=MOCK_ALLOCATIONS,
+            manager.generate(
+                manager.plan_scaling_experiments(
+                    num_nodes_list=[num_nodes], cores_per_node=4, walltime=2.0, allocations=MOCK_ALLOCATIONS
+                )
             )
 
 
@@ -1114,6 +1103,43 @@ def test_run_experiments(mock_experiment_runner, manager):
         mock_experiment_runner.reset_mock()
         manager.run_experiments()
         mock_experiment_runner.assert_not_called()
+
+
+class TestRunOptions:
+    """How many runs each experiment has, and what it starts from, are arguments of the call that runs it."""
+
+    @staticmethod
+    def experiments():
+        return {
+            "branch1": _experiment(Path("branch1"), ProfilingExperimentStatus.NEW),
+            "branch2": _experiment(Path("branch2"), ProfilingExperimentStatus.DONE),
+        }
+
+    @mock.patch("access.profiling.payu_manager.ExperimentRunner")
+    def test_they_reach_the_runner_for_every_experiment_submitted(self, mock_experiment_runner, manager):
+        with mock.patch.dict(manager.experiments, self.experiments()):
+            manager.run_experiments(nruns=3, startfrom_restart="branch2/restart000")
+
+        config = mock_experiment_runner.call_args[0][0]
+        assert (config["nruns"], config["startfrom_restart"]) == ([3], ["branch2/restart000"])
+
+    @mock.patch("access.profiling.payu_manager.ExperimentRunner")
+    def test_a_negative_number_of_runs_submits_nothing(self, mock_experiment_runner, manager):
+        with mock.patch.dict(manager.experiments, self.experiments()), pytest.raises(ValueError, match="at least 0"):
+            manager.run_experiments(nruns=-1)
+
+        mock_experiment_runner.assert_not_called()
+        assert manager.experiments == {}
+
+    @mock.patch("access.profiling.payu_manager.ExperimentRunner")
+    def test_the_experiments_submitted_are_returned(self, mock_experiment_runner, manager):
+        """As status() shows them, so that the cell that runs them says what it did."""
+        with mock.patch.dict(manager.experiments, self.experiments()):
+            submitted = manager.run_experiments()
+
+            assert list(submitted.index) == ["branch1"]
+            assert submitted.loc["branch1", "status"] == "RUNNING"
+            assert manager.run_experiments().empty, "nothing is left to submit"
 
 
 class TestRetryFailed:
@@ -1684,12 +1710,11 @@ class TestLaboratory:
 
     @staticmethod
     def generate(manager, control_options):
-        manager.generate_scaling_experiments(
-            num_nodes_list=[1.0],
-            control_options=control_options,
-            cores_per_node=4,
-            walltime=2.0,
-            allocations=MOCK_ALLOCATIONS,
+        manager.control_options = control_options
+        manager.generate(
+            manager.plan_scaling_experiments(
+                num_nodes_list=[1.0], cores_per_node=4, walltime=2.0, allocations=MOCK_ALLOCATIONS
+            )
         )
 
     def test_it_is_named_after_the_model_and_the_working_directory(self, manager):
@@ -1770,11 +1795,16 @@ class TestLaboratory:
         """The hook is callable on its own, as its check of the control says, so it does not rely on generation
         having refused these first, nor on an assertion that `python -O` strips."""
         manager = PayuManager(
-            tmp_path / "work", tmp_path / "archive", MockPayuConfiguration(), MOCK_CONTROL, lab_dir=lab_dir
+            tmp_path / "work",
+            tmp_path / "archive",
+            MockPayuConfiguration(),
+            MOCK_CONTROL,
+            lab_dir=lab_dir,
+            control_options=control_options,
         )
 
         with mock.patch.dict(os.environ, environment), pytest.raises(error, match=message):
-            manager._create_experiments([], control_options=control_options)
+            manager._create_experiments([])
         mock_experiment_generator.assert_not_called()
 
     @mock.patch("access.profiling.payu_manager.ExperimentGenerator")
@@ -1800,6 +1830,23 @@ class TestLaboratory:
             self.generate(manager, {"config.yaml": {"laboratory": "/scratch/tm70/elsewhere"}})
         mock_experiment_generator.assert_not_called()
         assert not (manager.work_dir / STUDY_FILENAME).exists(), "nor is a number taken"
+
+    @mock.patch("access.profiling.payu_manager.ExperimentGenerator")
+    def test_a_laboratory_in_the_control_changes_of_the_application_is_refused(
+        self, mock_experiment_generator, manager
+    ):
+        """What is checked is what the generator would be given: the application's changes and the study's."""
+        with (
+            mock.patch.object(
+                MockPayuConfiguration,
+                "control_changes",
+                new_callable=mock.PropertyMock,
+                return_value={"config.yaml": {"laboratory": "/scratch/tm70/elsewhere"}},
+            ),
+            pytest.raises(ValueError, match="name a Payu laboratory"),
+        ):
+            self.generate(manager, {})
+        mock_experiment_generator.assert_not_called()
 
     @mock.patch.dict(os.environ, {"PAYU_LAB_PATH": "/scratch/tm70/elsewhere"})
     @mock.patch("access.profiling.payu_manager.ExperimentGenerator")
@@ -1846,8 +1893,8 @@ class TestNumberedExperiments:
 
     @staticmethod
     def generate(manager, **kwargs):
-        options = {"num_nodes_list": [1.0], "control_options": {}, "cores_per_node": 4, "walltime": 2.0}
-        manager.generate_scaling_experiments(allocations=MOCK_ALLOCATIONS, **{**options, **kwargs})
+        options = {"num_nodes_list": [1.0], "cores_per_node": 4, "walltime": 2.0}
+        manager.generate(manager.plan_scaling_experiments(allocations=MOCK_ALLOCATIONS, **{**options, **kwargs}))
 
     @staticmethod
     def branches(mock_experiment_generator):
@@ -1960,10 +2007,12 @@ class TestNumberedExperiments:
     @mock.patch("access.profiling.payu_manager.ExperimentGenerator")
     def test_a_call_refused_before_the_generator_runs_takes_no_number(self, mock_experiment_generator, manager, caplog):
         """Nothing was started, so nothing may be half created: the corrected call numbers from where this one did."""
+        manager.control_options = {"config.yaml": {"laboratory": "/scratch/tm70/elsewhere"}}
         with pytest.raises(ValueError, match="name a Payu laboratory"):
-            self.generate(manager, control_options={"config.yaml": {"laboratory": "/scratch/tm70/elsewhere"}})
+            self.generate(manager)
         assert "Some may already exist" not in caplog.text
 
+        manager.control_options = {}
         self.generate(manager)
 
         assert self.branches(mock_experiment_generator) == self.NAMES
@@ -2021,13 +2070,14 @@ class TestNumberedExperiments:
 
     @mock.patch("access.profiling.payu_manager.ExperimentGenerator")
     def test_the_history_says_what_the_experiments_perturb(self, mock_experiment_generator, manager):
-        self.generate(manager, control_options={"config.yaml": {"queue": "express"}})
+        manager.control_options = {"config.yaml": {"queue": "express"}}
+        self.generate(manager)
 
         study = json.loads((manager.work_dir / STUDY_FILENAME).read_text())
         (entry,) = study["history"]
 
         assert study["last_number"] == 4
-        assert entry["call"] == "generate_scaling_experiments"
+        assert entry["call"] == "generate(plan_scaling_experiments)"
         assert entry["manager"] == "PayuManager"
         assert entry["application"] == {"class": "MockPayuConfiguration", "name": "mock"}
         assert entry["control"] == {"repository": "https://example.com/repo", "start_point": "commit"}
@@ -2091,8 +2141,92 @@ class TestNumberedExperiments:
                 manager.layout_key("exp-0001")
             with pytest.raises(ValueError, match=message):
                 self.generate(manager)
+            assert set(manager.status()["layout"]) == {"not a layout of mock"}
 
         mock_experiment_generator.assert_not_called()
+
+
+class TestPlans:
+    """A plan says what generating it creates, and writes nothing; generating it creates each experiment once."""
+
+    @staticmethod
+    def plan(manager, **kwargs):
+        options = {"num_nodes_list": [1.0], "cores_per_node": 4, "walltime": 2.0, "allocations": MOCK_ALLOCATIONS}
+        return manager.plan_scaling_experiments(**{**options, **kwargs})
+
+    def test_planning_writes_nothing_and_needs_no_control_nor_laboratory(self, tmp_path):
+        """So that a plan can be looked at anywhere, before anything is created or submitted."""
+        manager = PayuManager(tmp_path / "work", tmp_path / "archive", MockPayuConfiguration())
+
+        plan = self.plan(manager, labels={"dt": 900})
+
+        assert not (tmp_path / "work").exists()
+        assert [experiment.name for experiment in plan.experiments] == [None] * 4, "numbered when generated"
+        assert list(plan.table.columns) == ["nodes", "cores", "layout", "walltime (hours)", "dt"]
+        assert list(plan.table["layout"]) == [manager.application.layout_key(e.layout) for e in plan.experiments]
+        assert repr(plan).splitlines()[0] == (
+            "<StudyPlan of plan_scaling_experiments: 4 new experiments, 0 to regenerate, 0 already held>"
+        )
+
+    @mock.patch("access.profiling.payu_manager.ExperimentGenerator")
+    def test_generating_a_plan_twice_creates_nothing_twice(self, mock_experiment_generator, manager, caplog):
+        plan = self.plan(manager)
+        created = manager.generate(plan)
+
+        with caplog.at_level(logging.INFO):
+            again = manager.generate(plan)
+
+        mock_experiment_generator.assert_called_once()
+        assert list(created.index) == ["exp-0001", "exp-0002", "exp-0003", "exp-0004"]
+        assert set(created["status"]) == {"NEW"}
+        assert again.empty
+        assert "Experiment exp-0001 has been created for this configuration since the plan was made." in caplog.text
+        assert repr(self.plan(manager)) == (
+            "<StudyPlan of plan_scaling_experiments: 0 new experiments, 0 to regenerate, 4 already held>"
+        )
+
+    @mock.patch("access.profiling.payu_manager.ExperimentGenerator")
+    def test_changes_and_labels_make_experiments_of_their_own(self, mock_experiment_generator, manager):
+        """One plan per value of a setting the study varies across its sizes, each identified by its changes."""
+        for dt in (900, 1800):
+            manager.generate(self.plan(manager, changes={"MOM_input": {"DT": dt}}, labels={"dt": dt}))
+
+        assert len(manager.experiments) == 8
+        perturbations = mock_experiment_generator.call_args[0][0]["Perturbation_Experiment"]
+        assert {block["MOM_input"]["DT"] for block in perturbations.values()} == {1800}
+        assert "submodels" in perturbations["Experiment_1"]["config.yaml"], "beside the changes of the layout"
+        status = manager.status()
+        assert list(status["dt"]) == [900] * 4 + [1800] * 4
+        assert manager.experiments["exp-0005"].changes == {"MOM_input": {"DT": 1800}}
+        assert self.plan(manager, changes={"MOM_input": {"DT": 900}}).held == (
+            "exp-0001",
+            "exp-0002",
+            "exp-0003",
+            "exp-0004",
+        )
+
+    @mock.patch("access.profiling.payu_manager.ExperimentGenerator")
+    def test_a_walltime_among_the_changes_of_a_scaling_study_is_refused(self, mock_experiment_generator, manager):
+        """The walltime of each size would silently replace it, so it is given once, as the walltime."""
+        plan = self.plan(manager, changes={"config.yaml": {"walltime": "1:00:00"}})
+
+        with pytest.raises(ValueError, match="set the walltime in config.yaml"):
+            manager.generate(plan)
+
+        mock_experiment_generator.assert_not_called()
+        assert not (manager.work_dir / STUDY_FILENAME).exists(), "nor is a number taken"
+
+    @mock.patch("access.profiling.payu_manager.ExperimentGenerator")
+    def test_a_plan_regenerating_an_experiment_forgotten_since_is_refused(self, mock_experiment_generator, manager):
+        manager.generate(self.plan(manager))
+        manager.experiments["exp-0002"].status = ProfilingExperimentStatus.FAILED
+        plan = self.plan(manager, regenerate_failed=True)
+        assert repr(plan).splitlines()[0].endswith("0 new experiments, 1 to regenerate, 3 already held>")
+        assert plan.table["regenerates"].dropna().tolist() == ["exp-0002"]
+        manager.forget_experiment("exp-0002")
+
+        with pytest.raises(ValueError, match="regenerates experiment exp-0002, which this study no longer holds"):
+            manager.generate(plan)
 
     def test_an_added_experiment_says_nothing_of_the_managers_control(self, manager):
         """It was not made from that control, nor in the study's laboratory, so the history does not claim either."""
@@ -2125,9 +2259,11 @@ class TestConfigurationChoices:
 
     @mock.patch("access.profiling.payu_manager.ExperimentGenerator")
     def test_a_choice_without_a_layout_writes_what_it_states(self, mock_experiment_generator, manager):
-        manager.generate_experiments(
-            [ConfigurationChoice(self.WALLTIME), ConfigurationChoice({**self.WALLTIME, **self.ROUNDROBIN})],
-            control_options={"some": "option"},
+        manager.control_options = {"some": "option"}
+        manager.generate(
+            manager.plan_experiments(
+                [ConfigurationChoice(self.WALLTIME), ConfigurationChoice({**self.WALLTIME, **self.ROUNDROBIN})]
+            )
         )
 
         mock_experiment_generator.assert_called_once()
@@ -2149,7 +2285,7 @@ class TestConfigurationChoices:
 
     @mock.patch("access.profiling.payu_manager.ExperimentGenerator")
     def test_a_choice_stating_no_walltime_keeps_that_of_the_control(self, mock_experiment_generator, manager):
-        manager.generate_experiments([ConfigurationChoice(self.ROUNDROBIN)], control_options={})
+        manager.generate(manager.plan_experiments([ConfigurationChoice(self.ROUNDROBIN)]))
 
         assert self.blocks(mock_experiment_generator)["exp-0001"]["config.yaml"] == {"experiment": "exp-0001"}
 
@@ -2158,7 +2294,7 @@ class TestConfigurationChoices:
         """The name Payu needs is added to what the generator is given, not to what the study stated."""
         changes = {"config.yaml": {"walltime": "2:00:00"}}
 
-        manager.generate_experiments([ConfigurationChoice(changes)], control_options={})
+        manager.generate(manager.plan_experiments([ConfigurationChoice(changes)]))
 
         assert changes == {"config.yaml": {"walltime": "2:00:00"}}
         assert manager.experiments["exp-0001"].changes == {"config.yaml": {"walltime": "2:00:00"}}
@@ -2167,8 +2303,8 @@ class TestConfigurationChoices:
     def test_a_choice_with_a_layout_is_merged_over_what_the_layout_comes_to(self, mock_experiment_generator, manager):
         layout = self.layouts(manager)[0]
 
-        manager.generate_experiments(
-            [ConfigurationChoice({**self.WALLTIME, **self.ROUNDROBIN}, layout=layout)], control_options={}
+        manager.generate(
+            manager.plan_experiments([ConfigurationChoice({**self.WALLTIME, **self.ROUNDROBIN}, layout=layout)])
         )
 
         assert self.blocks(mock_experiment_generator)["exp-0001"] == {
@@ -2191,7 +2327,7 @@ class TestConfigurationChoices:
         }
 
         with mock.patch.object(manager.application, "config_changes", return_value=of_the_layout):
-            manager.generate_experiments([ConfigurationChoice(self.ROUNDROBIN, layout=layout)], control_options={})
+            manager.generate(manager.plan_experiments([ConfigurationChoice(self.ROUNDROBIN, layout=layout)]))
 
         block = self.blocks(mock_experiment_generator)["exp-0001"]
         assert block["ice_in"] == {
@@ -2210,9 +2346,14 @@ class TestConfigurationChoices:
         of_the_layout = {"ice_in": {"domain_nml": {"nprocs": 2}, "grid_nml": {"ncat": 5}}}
 
         with mock.patch.object(manager.application, "config_changes", return_value=of_the_layout):
-            manager.generate_experiments(
-                [ConfigurationChoice({"ice_in": {"domain_nml": {"nprocs": [[1, 2]]}, "grid_nml": 7}}, layout=layout)],
-                control_options={},
+            manager.generate(
+                manager.plan_experiments(
+                    [
+                        ConfigurationChoice(
+                            {"ice_in": {"domain_nml": {"nprocs": [[1, 2]]}, "grid_nml": 7}}, layout=layout
+                        )
+                    ]
+                )
             )
 
         assert self.blocks(mock_experiment_generator)["exp-0001"]["ice_in"] == {
@@ -2227,7 +2368,7 @@ class TestConfigurationChoices:
         choice = ConfigurationChoice({"config.yaml": {"submodels": [["PRESERVE", {"input": ["forcing"]}]]}}, layout)
 
         with pytest.raises(ValueError, match="give a list for config.yaml > submodels, and two lists cannot be merged"):
-            manager.generate_experiments([choice], control_options={})
+            manager.generate(manager.plan_experiments([choice]))
 
         mock_experiment_generator.assert_not_called()
         assert manager.experiments == {}
@@ -2237,9 +2378,10 @@ class TestConfigurationChoices:
     def test_the_record_keeps_the_layout_and_only_what_the_choice_states(self, mock_experiment_generator, manager):
         layout = self.layouts(manager)[0]
 
-        manager.generate_experiments(
-            [ConfigurationChoice(self.ROUNDROBIN, layout=layout, labels={"distribution": "roundrobin"})],
-            control_options={},
+        manager.generate(
+            manager.plan_experiments(
+                [ConfigurationChoice(self.ROUNDROBIN, layout=layout, labels={"distribution": "roundrobin"})]
+            )
         )
 
         record = json.loads((manager.work_dir / "exp-0001" / RECORD_FILENAME).read_text())
@@ -2252,9 +2394,10 @@ class TestConfigurationChoices:
     def test_one_layout_with_other_changes_is_another_experiment(self, mock_experiment_generator, manager):
         layout = self.layouts(manager)[0]
 
-        manager.generate_experiments(
-            [ConfigurationChoice(layout=layout), ConfigurationChoice(self.ROUNDROBIN, layout=layout)],
-            control_options={},
+        manager.generate(
+            manager.plan_experiments(
+                [ConfigurationChoice(layout=layout), ConfigurationChoice(self.ROUNDROBIN, layout=layout)]
+            )
         )
 
         assert list(manager.experiments) == ["exp-0001", "exp-0002"]
@@ -2264,14 +2407,19 @@ class TestConfigurationChoices:
     def test_the_same_changes_on_another_layout_are_another_experiment(self, mock_experiment_generator, manager):
         first, second, *_ = self.layouts(manager)
 
-        manager.generate_experiments(
-            [ConfigurationChoice(self.ROUNDROBIN, layout=first), ConfigurationChoice(self.ROUNDROBIN, layout=second)],
-            control_options={},
+        manager.generate(
+            manager.plan_experiments(
+                [
+                    ConfigurationChoice(self.ROUNDROBIN, layout=first),
+                    ConfigurationChoice(self.ROUNDROBIN, layout=second),
+                ]
+            )
         )
         mock_experiment_generator.reset_mock()
-        manager.generate_experiments(
-            [ConfigurationChoice(self.ROUNDROBIN, layout=second), ConfigurationChoice(self.ROUNDROBIN)],
-            control_options={},
+        manager.generate(
+            manager.plan_experiments(
+                [ConfigurationChoice(self.ROUNDROBIN, layout=second), ConfigurationChoice(self.ROUNDROBIN)]
+            )
         )
 
         assert list(self.blocks(mock_experiment_generator)) == ["exp-0003"], "the choice with no layout"
@@ -2280,15 +2428,17 @@ class TestConfigurationChoices:
     def test_an_experiment_of_a_scaling_study_is_its_layout_with_no_changes(self, mock_experiment_generator, manager):
         """The two generating methods add to one study, and neither creates what the other has."""
         first, second, *_ = self.layouts(manager)
-        manager.generate_experiments([ConfigurationChoice(layout=first)], control_options={})
+        manager.generate(manager.plan_experiments([ConfigurationChoice(layout=first)]))
 
-        manager.generate_scaling_experiments(
-            num_nodes_list=[1.0], control_options={}, cores_per_node=4, walltime=2.0, allocations=MOCK_ALLOCATIONS
+        manager.generate(
+            manager.plan_scaling_experiments(
+                num_nodes_list=[1.0], cores_per_node=4, walltime=2.0, allocations=MOCK_ALLOCATIONS
+            )
         )
         assert list(manager.experiments) == ["exp-0001", "exp-0002", "exp-0003", "exp-0004"]
         mock_experiment_generator.reset_mock()
 
-        manager.generate_experiments([ConfigurationChoice(layout=second)], control_options={})
+        manager.generate(manager.plan_experiments([ConfigurationChoice(layout=second)]))
         mock_experiment_generator.assert_not_called()
 
     @pytest.mark.parametrize("key", ["laboratory", "experiment"])
@@ -2297,7 +2447,7 @@ class TestConfigurationChoices:
         choice = ConfigurationChoice({"config.yaml": {"walltime": "2:00:00", key: "mine"}})
 
         with pytest.raises(ValueError, match=rf"set \['{key}'\] in config.yaml, which the manager sets itself"):
-            manager.generate_experiments([choice], control_options={})
+            manager.generate(manager.plan_experiments([choice]))
 
         mock_experiment_generator.assert_not_called()
         assert manager.experiments == {}
@@ -2305,14 +2455,15 @@ class TestConfigurationChoices:
 
     @mock.patch("access.profiling.payu_manager.ExperimentGenerator")
     def test_the_same_key_in_another_file_is_none_of_payus(self, mock_experiment_generator, manager):
-        manager.generate_experiments([ConfigurationChoice({"ice_in": {"experiment": "mine"}})], control_options={})
+        manager.generate(manager.plan_experiments([ConfigurationChoice({"ice_in": {"experiment": "mine"}})]))
 
         assert self.blocks(mock_experiment_generator)["exp-0001"]["ice_in"] == {"experiment": "mine"}
 
     @mock.patch("access.profiling.payu_manager.ExperimentGenerator")
     def test_the_engine_options_are_in_the_history(self, mock_experiment_generator, manager):
-        manager.generate_experiments([ConfigurationChoice(self.WALLTIME)], control_options={"some": "option"})
+        manager.control_options = {"some": "option"}
+        manager.generate(manager.plan_experiments([ConfigurationChoice(self.WALLTIME)]))
 
         (entry,) = manager._read_study()["history"]
-        assert entry["call"] == "generate_experiments"
+        assert entry["call"] == "generate(plan_experiments)"
         assert entry["engine"] == {"laboratory": str(manager.laboratory), "control_options": {"some": "option"}}

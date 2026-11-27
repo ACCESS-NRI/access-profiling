@@ -4,7 +4,7 @@ Suppose you have a fixed number of cores to run your application on. There are m
 its components, and they are not all equally fast. Which one is the best? In this tutorial we try all the
 parallelisation layouts that an allocation strategy finds for one number of cores, and pick the fastest. The experiments
 are created as in [Generating and running experiments](experiments.md), with a single size. We use the `manager`,
-`walltime`, `allocations` and `control_options` of that page, and the `regions` of [Choosing the
+`walltime` and `allocations` of that page, and the `regions` of [Choosing the
 regions](analysing-data.md#choosing-the-regions). The figure is drawn from synthetic data.
 
 ## Choosing the layouts
@@ -75,32 +75,33 @@ regions](analysing-data.md#choosing-the-regions). The figure is drawn from synth
 
 ## Generating and running them
 
-We create the experiments with
-[`generate_scaling_experiments`][access.profiling.manager.ProfilingManager.generate_scaling_experiments], as for
-any other study. Since we only want one size, `num_nodes_list` has a single number:
+We plan the experiments with
+[`plan_scaling_experiments`][access.profiling.manager.ProfilingManager.plan_scaling_experiments], and create them
+with [`generate`][access.profiling.manager.ProfilingManager.generate], as for any other study. Since we only want
+one size, `num_nodes_list` has a single number:
 
 === "ACCESS-ESM1.6"
 
     ```python
-    manager.generate_scaling_experiments(
+    plan = manager.plan_scaling_experiments(
         num_nodes_list=[5],
         cores_per_node=104,
         walltime=walltime,
         allocations=released,
-        control_options=control_options,
     )
+    manager.generate(plan)
     ```
 
 === "ACCESS-OM3"
 
     ```python
-    manager.generate_scaling_experiments(
+    plan = manager.plan_scaling_experiments(
         num_nodes_list=[26],
         cores_per_node=104,
         walltime=walltime,
         allocations=allocations,
-        control_options=control_options,
     )
+    manager.generate(plan)
     ```
 
 Then run them:

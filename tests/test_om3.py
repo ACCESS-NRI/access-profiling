@@ -11,6 +11,7 @@ from access.config.parallel_component import ComponentLayout
 from access.config.parallel_constraints import DomainDivisibleByRanksConstraint, EqualCoresGroupConstraint
 from access.config.parallel_domain import Domain
 from conftest import component_of, layout_of, select_layouts
+from ruamel.yaml.scalarstring import DoubleQuotedScalarString
 
 from access.profiling.cice5_parser import CICE5ProfilingParser
 from access.profiling.control import GitControlSource
@@ -354,7 +355,8 @@ def test_om3_needs_a_name(om3):
 def test_om3_leaves_the_ocean_to_decompose_itself():
     """Test that MOM6 choosing its own layout costs the search a dimension rather than a factor.
 
-    One layout per set of core counts, with the ocean named by its cores and no LAYOUT written for it.
+    One layout per set of core counts, with the ocean named by its cores, and MOM_input told to decompose the grid
+    itself, whatever decomposition the control pins there.
     """
 
     layouts = select_layouts(OM3_MC_100KM, 312, allocations=_om3_pinned(**OM3_MC_100KM_CORES))
@@ -362,7 +364,12 @@ def test_om3_leaves_the_ocean_to_decompose_itself():
 
     assert _om3_grids(layout) == {}, "neither the ocean nor the sea ice is left to the search to decompose"
     changes = OM3_MC_100KM.config_changes(layout)
-    assert "MOM_input" not in changes, "MOM6 is left to decompose its own grid"
+    assert changes["MOM_input"] == {
+        "AUTO_MASKTABLE": "True",
+        "LAYOUT": "REMOVE",
+        "IO_LAYOUT": "REMOVE",
+        "MASKTABLE": "REMOVE",
+    }, "MOM6 is left to decompose its own grid"
     assert changes["nuopc.runconfig"]["PELAYOUT_attributes"]["ocn_ntasks"] == 288
     assert "ocn_288" in OM3_MC_100KM.layout_key(layout), "so the name records its cores, not a grid"
 
@@ -377,7 +384,6 @@ def test_om3_writes_the_chosen_decomposition():
     # Neither nprocs nor the grid extents are written: this configuration states them nowhere the search
     # decides, so CICE6 and the control configuration settle them between themselves.
     assert changes["ice_in"] == {"domain_nml": {"block_size_x": "15", "block_size_y": "324", "max_blocks": "1"}}
-    assert "MOM_input" not in changes
 
 
 def test_om3_writes_the_blocks_its_rank_count_calls_for(om3):
@@ -746,35 +752,20 @@ class TestOM3FromControl:
         assert OM3Configuration.from_control(_om3_control(tmp_path / "dev", wav_model="ww3dev")).waves
         assert not OM3Configuration.from_control(_om3_control(tmp_path / "stub", wav_model="swav")).waves
 
-    def test_a_pinned_ocean_layout_is_warned_about(self, tmp_path, caplog):
-        """The 25 km release pins LAYOUT and MASKTABLE, which a generated ocean core count cannot run with."""
-
+    def test_mom_input_is_not_read(self, tmp_path, caplog):
+        """The 25 km release pins LAYOUT and MASKTABLE, which every generated layout removes, so a control pinning
+        them reads as one that does not, and as one without the file, without a word."""
         release = _om3_control(
-            tmp_path,
+            tmp_path / "release",
             mom_input='LAYOUT = 72, 48                 !\nMASKTABLE = "./auxiliary_input/mask_table.1027.72x48" !\n',
         )
+        without = _om3_control(tmp_path / "without")
+        (without / "MOM_input").unlink()
 
         with caplog.at_level("WARNING"):
-            read = OM3Configuration.from_control(release, name="MC-25km")
+            read = {OM3Configuration.from_control(control, name="MC-25km") for control in (release, without)}
 
-        assert "pins LAYOUT and MASKTABLE without AUTO_MASKTABLE" in caplog.text
-        assert read.sea_ice.block_shape == (15, 20)
-
-    def test_a_control_setting_auto_masktable_is_not_warned_about(self, tmp_path, caplog):
-        with caplog.at_level("WARNING"):
-            OM3Configuration.from_control(
-                _om3_control(tmp_path, mom_input="LAYOUT = 72, 48 !\nAUTO_MASKTABLE = True !\n")
-            )
-
-        assert "AUTO_MASKTABLE" not in caplog.text
-
-    def test_a_control_without_a_mom_input_is_read_without_a_word(self, tmp_path, caplog):
-        control = _om3_control(tmp_path)
-        (control / "MOM_input").unlink()
-
-        with caplog.at_level("WARNING"):
-            OM3Configuration.from_control(control)
-
+        assert read == {OM3Configuration.from_control(_om3_control(tmp_path / "auto"), name="MC-25km")}
         assert caplog.text == ""
 
     @pytest.mark.parametrize("ice_model", ["sice", "dice"])
@@ -811,6 +802,41 @@ def test_om3_ships_a_control_for_every_configuration():
     assert om3.OM3_MC_PANAN4KM_JRA_RYF_ISF_SOURCE.start_point == "dev-MC_panan4km_jra_ryf+isf"
 
 
+class TestOM3ControlChanges:
+    """Every ACCESS-OM3 experiment writes the ESMF summary, which the control does not unless it is told to."""
+
+    def test_the_esmf_summary_is_turned_on_in_the_environment(self):
+        env = OM3_MC_100KM.control_changes["config.yaml"]["env"]
+
+        assert env == {"ESMF_RUNTIME_PROFILE": "on", "ESMF_RUNTIME_PROFILE_OUTPUT": "SUMMARY"}
+        # Quoted in the YAML Payu reads, where a bare on is the boolean true rather than the word ESMF expects.
+        assert all(isinstance(value, DoubleQuotedScalarString) for value in env.values())
+
+    def test_each_configuration_has_a_copy_of_its_own(self):
+        OM3_MC_100KM.control_changes["config.yaml"]["env"]["ESMF_RUNTIME_PROFILE"] = "off"
+
+        assert OM3_MC_100KM.control_changes["config.yaml"]["env"]["ESMF_RUNTIME_PROFILE"] == "on"
+
+    @mock.patch("access.profiling.payu_manager.ExperimentGenerator")
+    def test_the_control_is_changed_under_the_study_options(self, mock_experiment_generator, tmp_path):
+        """The study's options win where both change one setting, and the rest of the application's stay."""
+        manager = PayuManager(
+            tmp_path / "work",
+            tmp_path / "archive",
+            OM3_MC_100KM,
+            GitControlSource("https://example.com/repo", "commit"),
+            lab_dir=Path("/fake/lab"),
+            control_options={"config.yaml": {"umask": 0o2, "env": {"ESMF_RUNTIME_PROFILE_OUTPUT": "BINARY"}}},
+        )
+
+        manager.generate(manager.plan_experiments([ConfigurationChoice()]))
+
+        control = mock_experiment_generator.call_args[0][0]["Control_Experiment"]["config.yaml"]
+        assert control["env"] == {"ESMF_RUNTIME_PROFILE": "on", "ESMF_RUNTIME_PROFILE_OUTPUT": "BINARY"}
+        assert (control["umask"], control["laboratory"]) == (0o2, str(manager.laboratory))
+        assert "ESMF_RUNTIME_PROFILE" in repr(manager), "the manager says what the application changes"
+
+
 class TestOM3ConfigurationChoices:
     """A study of how CICE6 distributes its blocks, on one layout and with one manager, end to end."""
 
@@ -826,19 +852,20 @@ class TestOM3ConfigurationChoices:
         layout = _om3_layout(OM3_MC_100KM, 312, OM3_MC_100KM_CORES)
         distributions = {"exp-0001": "cartesian", "exp-0002": "roundrobin"}
 
-        manager.generate_experiments(
-            [
-                ConfigurationChoice(
-                    {
-                        "config.yaml": {"walltime": "2:00:00"},
-                        "ice_in": {"domain_nml": {"distribution_type": f"'{distribution}'"}},
-                    },
-                    layout=layout,
-                    labels={"distribution": distribution},
-                )
-                for distribution in distributions.values()
-            ],
-            control_options={},
+        manager.generate(
+            manager.plan_experiments(
+                [
+                    ConfigurationChoice(
+                        {
+                            "config.yaml": {"walltime": "2:00:00"},
+                            "ice_in": {"domain_nml": {"distribution_type": f"'{distribution}'"}},
+                        },
+                        layout=layout,
+                        labels={"distribution": distribution},
+                    )
+                    for distribution in distributions.values()
+                ]
+            )
         )
 
         mock_experiment_generator.assert_called_once()
@@ -869,7 +896,7 @@ class TestOM3ConfigurationChoices:
         control = GitControlSource("https://example.com/repo", "commit")
         study = PayuManager(tmp_path / "work", tmp_path / "archive", OM3_MC_100KM, control, lab_dir=Path("/fake/lab"))
         layout = _om3_layout(OM3_MC_100KM, 312, OM3_MC_100KM_CORES)
-        study.generate_experiments([ConfigurationChoice(layout=layout)], control_options={})
+        study.generate(study.plan_experiments([ConfigurationChoice(layout=layout)]))
         mock_experiment_generator.reset_mock()
 
         message = (

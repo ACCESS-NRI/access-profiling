@@ -15,7 +15,8 @@ to look at their results.
 
 To create a manager, we need five things: a working directory, where the experiments are created, a directory on
 `/scratch`, where they run, an archive directory, where the finished experiments are kept, the application, and its
-control. Here we create a [`PayuManager`][access.profiling.payu_manager.PayuManager]:
+control. We can also give it control options, which are changes made to the control before any experiment is
+created from it. Here we create a [`PayuManager`][access.profiling.payu_manager.PayuManager]:
 
 === "ACCESS-ESM1.6"
 
@@ -31,8 +32,17 @@ control. Here we create a [`PayuManager`][access.profiling.payu_manager.PayuMana
         application=ESM16_PI_CONTROL,
         control=ESM16_PI_CONTROL_SOURCE,
         lab_dir=Path("/scratch/tm70/model_scaling"),
+        control_options={
+            "config.yaml": {
+                "manifest": {"reproduce": {"exe": False}},
+                "postscript": "REMOVE",
+            }
+        },
     )
     ```
+
+    The control options tell Payu not to insist on the exact executables of the release, and they remove the
+    post-processing script of the release, which is not needed for profiling.
 
 === "ACCESS-OM3"
 
@@ -48,13 +58,39 @@ control. Here we create a [`PayuManager`][access.profiling.payu_manager.PayuMana
         application=OM3_MC_25KM,
         control=OM3_MC_25KM_JRA_RYF_SOURCE,
         lab_dir=Path("/scratch/tm70/model_scaling"),
+        control_options={
+            "config.yaml": {
+                "modules": {"use": ["/g/data/vk83/modules"], "load": ["access-om3/2026.05.004"]},
+                "mem": "REMOVE",
+                "manifest": {"reproduce": {"exe": False}},
+                "postscript": "REMOVE",
+                "collate": "REMOVE",
+                "archive": "REMOVE",
+            },
+            "nuopc.runconfig": {
+                "CLOCK_attributes": {"stop_n": 2, "stop_option": "nmonths", "restart_n": 2, "restart_option": "nmonths"},
+            },
+        },
     )
     ```
+
+    The control options remove the memory request, which was chosen for the number of cores of the release, and
+    shorten the run to two months. The `modules` entry tells Payu where to find the modules and which build of
+    ACCESS-OM3 to load. Adapt its path and its version to the build you want to profile.
+
+    Two other changes are made by the application itself, so you do not need to give them. First, the release fixes
+    the decomposition of MOM6 with a `LAYOUT` of 72 × 48 and a `MASKTABLE` that goes with it, and these only work
+    for one number of ocean cores. Every layout of the study therefore removes both, together with the `IO_LAYOUT`,
+    and sets `AUTO_MASKTABLE`, so that MOM6 chooses its own decomposition. Second, the application turns on the
+    ESMF profiling summary, which is the log that times the whole model. This is one of the control changes of the
+    application, which printing the manager shows beside your control options. Where both change the same setting,
+    your control options win.
 
 The three directories are only examples, so remember to adapt them to your own setup, replacing `tm70` with your own
 project. Payu runs the experiments of the study in a laboratory of its own, which the manager creates in `lab_dir`. One
 `lab_dir` can therefore hold the laboratories of all your studies. [The laboratory](../access/payu.md#the-laboratory)
-explains why each study needs its own.
+explains why each study needs its own. The format of the control options is described in
+[Experiments with Payu](../access/payu.md#generating-the-experiments).
 
 The controls used here are the official releases of the two models, `release-piControl-2.1` and
 `release-MC_25km_jra_ryf-2.0-beta`. If you want to profile another release, or a fork, keep the same application
@@ -206,11 +242,12 @@ the study. Remember that every layout becomes an experiment:
     components no minimum number of cores and sets no limit on idle cores, the first layouts found can leave most
     of the cores idle.
 
-## Generating the experiments
+## Planning the experiments
 
-We are now ready to create the experiments. This is done with
-[`generate_scaling_experiments`][access.profiling.manager.ProfilingManager.generate_scaling_experiments], which
-finds the layouts for every size of the study and creates one experiment for each of them:
+We are now ready to plan the experiments. This is done with
+[`plan_scaling_experiments`][access.profiling.manager.ProfilingManager.plan_scaling_experiments], which finds the
+layouts for every size of the study and plans one experiment for each of them. It creates nothing, so we can look at
+the plan first:
 
 === "ACCESS-ESM1.6"
 
@@ -220,79 +257,73 @@ finds the layouts for every size of the study and creates one experiment for eac
         return 2.5 * 4 / num_nodes
 
 
-    control_options = {
-        "config.yaml": {
-            "manifest": {"reproduce": {"exe": False}},
-            "postscript": "REMOVE",
-        }
-    }
-
-    manager.generate_scaling_experiments(
+    plan = manager.plan_scaling_experiments(
         num_nodes_list=[1, 2, 3, 4, 5, 6, 8],
         cores_per_node=104,
         walltime=walltime,
         allocations=allocations,
-        control_options=control_options,
     )
+    plan
     ```
 
-    The control options are changes that are applied to the control before the experiments are created. Here
-    they tell Payu not to insist on the exact executables of the release, and they remove the post-processing
-    script of the release, which is not needed for profiling.
+    This shows the number of experiments the plan creates, and the first and the last of them:
+
+    ```text
+    <StudyPlan of plan_scaling_experiments: 810 new experiments, 0 to regenerate, 0 already held>
+         nodes  cores                                              layout  walltime (hours)
+    0        1    104      esm1p6-layout_piControl_atm_10x5_mom_7x7_ice_4             10.00
+    1        1    104      esm1p6-layout_piControl_atm_10x5_mom_8x6_ice_4             10.00
+    2        1    104      esm1p6-layout_piControl_atm_10x5_mom_7x7_ice_3             10.00
+    3        1    104      esm1p6-layout_piControl_atm_10x5_mom_8x6_ice_3             10.00
+    4        1    104      esm1p6-layout_piControl_atm_10x5_mom_7x7_ice_2             10.00
+    ..     ...    ...                                                 ...               ...
+    805      8    832  esm1p6-layout_piControl_atm_20x20_mom_18x21_ice_15              1.25
+    806      8    832  esm1p6-layout_piControl_atm_20x20_mom_21x18_ice_15              1.25
+    807      8    832  esm1p6-layout_piControl_atm_20x20_mom_22x17_ice_18              1.25
+    808      8    832  esm1p6-layout_piControl_atm_20x20_mom_25x15_ice_15              1.25
+    809      8    832  esm1p6-layout_piControl_atm_20x20_mom_22x17_ice_15              1.25
+    ```
 
 === "ACCESS-OM3"
 
     ```python
-    from ruamel.yaml.scalarstring import DoubleQuotedScalarString
-
-
     def walltime(num_nodes):
         """2 hours on 27 nodes, scaled with the inverse of the number of nodes, and at most 24 hours."""
         return min(2.0 * 27 / num_nodes, 24)
 
 
-    control_options = {
-        "config.yaml": {
-            "modules": {"use": ["/g/data/vk83/modules"], "load": ["access-om3/2026.05.004"]},
-            "mem": "REMOVE",
-            "manifest": {"reproduce": {"exe": False}},
-            "postscript": "REMOVE",
-            "collate": "REMOVE",
-            "archive": "REMOVE",
-            "env": {
-                "ESMF_RUNTIME_PROFILE": DoubleQuotedScalarString("on"),
-                "ESMF_RUNTIME_PROFILE_OUTPUT": DoubleQuotedScalarString("SUMMARY"),
-            },
-        },
-        "MOM_input": {
-            "AUTO_MASKTABLE": "True",
-            "MASKTABLE": "REMOVE",
-            "LAYOUT": "REMOVE",
-            "IO_LAYOUT": "REMOVE",
-        },
-        "nuopc.runconfig": {
-            "CLOCK_attributes": {"stop_n": 2, "stop_option": "nmonths", "restart_n": 2, "restart_option": "nmonths"},
-        },
-    }
-
-    manager.generate_scaling_experiments(
+    plan = manager.plan_scaling_experiments(
         num_nodes_list=[1, 2, 4, 8, 16, 26, 32],
         cores_per_node=104,
         walltime=walltime,
         allocations=allocations,
-        control_options=control_options,
     )
+    plan
     ```
 
-    The control options are changes that are applied to the control before the experiments are created. The
-    release fixes the decomposition of MOM6 with a `LAYOUT` of 72 × 48 and a `MASKTABLE` that goes with it, and
-    these only work for one number of ocean cores. In our study MOM6 chooses its own decomposition, so we remove
-    both, together with the `IO_LAYOUT` that goes with that decomposition, and set `AUTO_MASKTABLE`. We also remove the
-    memory request, which was chosen for the number of cores of the release, and shorten the run to two months.
-    The `modules` entry tells Payu where to find the modules and which build of ACCESS-OM3 to load. Adapt its
-    path and its version to the build you want to profile. Finally, the environment variables turn on the ESMF
-    profiling summary. Note that they are written with quotes, because otherwise Payu would read `on` as a
-    boolean.
+    This shows the number of experiments the plan creates, and each of them:
+
+    ```text
+    <StudyPlan of plan_scaling_experiments: 17 new experiments, 0 to regenerate, 0 already held>
+        nodes  cores                                                       layout  walltime (hours)
+    0       1    104        om3-layout_MC-25km_atm_10_cpl_10_ice_10_ocn_94_rof_10         24.000000
+    1       2    208       om3-layout_MC-25km_atm_20_cpl_20_ice_20_ocn_188_rof_20         24.000000
+    2       2    208       om3-layout_MC-25km_atm_20_cpl_20_ice_20_ocn_186_rof_20         24.000000
+    3       4    416       om3-layout_MC-25km_atm_40_cpl_40_ice_40_ocn_375_rof_40         13.500000
+    4       8    832       om3-layout_MC-25km_atm_80_cpl_80_ice_80_ocn_750_rof_80          6.750000
+    5       8    832       om3-layout_MC-25km_atm_75_cpl_75_ice_75_ocn_750_rof_75          6.750000
+    6       8    832       om3-layout_MC-25km_atm_80_cpl_80_ice_80_ocn_745_rof_80          6.750000
+    7      16   1664  om3-layout_MC-25km_atm_150_cpl_150_ice_150_ocn_1500_rof_150          3.375000
+    8      16   1664  om3-layout_MC-25km_atm_165_cpl_165_ice_165_ocn_1485_rof_165          3.375000
+    9      26   2704  om3-layout_MC-25km_atm_255_cpl_255_ice_255_ocn_2445_rof_255          2.076923
+    10     26   2704  om3-layout_MC-25km_atm_270_cpl_270_ice_270_ocn_2430_rof_270          2.076923
+    11     26   2704  om3-layout_MC-25km_atm_255_cpl_255_ice_255_ocn_2430_rof_255          2.076923
+    12     32   3328  om3-layout_MC-25km_atm_315_cpl_315_ice_315_ocn_3000_rof_315          1.687500
+    13     32   3328  om3-layout_MC-25km_atm_330_cpl_330_ice_330_ocn_2985_rof_330          1.687500
+    14     32   3328  om3-layout_MC-25km_atm_300_cpl_300_ice_300_ocn_3000_rof_300          1.687500
+    15     32   3328  om3-layout_MC-25km_atm_315_cpl_315_ice_315_ocn_2985_rof_315          1.687500
+    16     32   3328  om3-layout_MC-25km_atm_330_cpl_330_ice_330_ocn_2970_rof_330          1.687500
+    ```
 
 The arguments are:
 
@@ -303,14 +334,49 @@ The arguments are:
 - `walltime`: the walltime of each experiment in hours, as a number or as a function of the number of nodes.
 - `allocations`: the allocation strategy, or a function of the number of nodes returning one.
 
-Any other argument is passed on to the workflow engine of the manager. For both managers of the package, this is
-`control_options`, which is described in more detail in
-[Experiments with Payu](../access/payu.md#generating-the-experiments) and in
-[Cylc Rose suites](../access/cylc-rose-suites.md#the-changes-of-an-experiment).
+Each row of the plan is an experiment, with its size, the key of its layout and its walltime. The plan also counts
+the experiments that the study already has, which it leaves out. Planning writes nothing and submits nothing, so it
+needs neither the control nor `lab_dir`, and you can plan again as often as you like.
 
-The experiments now exist, with the status NEW, but nothing has been submitted yet. Note that you can call
-`generate_scaling_experiments` again without any risk: the experiments that already exist are skipped. This is
-useful to add more sizes to a study later, as only the new experiments are created.
+Two more arguments make the study vary a setting as well as the size. `changes` are changes that every experiment of
+the plan makes beyond its layout, in the format of the control options. `labels` are keys and values of your own
+that say what the changes are. For example, a study of ACCESS-OM3 with two time steps of the ocean makes one plan
+for each:
+
+```python
+plans = [
+    manager.plan_scaling_experiments(
+        num_nodes_list=[1, 2, 4, 8, 16, 26, 32],
+        cores_per_node=104,
+        walltime=walltime,
+        allocations=allocations,
+        changes={"MOM_input": {"DT": dt}},
+        labels={"dt": dt},
+    )
+    for dt in (900, 1800)
+]
+```
+
+The two plans have the same layouts, but different changes, so each plans experiments of its own, and the labels are
+a column of each plan. The changes may not set the walltime, since the `walltime` argument gives it. Each plan is
+generated as the next section shows, and [Configuration choices](configuration-choices.md) shows how the labels are
+then used to compare the experiments.
+
+## Generating the experiments
+
+Once we are happy with the plan, we create its experiments with
+[`generate`][access.profiling.manager.ProfilingManager.generate]:
+
+```python
+manager.generate(plan)
+```
+
+This returns a table of the experiments it created, one row each, as the status of the study shows them. They are
+numbered in the order of the plan, `exp-0001` onwards, and have the status NEW, but nothing has been submitted yet.
+
+Note that you can generate a plan again without any risk: the experiments that the study has by then are skipped.
+The same is true of a new plan made with the same arguments, for example in a later session. This is useful to add
+more sizes to a study later, as only the new experiments are created.
 
 ## Running the experiments
 
@@ -321,8 +387,8 @@ manager.run_experiments()
 ```
 
 [`run_experiments`][access.profiling.payu_manager.PayuManager.run_experiments] submits all the NEW experiments and
-marks them as RUNNING. It does not wait for them to finish, so you can close the Python session while they run and
-come back later.
+marks them as RUNNING. It returns a table of the experiments it submitted. It does not wait for them to finish, so
+you can close the Python session while they run and come back later.
 
 Some options depend on the workflow engine. With Payu, for example, it is possible to run every experiment several
 times, or to start it from the restart files of another experiment, as

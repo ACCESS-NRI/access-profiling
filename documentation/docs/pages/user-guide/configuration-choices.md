@@ -24,10 +24,19 @@ manager = PayuManager(
     application=OM3_MC_100KM,
     control=OM3_MC_100KM_JRA_RYF_SOURCE,
     lab_dir=Path("/scratch/tm70/model_scaling"),
+    control_options={
+        "config.yaml": {
+            "manifest": {"reproduce": {"exe": False}},
+            "postscript": "REMOVE",
+            "mem": "REMOVE",
+        },
+    },
 )
 ```
 
 The three directories are only examples, so adapt them to your own setup, replacing `tm70` with your own project.
+The control options remove what the control only needs for production runs. The application turns on the ESMF
+profiling summary by itself, as in [Creating the manager](experiments.md#creating-the-manager).
 
 ## Stating the choices
 
@@ -73,34 +82,20 @@ There are three things to note here:
 
 ## Generating the experiments
 
-We create the experiments with
-[`generate_experiments`][access.profiling.manager.ProfilingManager.generate_experiments]. It creates one experiment
-for each choice, and searches for nothing:
+We plan the experiments with [`plan_experiments`][access.profiling.manager.ProfilingManager.plan_experiments]. It plans
+one experiment for each choice, and searches for nothing. Then we create them with
+[`generate`][access.profiling.manager.ProfilingManager.generate], as in [Generating the
+experiments](experiments.md#generating-the-experiments):
 
 ```python
-from ruamel.yaml.scalarstring import DoubleQuotedScalarString
-
-control_options = {
-    "config.yaml": {
-        "manifest": {"reproduce": {"exe": False}},
-        "postscript": "REMOVE",
-        "mem": "REMOVE",
-        "env": {
-            "ESMF_RUNTIME_PROFILE": DoubleQuotedScalarString("on"),
-            "ESMF_RUNTIME_PROFILE_OUTPUT": DoubleQuotedScalarString("SUMMARY"),
-        },
-    },
-}
-
-manager.generate_experiments(distributions, control_options=control_options)
+plan = manager.plan_experiments(distributions)
+manager.generate(plan)
 
 for name, experiment in manager.experiments.items():
     print(name, experiment.labels)
 ```
 
-The control options are applied to the control before the experiments are created, as in
-[Generating the experiments](experiments.md#generating-the-experiments). Here they turn on the ESMF profiling
-summary, and remove what the control only needs for production runs. This prints the experiments and their labels:
+This prints the experiments and their labels:
 
 ```text
 exp-0001 {'distribution': 'cartesian'}
@@ -235,10 +230,10 @@ far as the blocks allow. On 36 ranks, no blocks in a single row give each rank 5
 ranks in a column instead. Each rank then holds a band of latitudes, and some of these bands may be all land. This
 means that the experiment measures another arrangement of the ranks as well as another block size.
 
-Finally we create the experiments, with the same call as before:
+Finally we create the experiments, with the same calls as before:
 
 ```python
-manager.generate_experiments(block_sizes, control_options=control_options)
+manager.generate(manager.plan_experiments(block_sizes))
 
 for name, experiment in manager.experiments.items():
     print(name, manager.layout_key(name), experiment.labels)
@@ -271,15 +266,15 @@ The manager recognises a choice that the study already has an experiment for. It
 changes of the choice with the [records](managing-experiments.md#what-the-manager-keeps-on-disk) of the experiments.
 This has a few consequences:
 
-- You can call `generate_experiments` again with the same choices, for example in a later session. The choices
-  that already have an experiment are skipped, and only the new ones are created.
+- You can plan and generate the same choices again, for example in a later session. The choices that already have
+  an experiment are skipped, and only the new ones are created.
 - The labels are not compared. An experiment that is found again keeps the labels it has. If the choice gives
   other labels, the manager logs a warning.
 - Two choices of one call with the same layout and the same changes raise a `ValueError`. A study has one
   experiment for each configuration.
-- The experiments of a scaling study have a layout and no changes. A choice with the same layout and no changes
-  is therefore the same experiment, and `generate_scaling_experiments` skips the layouts that such choices
-  already cover.
+- The experiments of a scaling study have a layout and the `changes` given to `plan_scaling_experiments`, which are
+  none by default. A choice with the same layout and the same changes is therefore the same experiment, and
+  `plan_scaling_experiments` skips the layouts that such choices already cover.
 
 There are also a few things a choice cannot do:
 

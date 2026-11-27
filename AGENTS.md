@@ -58,11 +58,12 @@ src/access/profiling/
   application.py        Application (the ABC), LogSpec, log_at
   control.py            ControlSource, GitControlSource, ExistingDirectoryControlSource: where a control is
   experiment.py         ProfilingLog (one log -> one xr.Dataset), ConfigurationChoice (one configuration a study
-                        asks an experiment for), ExperimentPlan, ExperimentCoordinate (a quantity of a layout that
-                        tables and plots are arranged by), find_component, component_cores,
-                        ProfilingExperimentStatus, ProfilingExperiment (its record, and its archive to and from a
-                        tarball)
-  manager.py            ProfilingManager[AppT]: generation, records and the study file, statuses, parsing
+                        asks an experiment for), ExperimentPlan, StudyPlan (what planning returns, and generating
+                        creates), ExperimentCoordinate (a quantity of a layout that tables and plots are arranged by),
+                        find_component, component_cores, ProfilingExperimentStatus, ProfilingExperiment (its record,
+                        and its archive to and from a tarball)
+  manager.py            ProfilingManager[AppT]: planning and generation, records and the study file, statuses,
+                        parsing
   results.py            ProfilingResults (what parsing returns: selection, reductions, tables and plotting),
                         ParsedExperiment (the data, labels, layout and CPUs of one experiment), Region (one region
                         of one log, under a label)
@@ -90,8 +91,8 @@ src/access/profiling/
 
   ── models/: the ACCESS models, as data ──
   cice.py               CICEPartitioning: CICE's block distribution, for ESM1.6, OM2 and OM3 alike
-  components.py         UMComponent, MOM5Component, CICEComponent: the codes the Payu models are put together from;
-                        UM_CONSTRAINTS, which the Rose suites share
+  components.py         UMComponent, MOM5Component, MOM6Component, CICEComponent: the codes the Payu models are put
+                        together from; UM_CONSTRAINTS, which the Rose suites share
   esm15.py              ESM15Configuration, ESM15_PREINDUSTRIAL, ESM15_HISTORICAL and their control sources
   esm16.py              ESM16Configuration, ESM16_PI_CONTROL, ESM16_AMIP and the control source
   om2.py                OM2Configuration, OM2_1DEG, OM2_025DEG, OM2_01DEG
@@ -222,7 +223,7 @@ blocks, one page per concept. A new module needs a block on the right page and a
 - **The records, the study file and the archives are written whole**: to a temporary file beside the target, which
   then replaces it (`_write_whole`, and `ProfilingExperiment.archive` for a tarball). A record cut short stops the
   study being opened, and an archive cut short still has its record readable, being its first member.
-  `delete_experiment` updates the working directory before forgetting the experiment, and where it cannot be written
+  `forget_experiment` updates the working directory before forgetting the experiment, and where it cannot be written
   forgets it for the session only, with a warning.
 - **Each of the two files states the version of its own format** (`RECORD_VERSION`, `STUDY_VERSION`), and
   `read_versioned` refuses a file that states another one, or none, naming the file. The record states its own
@@ -245,9 +246,10 @@ blocks, one page per concept. A new module needs a block on the right page and a
   called before anything is written, so what an engine can check without writing is checked there, not in
   `_create_experiments`.
 - **Each Payu study runs in a laboratory of its own**, `<lab_dir>/<model type>-<8 hex digits of the working directory>`
-  (`_study_laboratory`). `_create_experiments` adds it, absolute, to the control options as `config.yaml`'s
-  `laboratory`, which every experiment branches from and every Payu step reads. `_refuse_plans` refuses a `laboratory`
-  control option, and a plan whose `config.yaml` changes name a `laboratory` or an `experiment`. Payu's default
+  (`_study_laboratory`). `_create_experiments` adds it, absolute, to the changes made to the control
+  (`_control_options`) as `config.yaml`'s `laboratory`, which every experiment branches from and every Payu step
+  reads. `_refuse_plans` refuses a `laboratory` among those changes, and a plan whose `config.yaml` changes name a
+  `laboratory` or an `experiment`. Payu's default
   laboratory is shared by every study of a model, and every study numbers its experiments from `exp-0001`, so sharing
   one makes the runner skip the experiments another study ran and `payu sweep --hard` delete its runs. The generator's
   and the runner's `lab_path` reaches Payu only while it checks a branch out, and the runner's `payu run` passes no
@@ -267,35 +269,52 @@ blocks, one page per concept. A new module needs a block on the right page and a
   replacement, refused where the text does not occur. A regenerated experiment's `.conf` files are edited in its copy,
   so that a correction made there by hand survives, and its other files are taken from the control again, since
   replacing a text twice can apply it twice. A plan's walltime goes into the application's `walltime_variable`, and is
-  refused where there is none.
+  refused where there is none, or where the plan's changes set that variable.
 - **No status is stored.** A new manager finds the experiments of `work_dir` again from their records, as NEW, or
   DONE where the record says `complete`, and the tarballs in `archive_dir`, as ARCHIVED, an archive replacing the
   experiment found in `work_dir`. A tarball it cannot read is skipped with a warning. Every other status is read
-  afresh from what the engine recorded, by `update_statuses`, which archiving, parsing and running all call first,
-  and generation too when it is to regenerate failed experiments. ARCHIVED is terminal, since reading a
+  afresh from what the engine recorded, by `update_statuses`, which `status`, archiving, parsing and running all call
+  first, and planning too when it is to regenerate failed experiments. ARCHIVED is terminal, since reading a
   status out of a tarball would mean extracting it. The records and the study file are all that is stored.
 - **`parse_status` never raises.** When it cannot tell, it logs why at DEBUG and returns `None`, which keeps the
   status the experiment has.
-- **Generation registers nothing unless all of it succeeds.** `generate_scaling_experiments` and
-  `generate_experiments` plan without touching the disk, then share `_generate`, which calls `_create_experiments`
-  once with every plan. If that raises, no new experiment is registered and no record written, because one
-  registered with nothing on disk would be run and never generated again. `_create_experiments` returns only the
-  new experiments, not those being regenerated (`ExperimentPlan.regenerating`), which are held already. A plan's
-  changes are computed afresh on every call, never replayed.
-- **`generate_scaling_experiments` searches for layouts and is for scaling studies only; `generate_experiments`
-  searches nothing.** It makes one experiment per `ConfigurationChoice`, whose `changes` are the engine's words and
-  are written as given. A choice without a layout never consults the application. With a layout, the choice's
-  changes are merged over `config_changes(layout)` by `_merge_changes`: mappings key by key, the choice winning, and
-  two lists for one key refused, since merging lists is the engine's. Nothing checks a choice's changes against
-  its layout. A choice is a walltime-free plan (`walltime_hours` None): a walltime is one of its changes, never a
-  parameter. Only scaling experiments are regenerated.
+- **Planning writes nothing; generating registers nothing unless all of it succeeds.** `plan_scaling_experiments`
+  and `plan_experiments` return a `StudyPlan` without touching the disk, and need neither a control nor a `lab_dir`.
+  Its experiments are unnamed, but for one being regenerated. `generate` numbers them against what the study holds
+  by then, leaving out an experiment created since the plan, so a plan generated twice creates nothing twice, and
+  refuses a plan regenerating an experiment no longer held. It then calls `_generate`, which calls
+  `_create_experiments` once with every plan. If that raises, no new experiment is registered and no record written,
+  because one registered with nothing on disk would be run and never generated again. `_create_experiments` returns
+  only the new experiments, not those being regenerated (`ExperimentPlan.regenerating`), which are held already. A
+  plan's changes are computed afresh by every planning call, never replayed.
+- **`plan_scaling_experiments` searches for layouts and is for scaling studies only; `plan_experiments` searches
+  nothing.** The scaling plan's `changes` and `labels` are those of a choice without a layout, given to every layout it
+  finds, so a study varying a setting across its sizes makes one plan per value. Its changes may not set the walltime
+  that the plan gives each size, which each engine refuses in `_refuse_plans`. `plan_experiments` makes one experiment
+  per `ConfigurationChoice`, whose `changes` are the engine's words and are written as given. A choice without a layout
+  never consults the application. With a layout, the choice's changes are merged over `config_changes(layout)` by
+  `_merge_changes`: mappings key by key, the choice winning, and two lists for one key refused, since merging lists is
+  the engine's. Nothing checks a choice's changes against its layout. A choice is a walltime-free plan (`walltime_hours`
+  None): a walltime is one of its changes, never a parameter. Only scaling experiments are regenerated.
 - **A record's `changes` are what the study stated, never what the layout comes to** (`ExperimentPlan.stated_changes`,
-  not `changes`), so a scaling experiment is its layout with `{}`, and both generating methods recognise each
-  other's experiments. `ConfigurationChoice` refuses changes and labels that a record would not give back as they
-  were. Labels identify nothing: a held experiment keeps its own. A choice and an experiment hold copies of their
-  own, made with `copy.deepcopy`: a JSON round trip would lose the type of a YAML library's quoted string.
+  not `changes`), so a scaling experiment is its layout with the changes of its plan, `{}` by default, and both planning
+  methods recognise each other's experiments. `ConfigurationChoice` refuses changes and labels that a record would not
+  give back as they were. Labels identify nothing: a held experiment keeps its own. A choice and an experiment hold
+  copies of their own, made with `copy.deepcopy`: a JSON round trip would lose the type of a YAML library's quoted
+  string.
 - **Regenerating leaves a FAILED experiment FAILED**: the failure is the run's record, and
   `run_experiments(retry_failed=True)` is what clears it.
+- **A call that acts on the study returns what it did**: `generate`, `run_experiments` and `archive_experiments`
+  return the experiments they created, submitted or archived, as `status()` shows them (`_table`), with no rows where
+  there were none. `status()` asks the engine first. How a run is submitted is an argument of the call that submits
+  it, never an attribute set in another cell: Payu's `nruns` and `startfrom_restart` are `run_experiments`'.
+- **The control is changed by what the application needs, under what the study asks.** `Application.control_changes`
+  (`{}` by default) is what every experiment of the application needs of the control, such as OM3's ESMF summary.
+  `control_options` is the study's, given to the manager and deep-copied there. `_control_options` merges the second
+  over the first with `_merge_changes`, the study winning, and it is what each engine writes and checks and what the
+  history records. What a generated layout needs goes in `config_changes` instead, since an experiment that keeps
+  the control's layout needs none of it: MOM6's `AUTO_MASKTABLE`, and the removal of a pinned `LAYOUT`, are
+  `MOM6Component.config_changes`.
 - **An archive holds only what can be extracted again**, since `directory()` extracts it with `filter="data"`,
   which refuses absolute links and links leading out of the archive. A symlink to inside the experiment is kept, as
   a relative link; one to outside it is followed with `follow_symlinks=True`, and otherwise left out and logged at
@@ -373,7 +392,7 @@ blocks, one page per concept. A new module needs a block on the right page and a
   `ExistingDirectoryControlSource` or at `<work_dir>/<control.directory>`, and refuses to generate where it has no
   `rose-suite.conf` (`_control_directory`).
 - **`from_control` reads the application's own files, never the engine's**: `config.yaml` and the CICE namelist for
-  the submodel models, `nuopc.runconfig`, `ice_in` and `MOM_input` for OM3, by the Payu model types the control
+  the submodel models, `nuopc.runconfig` and `ice_in` for OM3, by the Payu model types the control
   names, and `app/um/rose-app.conf` for `am3_from_control`, with the optional configuration that `EXPT_HORIZ_ATM`
   in `rose-suite.conf` selects (N512e states its grid there). It reproduces the preset of the same control (the OM3
   readers after the blocks `replace`), which the tests check.

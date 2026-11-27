@@ -206,6 +206,12 @@ it has. ACCESS-OM3 is such a model. Its mediator, its data components and its se
 cores, and NUOPC lays them out. [`OM3Configuration`][access.profiling.models.om3.OM3Configuration] shows how this
 is described.
 
+A model may also need a change to its control before it writes one of its logs, whatever the layout. ACCESS-OM3, for
+example, writes the ESMF summary only where two environment variables turn it on. Such a model returns the changes
+from its [`control_changes`][access.profiling.application.Application.control_changes], in the same format as the
+changes of a layout. The manager makes them to the control before any experiment is created, under the control
+options of the study, which win where both change one setting.
+
 ## Adding it to the package
 
 The package ships the configuration classes of the ACCESS models. Each model has its own module in

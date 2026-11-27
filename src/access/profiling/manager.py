@@ -19,6 +19,7 @@ write leaves the file as it was.
 """
 
 import copy
+import dataclasses
 import itertools
 import json
 import logging
@@ -33,6 +34,7 @@ from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Generic, TypeVar
 
+import pandas as pd
 import xarray as xr
 from access.config.parallel_allocation_strategies import RootAllocation
 from access.config.parallel_component import ComponentLayout, ParallelComponent
@@ -47,6 +49,7 @@ from access.profiling.experiment import (
     ProfilingExperiment,
     ProfilingExperimentStatus,
     ProfilingLog,
+    StudyPlan,
     read_archived_record,
     read_record,
     read_versioned,
@@ -108,17 +111,24 @@ def _package_version() -> str:
         return "unknown"
 
 
-def _merge_changes(layout_changes: dict, stated: dict, above: tuple[str, ...] = ()) -> dict:
+def _merge_changes(
+    layout_changes: dict,
+    stated: dict,
+    above: tuple[str, ...] = (),
+    sources: tuple[str, str] = ("the layout", "the configuration choice"),
+) -> dict:
     """Returns the changes that realise a layout with the changes a configuration choice states merged over them.
 
     Mappings are merged key by key, and where the two disagree the choice wins, being what the study asked for.
     Two lists are refused instead: the workflow engine merges a list into the control's position by position, by
     rules of its own that are not reproduced here, so there is no saying what merging two of them would come to.
+    The control options of a study are merged over the control changes of its application in the same way.
 
     Args:
         layout_changes (dict): The changes realising the layout, keyed by file. Left as they are.
         stated (dict): The changes the choice states, keyed by file. Left as they are.
         above (tuple[str, ...]): The keys leading to these mappings, for the message.
+        sources (tuple[str, str]): What the two sets of changes are, for the message.
 
     Returns:
         dict: The merged changes.
@@ -130,12 +140,12 @@ def _merge_changes(layout_changes: dict, stated: dict, above: tuple[str, ...] = 
     for key, value in stated.items():
         ours = merged.get(key)
         if isinstance(ours, dict) and isinstance(value, dict):
-            merged[key] = _merge_changes(ours, value, (*above, key))
+            merged[key] = _merge_changes(ours, value, (*above, key), sources)
         elif isinstance(ours, list) and isinstance(value, list):
             raise ValueError(
-                f"Both the layout and the configuration choice give a list for {' > '.join((*above, key))}, and "
-                "two lists cannot be merged here. Leave the list out of the changes of the choice, and if every "
-                "experiment needs the change, make it in the control instead."
+                f"Both {sources[0]} and {sources[1]} give a list for {' > '.join((*above, key))}, and two lists "
+                f"cannot be merged here. Leave the list out of {sources[1]}, and if every experiment needs the change, "
+                "make it in the control instead."
             )
         else:
             merged[key] = value
@@ -170,7 +180,11 @@ class ProfilingManager(ABC, Generic[AppT]):
             writes and how a layout is realised in its own input files.
         control (ControlSource | None): Where the control every experiment perturbs comes from.
             None (the default) is enough to read and plot experiments that already exist, and is rejected by
-            generate_scaling_experiments and generate_experiments, which have nothing to perturb without it.
+            generate, which has nothing to perturb without it.
+        control_options (dict | None): Changes made to the control before any experiment is created from it, keyed
+            by file, in the words of the workflow engine. They are merged over the control changes the application
+            needs (`Application.control_changes`), and win where both change one setting. None (the default) makes
+            none beyond the application's.
 
     Raises:
         ValueError: If the study file records calls made with another application than this one, or if the record
@@ -183,11 +197,13 @@ class ProfilingManager(ABC, Generic[AppT]):
         experiments (dict[str, ProfilingExperiment]): The experiments this manager holds, keyed by name: those
             found in the working directory and in the archive directory when it was built, and those it has
             generated or been given since.
+        control_options (dict): The study's own changes to the control, as given.
     """
 
     work_dir: Path
     archive_dir: Path
     experiments: dict[str, ProfilingExperiment]
+    control_options: dict
 
     def __init__(
         self,
@@ -195,12 +211,16 @@ class ProfilingManager(ABC, Generic[AppT]):
         archive_dir: Path | str,
         application: AppT,
         control: ControlSource | None = None,
+        *,
+        control_options: dict | None = None,
     ):
         super().__init__()
         self.work_dir = Path(work_dir)
         self.archive_dir = Path(archive_dir)
         self._application = application
         self._control = control
+        # Copied, so that a dictionary the notebook goes on editing does not change what the study generates.
+        self.control_options = copy.deepcopy(control_options) if control_options is not None else {}
         self.experiments = {}
         self._refuse_another_application()
 
@@ -249,6 +269,11 @@ class ProfilingManager(ABC, Generic[AppT]):
         summary += indent + f"Application: {self.application.name}\n"
         if self.control is not None:
             summary += indent + f"Control: {self.control.label}\n"
+        # Both are said, since what the application adds to the control is not in the notebook that made the manager.
+        if self.application.control_changes:
+            summary += indent + f"Control changes of the application: {self.application.control_changes}\n"
+        if self.control_options:
+            summary += indent + f"Control options: {self.control_options}\n"
         summary += indent + f"Working directory: {self.work_dir!r}\n"
         summary += indent + f"Archive directory: {self.archive_dir!r}\n"
         summary += indent + "Experiments:\n"
@@ -350,19 +375,32 @@ class ProfilingManager(ABC, Generic[AppT]):
         self.work_dir.mkdir(parents=True, exist_ok=True)
         _write_whole(self.work_dir / STUDY_FILENAME, json.dumps(study, indent=2, default=str) + "\n")
 
-    def _engine_record(self, **runner_options) -> dict:
-        """Returns what the workflow engine adds to the history entry of a call that generated experiments.
-
-        Args:
-            **runner_options: The options the call was given for the engine.
+    def _control_options(self) -> dict:
+        """Returns the changes made to the control: those the application needs, with the study's merged over them.
 
         Returns:
-            dict: The options themselves, which are part of what every experiment of the call is. A subclass
-                adds what else only its engine can say.
-        """
-        return dict(runner_options)
+            dict: The changes, keyed by file.
 
-    def _log(self, call: str, experiments: list[str], generated: bool = False, **runner_options) -> None:
+        Raises:
+            ValueError: If the application and the study both give a list for the same key.
+        """
+        return _merge_changes(
+            self.application.control_changes,
+            self.control_options,
+            sources=("the control changes of the application", "the control options"),
+        )
+
+    def _engine_record(self) -> dict:
+        """Returns what the workflow engine adds to the history entry of a call that generated experiments.
+
+        Returns:
+            dict: The changes made to the control, which are part of what every experiment of the call is, where
+                there are any. A subclass adds what else only its engine can say.
+        """
+        options = self._control_options()
+        return {"control_options": options} if options else {}
+
+    def _log(self, call: str, experiments: list[str], generated: bool = False) -> None:
         """Adds a call to the history the study file keeps.
 
         What is true of every experiment of a call is written once here rather than in each experiment's
@@ -374,7 +412,6 @@ class ProfilingManager(ABC, Generic[AppT]):
             generated (bool): Whether the call generated the experiments, from this manager's control. False (the
                 default) records no control and nothing of the engine, which is what an experiment added or
                 deleted has to say of them.
-            **runner_options: The options the call was given for the engine.
         """
         study = self._read_study()
         study["history"].append(
@@ -385,7 +422,7 @@ class ProfilingManager(ABC, Generic[AppT]):
                 "manager": type(self).__name__,
                 "application": {"class": type(self.application).__name__, "name": self.application.name},
                 "control": self.control.provenance() if generated and self.control is not None else None,
-                "engine": self._engine_record(**runner_options) if generated else {},
+                "engine": self._engine_record() if generated else {},
                 "experiments": experiments,
             }
         )
@@ -613,7 +650,7 @@ class ProfilingManager(ABC, Generic[AppT]):
         """Rejects the sizes no layout search could be made for.
 
         Everything is checked before the first search, so that a bad value late in the list costs nothing and
-        generate_scaling_experiments either generates all the experiments it was asked for or none of them.
+        plan_scaling_experiments either plans all the experiments it was asked for or none of them.
 
         Args:
             num_nodes_list (list[float]): Numbers of nodes to generate experiments for.
@@ -638,11 +675,9 @@ class ProfilingManager(ABC, Generic[AppT]):
         allocations: RootAllocation | Callable[[float], RootAllocation] | None,
         max_layouts: int | None,
         regenerate_failed: bool,
-    ) -> list[ExperimentPlan]:
+        choice: ConfigurationChoice,
+    ) -> StudyPlan:
         """Returns the experiments a scaling study is to create, one per layout it has not covered yet.
-
-        What generate_scaling_experiments decides, separated from what it then does with it: nothing here
-        touches the working directory, so what a study would generate can be worked out without generating it.
 
         Args:
             num_nodes_list (list[float]): Numbers of nodes to generate experiments for.
@@ -653,17 +688,20 @@ class ProfilingManager(ABC, Generic[AppT]):
             max_layouts (int | None): Maximum number of layouts to enumerate for each number of nodes.
             regenerate_failed (bool): Whether to plan an experiment this manager already holds again when its
                 run failed.
+            choice (ConfigurationChoice): The changes and the labels every experiment of the plan has, with no layout.
 
         Returns:
-            list[ExperimentPlan]: What to create, in the order the sizes were asked for.
+            StudyPlan: What to create, in the order the sizes were asked for.
         """
         plans: list[ExperimentPlan] = []
+        rows: list[dict] = []
+        held_now: list[str] = []
         # The layouts this call has already covered. self.experiments on its own does not say, the
         # registration being deferred until the engine has returned, and the same layout is regularly valid at
         # two different node counts.
         planned: set[str] = set()
         held = self._held_identities()
-        number = self._last_number()
+        stated = json.dumps(choice.changes, sort_keys=True)
         for num_nodes in num_nodes_list:
             total_cores = int(num_nodes * cores_per_node)
             layouts = self.select_layouts(
@@ -685,36 +723,40 @@ class ProfilingManager(ABC, Generic[AppT]):
                 key = self.application.layout_key(layout)
                 if key in planned:
                     continue
+                planned.add(key)
 
-                # A scaling study changes nothing beyond the layout, so the layout is what identifies each of
-                # its experiments.
-                name = held.get((key, "{}"))
+                # An experiment of a scaling study is its layout and the changes the study stated.
+                name = held.get((key, stated))
                 existing = self.experiments[name] if name is not None else None
                 if existing is not None and not (
                     regenerate_failed and existing.status == ProfilingExperimentStatus.FAILED
                 ):
                     logger.info(f"Experiment {name} already exists for layout {key}. Skipping addition.")
+                    held_now.append(name)
                     continue
                 if existing is not None:
                     logger.info(f"Regenerating experiment {name}, whose run failed.")
-                else:
-                    number += 1
-                    name = f"exp-{number:04d}"
 
-                planned.add(key)
                 plans.append(
                     ExperimentPlan(
                         name=name,
                         layout=layout,
-                        changes=self.application.config_changes(layout),
+                        changes=_merge_changes(self.application.config_changes(layout), choice.changes),
                         walltime_hours=walltime_hrs,
                         regenerating=existing is not None,
+                        stated_changes=choice.changes,
+                        labels=choice.labels,
                     )
                 )
+                row = {"nodes": num_nodes, "cores": total_cores, "layout": key, "walltime (hours)": walltime_hrs}
+                row |= choice.labels
+                if existing is not None:
+                    row["regenerates"] = name
+                rows.append(row)
 
-        return plans
+        return StudyPlan("plan_scaling_experiments", tuple(plans), pd.DataFrame(rows), tuple(held_now))
 
-    def generate_scaling_experiments(
+    def plan_scaling_experiments(
         self,
         num_nodes_list: list[float],
         cores_per_node: int,
@@ -722,19 +764,16 @@ class ProfilingManager(ABC, Generic[AppT]):
         allocations: RootAllocation | Callable[[float], RootAllocation] | None = None,
         max_layouts: int | None = None,
         regenerate_failed: bool = False,
-        **runner_options,
-    ) -> None:
-        """Generates the experiments of a study, one per valid layout of the application being profiled.
+        changes: dict | None = None,
+        labels: dict | None = None,
+    ) -> StudyPlan:
+        """Plans the experiments of a scaling study, one per valid layout of the application being profiled.
 
         For each requested number of nodes, the valid layouts are enumerated and each one becomes an
         experiment. A scaling study asks for several numbers of nodes, and a study of the best layout of one
-        budget for a single one. Layouts whose experiment is already known to this manager, or was already
-        planned earlier in the same call, are skipped, so the same layout found for two different numbers of
-        nodes only generates one experiment.
-
-        The experiments are numbered, `exp-0001` onwards, in the order they are created. Which experiment
-        already runs a layout is told from the experiments' records, not from their names, so calling this
-        method again in a later session, on the same working directory, generates nothing twice.
+        budget for a single one. Layouts whose experiment the study already has, or that were already planned
+        for another size of the same call, are left out, so the same layout found for two different numbers of
+        nodes only makes one experiment. Nothing is written: the plan is created with generate().
 
         That happens whenever a layout fits both budgets, which is a matter of how many idle cores the
         allocation strategy tolerates: a layout spending 508 cores is valid on 520 and on 546, leaving 2.3% and
@@ -742,30 +781,20 @@ class ProfilingManager(ABC, Generic[AppT]):
         the total, since its bounds move with the budget. Strategies stated in cores, strategies without lower
         bounds, and callables repeat themselves more often.
 
-        An experiment that failed may be generated again, which is what regenerate_failed asks for. The
-        changes each experiment makes are worked out afresh from the arguments of this call rather than
-        replayed from what was generated before, so correcting whatever produced the failure - the walltime,
-        the allocation, the application's own config_changes - and calling this method again is what puts
-        the correction on the experiment.
+        Which experiment already runs a layout is told from the experiments' records, not from their names: by
+        the layout and by the changes the study stated beyond it. A study that varies a setting across its sizes
+        plans once for each value, with the changes that set it and the labels that say it, and each value makes
+        experiments of its own.
 
-        Regenerating leaves the status alone, so an experiment that failed still reads as failed: what a run
-        did is the run's to say, not generation's, and the record of the failure is still there to be read.
-        Running it again therefore takes run_experiments(retry_failed=True), which is also what clears that
-        record.
-
-        Experiments become known to this manager only once the engine has created them, since an experiment
-        it holds is one that can be run, archived and deleted. A generation that fails therefore registers
-        nothing, not even what the engine managed to create before failing, and it is the whole call that is
-        abandoned: correcting the cause and calling this method again generates the rest, under the numbers
-        that follow, since the ones the failed call took are not given again. A call the engine refuses before
-        it creates anything, as `_refuse_plans` lets it, takes no numbers. A regenerated experiment is
-        already registered and so survives such a failure, whether or not the engine reached it.
-
-        Deciding what to generate is the same question for every workflow engine and is answered here;
-        creating it is each engine's own and is left to _create_experiments.
+        An experiment that failed may be planned again, which is what regenerate_failed asks for. The changes
+        each experiment makes are worked out afresh from the arguments of this call rather than replayed from
+        what was generated before, so correcting whatever produced the failure - the walltime, the allocation,
+        the application's own config_changes - and generating the plan is what puts the correction on the
+        experiment. Regenerating leaves the status alone, so an experiment that failed still reads as failed:
+        running it again takes run_experiments(retry_failed=True), which is also what clears that record.
 
         Args:
-            num_nodes_list (list[float]): Numbers of nodes to generate experiments for. Fractional values are
+            num_nodes_list (list[float]): Numbers of nodes to plan experiments for. Fractional values are
                 allowed; the number of cores the layouts are searched for is the product with cores_per_node,
                 truncated to an integer.
             cores_per_node (int): Number of cores available on each node. Must be a positive integer.
@@ -780,52 +809,84 @@ class ProfilingManager(ABC, Generic[AppT]):
                 cores_per_node itself. None (the default) leaves every component unconstrained.
             max_layouts (int | None): Maximum number of layouts to enumerate for each number of nodes. None
                 (the default) enumerates all of them.
-            regenerate_failed (bool): Whether to generate an experiment this manager already holds again when
-                its run failed, so that a correction reaches it. False (the default) skips every experiment
-                already held, whatever became of it. Only failed ones are ever regenerated: a running one
-                would be rewritten underneath a live job, and one that finished has results that its
-                configuration should go on matching. The statuses are brought up to date first, so that a run
-                that failed in an earlier session is found.
-            **runner_options (Any): Further options for the workflow engine, passed through to
-                _create_experiments.
+            regenerate_failed (bool): Whether to plan an experiment this manager already holds again when its run
+                failed, so that a correction reaches it. False (the default) leaves out every experiment already
+                held, whatever became of it. Only failed ones are ever regenerated: a running one would be rewritten
+                underneath a live job, and one that finished has results that its configuration should go on
+                matching. The statuses are brought up to date first, so that a run that failed in an earlier session
+                is found.
+            changes (dict | None): Changes every experiment makes beyond its layout, keyed by file, as the changes
+                of a `ConfigurationChoice` are, such as the time step of the ocean. They are merged over the changes
+                that realise each layout, and win. They may not set the walltime, which `walltime` gives. None (the
+                default) makes none.
+            labels (dict | None): The study's own keys and values for every experiment of the plan, such as
+                `{"dt": 900}`, as JSON values. None (the default) gives none.
+
+        Returns:
+            StudyPlan: The experiments to create, with a table of their sizes, layouts, walltimes and labels.
 
         Raises:
-            ValueError: If this manager has no control, if cores_per_node is not a positive integer, or if any
-                of the node counts is not positive.
-            Exception: Whatever the workflow engine raises, unchanged. No experiment is registered when it
-                does.
+            ValueError: If cores_per_node is not a positive integer, if any of the node counts is not positive, if the
+                changes or the labels are not JSON values, if a label is named as one of `RESERVED_LABELS`, or if the
+                changes and a layout both give a list for the same key.
         """
-        self._refuse_no_control()
         self._validate_sizing(num_nodes_list, cores_per_node)
+        # A choice without a layout checks the changes and the labels, and copies them, as for plan_experiments.
+        choice = ConfigurationChoice(
+            changes if changes is not None else {}, labels=labels if labels is not None else {}
+        )
         if regenerate_failed:
             # Which runs failed is the engine's to say, and a status does not outlive the session: an experiment
             # found again from its record is NEW until the engine has been asked.
             self.update_statuses()
-        plans = self._plan_experiments(
-            num_nodes_list, cores_per_node, walltime, allocations, max_layouts, regenerate_failed
+        return self._plan_experiments(
+            num_nodes_list, cores_per_node, walltime, allocations, max_layouts, regenerate_failed, choice
         )
-        self._generate("generate_scaling_experiments", plans, **runner_options)
 
-    def _plan_choices(self, choices: list[ConfigurationChoice]) -> list[ExperimentPlan]:
-        """Returns the experiments to create for a list of configuration choices, one per choice not held yet.
+    def plan_experiments(self, choices: list[ConfigurationChoice]) -> StudyPlan:
+        """Plans one experiment for each configuration choice, whatever it is that the choices change.
 
-        What generate_experiments decides, separated from what it then does with it: nothing here touches the
-        working directory.
+        Where plan_scaling_experiments searches for the layouts of a study, this method searches nothing: a study
+        states each configuration it wants an experiment of, as changes to the files of the control. A study of a
+        setting on the layout of the control gives changes alone, and one that varies the layout as well gives each
+        choice a layout, for example one that select_layouts returned. Nothing is written: the plan is created with
+        generate().
+
+        What an experiment changes is worked out from its choice:
+
+        - without a layout, the changes are the choice's own, and the application is not consulted;
+        - with a layout, they are the changes realising the layout, as the application states them, with the
+          choice's merged over them. Mappings are merged key by key and the choice wins. Where both give a list
+          for the same key, the plan is refused, since lists are the workflow engine's to merge.
+
+        Nothing checks the changes of a choice against its layout. The application works out what a layout
+        comes to from its own fields, so a choice that changes a setting those depend on does not change them.
+        Nothing here states a walltime either: it is one of the changes, in the file the engine reads it from.
+
+        A choice the study already has an experiment for is left out. That is told from the experiments' records,
+        by the layout and the changes, so that planning again in a later session plans nothing twice, and an
+        experiment of a scaling study is the experiment of its layout with the changes stated for it. The labels
+        are not part of it: an experiment found this way keeps the labels it has, with a warning where the choice
+        gives others.
+
+        There is no regenerating a failed experiment here. A corrected change is another configuration, and so
+        another experiment, and the failed one is deleted with delete_experiments.
 
         Args:
-            choices (list[ConfigurationChoice]): The choices.
+            choices (list[ConfigurationChoice]): The configurations to create an experiment for.
 
         Returns:
-            list[ExperimentPlan]: What to create, in the order of the choices.
+            StudyPlan: The experiments to create, with a table of their layouts and labels.
 
         Raises:
-            ValueError: If two of the choices are the same configuration, or if a choice and its layout both
-                give a list for the same key.
+            ValueError: If two of the choices are the same configuration, or if a choice and its layout both give a
+                list for the same key.
         """
         plans: list[ExperimentPlan] = []
+        rows: list[dict] = []
+        held_now: list[str] = []
         asked: set[tuple[str | None, str]] = set()
         held = self._held_identities()
-        number = self._last_number()
         for choice in choices:
             key = None if choice.layout is None else self.application.layout_key(choice.layout)
             identity = (key, json.dumps(choice.changes, sort_keys=True))
@@ -839,6 +900,7 @@ class ProfilingManager(ABC, Generic[AppT]):
             name = held.get(identity)
             if name is not None:
                 logger.info(f"Experiment {name} already exists for this configuration choice. Skipping addition.")
+                held_now.append(name)
                 labels = self.experiments[name].labels
                 if labels != choice.labels:
                     logger.warning(
@@ -854,10 +916,9 @@ class ProfilingManager(ABC, Generic[AppT]):
                 if choice.layout is None
                 else _merge_changes(self.application.config_changes(choice.layout), choice.changes)
             )
-            number += 1
             plans.append(
                 ExperimentPlan(
-                    name=f"exp-{number:04d}",
+                    name=None,
                     layout=choice.layout,
                     changes=changes,
                     walltime_hours=None,
@@ -865,56 +926,62 @@ class ProfilingManager(ABC, Generic[AppT]):
                     labels=choice.labels,
                 )
             )
+            rows.append(
+                {"layout": key, "cores": None if choice.layout is None else choice.layout.n_cores} | choice.labels
+            )
 
-        return plans
+        return StudyPlan("plan_experiments", tuple(plans), pd.DataFrame(rows), tuple(held_now))
 
-    def generate_experiments(self, choices: list[ConfigurationChoice], **runner_options) -> None:
-        """Generates one experiment for each configuration choice, whatever it is that the choices change.
+    def generate(self, plan: StudyPlan) -> pd.DataFrame:
+        """Creates the experiments of a plan, numbering them, and returns them.
 
-        Where generate_scaling_experiments searches for the layouts of a study, this method searches nothing: a
-        study states each configuration it wants an experiment of, as changes to the files of the control, and
-        this creates them all with one call to the workflow engine. A study of a setting on the layout of the
-        control gives changes alone, and one that varies the layout as well gives each choice a layout, for
-        example one that select_layouts returned.
+        The experiments are numbered, `exp-0001` onwards, in the order of the plan, on from the highest number the
+        study has given. The plan is checked against what the study holds by then: an experiment the study has
+        come to have since the plan was made, in this session or another, is left out. Generating a plan twice
+        therefore creates nothing twice.
 
-        What an experiment changes is worked out from its choice:
+        Experiments become known to this manager only once the engine has created them, since an experiment
+        it holds is one that can be run, archived and deleted. A generation that fails therefore registers
+        nothing, not even what the engine managed to create before failing, and it is the whole call that is
+        abandoned: correcting the cause and generating again creates the rest, under the numbers that follow,
+        since the ones the failed call took are not given again. A call the engine refuses before it creates
+        anything, as `_refuse_plans` lets it, takes no numbers. A regenerated experiment is already registered and
+        so survives such a failure, whether or not the engine reached it.
 
-        - without a layout, the changes are the choice's own, and the application is not consulted;
-        - with a layout, they are the changes realising the layout, as the application states them, with the
-          choice's merged over them. Mappings are merged key by key and the choice wins. Where both give a list
-          for the same key, the call is refused, since lists are the workflow engine's to merge.
-
-        Nothing checks the changes of a choice against its layout. The application works out what a layout
-        comes to from its own fields, so a choice that changes a setting those depend on does not change them.
-        Nothing here states a walltime either: it is one of the changes, in the file the engine reads it from.
-
-        The experiments are numbered on from those the study already has, and calls accumulate: the
-        experiments of a study need not come from one call, nor from one of the two generating methods. A
-        choice the study already has an experiment for is skipped. That is told from the experiments' records,
-        by the layout and the changes, so that calling this method again in a later session generates nothing
-        twice, and an experiment of a scaling study is the experiment of its layout with no changes. The
-        labels are not part of it: an experiment found this way keeps the labels it has, with a warning where
-        the choice gives others.
-
-        There is no regenerating a failed experiment here. A corrected change is another configuration, and so
-        another experiment, and the failed one is deleted with delete_experiments.
-
-        As with generate_scaling_experiments, the experiments become known to this manager only once the
-        engine has created them, and a generation that fails registers nothing.
+        Deciding what to generate is the same question for every workflow engine and is answered by the plans;
+        creating it is each engine's own and is left to _create_experiments.
 
         Args:
-            choices (list[ConfigurationChoice]): The configurations to create an experiment for.
-            **runner_options (Any): Further options for the workflow engine, passed through to
-                _create_experiments.
+            plan (StudyPlan): What plan_scaling_experiments or plan_experiments returned.
+
+        Returns:
+            pd.DataFrame: The experiments created or regenerated, one row each, as status() shows them.
 
         Raises:
-            ValueError: If this manager has no control, if two of the choices are the same configuration, or if
-                a choice and its layout both give a list for the same key.
-            Exception: Whatever the workflow engine raises, unchanged. No experiment is registered when it
-                does.
+            ValueError: If this manager has no control, or if an experiment the plan regenerates is no longer held.
+            Exception: Whatever the workflow engine raises, unchanged. No experiment is registered when it does.
         """
         self._refuse_no_control()
-        self._generate("generate_experiments", self._plan_choices(choices), **runner_options)
+        held = self._held_identities()
+        number = self._last_number()
+        named: list[ExperimentPlan] = []
+        for planned in plan.experiments:
+            if planned.regenerating:
+                if planned.name not in self.experiments:
+                    raise ValueError(
+                        f"The plan regenerates experiment {planned.name}, which this study no longer holds. Make the "
+                        "plan again."
+                    )
+                named.append(planned)
+                continue
+            key = None if planned.layout is None else self.application.layout_key(planned.layout)
+            name = held.get((key, json.dumps(planned.stated_changes, sort_keys=True)))
+            if name is not None:
+                logger.info(f"Experiment {name} has been created for this configuration since the plan was made.")
+                continue
+            number += 1
+            named.append(dataclasses.replace(planned, name=f"exp-{number:04d}"))
+        return self._table(self._generate(f"generate({plan.call})", named))
 
     def _refuse_no_control(self) -> None:
         """Refuses to generate experiments for a manager that was given no control.
@@ -928,13 +995,15 @@ class ProfilingManager(ABC, Generic[AppT]):
                 "there is nothing to generate from. Pass a ControlSource to this manager."
             )
 
-    def _generate(self, call: str, plans: list[ExperimentPlan], **runner_options) -> None:
+    def _generate(self, call: str, plans: list[ExperimentPlan]) -> list[str]:
         """Creates the planned experiments and starts holding them: what follows planning, whatever planned them.
 
         Args:
-            call (str): The method that planned them, for the history of the study.
-            plans (list[ExperimentPlan]): What to create.
-            **runner_options: The options the call was given for the engine.
+            call (str): The call that created them, for the history of the study.
+            plans (list[ExperimentPlan]): What to create, each with its name.
+
+        Returns:
+            list[str]: The names of the experiments created or regenerated, in the order of the plans.
 
         Raises:
             Exception: Whatever the workflow engine raises, unchanged. No experiment is registered when it
@@ -942,34 +1011,34 @@ class ProfilingManager(ABC, Generic[AppT]):
         """
         if not plans:
             logger.warning("No new experiments to generate. Will skip generation.")
-            return
+            return []
 
         # What the engine can tell it could not create is refused first: nothing is written yet, so a call
         # refused here takes no number.
-        self._refuse_plans(plans, **runner_options)
+        self._refuse_plans(plans)
 
         # The numbers are taken before the engine is called and stay taken if it fails, since how far it got is
         # unknown: an experiment it half created must not be created over.
-        new_numbers = [int(plan.name.removeprefix("exp-")) for plan in plans if not plan.regenerating]
+        new_numbers = [int(str(plan.name).removeprefix("exp-")) for plan in plans if not plan.regenerating]
         if new_numbers:
             study = self._read_study()
             study["last_number"] = max(new_numbers)
             self._write_study(study)
 
         try:
-            created = self._create_experiments(plans, **runner_options)
+            created = self._create_experiments(plans)
         except Exception:
             # How far the engine got is unknown, so nothing new is registered: an experiment this manager has
             # never heard of is simply generated again on the next call, whereas one registered without
             # anything on disk behind it would be submitted by run_experiments() and would never be
             # generated, the check above having claimed it.
-            new_names = sorted(plan.name for plan in plans if not plan.regenerating)
+            new_names = sorted(str(plan.name) for plan in plans if not plan.regenerating)
             logger.warning(
                 f"Experiment generation failed, so none of {new_names} were added to this manager. Some may "
                 "already exist in the working directory, so their numbers are not given again: correcting the "
                 "cause and calling this method again generates the experiments under the numbers that follow."
             )
-            regenerating = sorted(plan.name for plan in plans if plan.regenerating)
+            regenerating = sorted(str(plan.name) for plan in plans if plan.regenerating)
             if regenerating:
                 logger.warning(
                     f"The experiments being regenerated, {regenerating}, are still held by this manager, "
@@ -987,9 +1056,11 @@ class ProfilingManager(ABC, Generic[AppT]):
             experiment.labels = copy.deepcopy(planned[name].labels)
             self.experiments[name] = experiment
             self._write_record(name)
-        self._log(call, [plan.name for plan in plans], generated=True, **runner_options)
+        names = [str(plan.name) for plan in plans]
+        self._log(call, names, generated=True)
+        return names
 
-    def _refuse_plans(self, plans: list[ExperimentPlan], **runner_options) -> None:
+    def _refuse_plans(self, plans: list[ExperimentPlan]) -> None:
         """Refuses the planned experiments that this manager's workflow engine can tell it could not create.
 
         Called with what `_create_experiments` is about to be called with, before the study takes a number for any
@@ -998,20 +1069,19 @@ class ProfilingManager(ABC, Generic[AppT]):
         whatever it can check without writing anything. Nothing is refused by default.
 
         Args:
-            plans (list[ExperimentPlan]): What is about to be created, at least one plan.
-            **runner_options: Whatever the generating method was passed for this engine.
+            plans (list[ExperimentPlan]): What is about to be created, at least one plan, each with its name.
 
         Raises:
             Exception: Whatever the subclass refuses the plans with.
         """
 
     @abstractmethod
-    def _create_experiments(self, plans: list[ExperimentPlan], **runner_options) -> dict[str, ProfilingExperiment]:
+    def _create_experiments(self, plans: list[ExperimentPlan]) -> dict[str, ProfilingExperiment]:
         """Creates the planned experiments with this manager's workflow engine.
 
-        Called once with everything generate_scaling_experiments or generate_experiments decided to create, so
-        that an engine which sets up many experiments in one invocation is invoked once, and only with what
-        `_refuse_plans` let through.
+        Called once with everything one generate call creates, so that an engine which sets up many experiments in
+        one invocation is invoked once, and only with what `_refuse_plans` let through. The changes made to the
+        control first are `_control_options()`.
         Raising abandons the whole call and registers nothing.
 
         Args:
@@ -1019,7 +1089,6 @@ class ProfilingManager(ABC, Generic[AppT]):
                 this manager already holds, so the engine is to apply its changes to what is already there
                 rather than start it over. A plan without a layout keeps the layout of the control, and one
                 without a walltime states none beyond what its changes say.
-            **runner_options: Whatever the generating method was passed for this engine.
 
         Returns:
             dict[str, ProfilingExperiment]: The experiments this manager is to start holding, keyed by name,
@@ -1028,7 +1097,7 @@ class ProfilingManager(ABC, Generic[AppT]):
         """
 
     @abstractmethod
-    def run_experiments(self, retry_failed: bool = False) -> None:
+    def run_experiments(self, retry_failed: bool = False) -> pd.DataFrame:
         """Runs the experiments this manager holds that have not run, with its workflow engine.
 
         Every NEW experiment is submitted, and so is every FAILED one where retry_failed asks for it, and each is
@@ -1039,6 +1108,10 @@ class ProfilingManager(ABC, Generic[AppT]):
         Args:
             retry_failed (bool): Whether to run the experiments whose runs failed as well as the new ones. False
                 (the default) runs only the new ones.
+
+        Returns:
+            pd.DataFrame: The experiments submitted, one row each, as status() shows them. It has no rows when there
+                was nothing to submit.
         """
 
     def archive_experiments(
@@ -1047,7 +1120,7 @@ class ProfilingManager(ABC, Generic[AppT]):
         exclude_files: list[str] | None = None,
         follow_symlinks: bool = False,
         overwrite: bool = False,
-    ) -> None:
+    ) -> pd.DataFrame:
         """Archives completed experiments to the specified archive path.
 
         This method will create a tar.gz archive containing relevant data from an experiment. No data will be deleted
@@ -1062,10 +1135,14 @@ class ProfilingManager(ABC, Generic[AppT]):
 
         The record in each archive states the number of CPUs of the experiment. Where the count cannot be read, the
         record leaves it null, with a warning, and the experiment is archived all the same.
+
+        Returns:
+            pd.DataFrame: The experiments archived by this call, one row each, as status() shows them.
         """
         # Only DONE experiments are archived, so a run that finished since the last look should be counted
         # among them rather than skipped as still running.
         self.update_statuses()
+        done = [name for name, exp in self.experiments.items() if exp.status == ProfilingExperimentStatus.DONE]
 
         self.archive_dir.mkdir(parents=True, exist_ok=True)
         for branch, exp in self.experiments.items():
@@ -1093,6 +1170,9 @@ class ProfilingManager(ABC, Generic[AppT]):
         study_file = self.work_dir / STUDY_FILENAME
         if study_file.is_file():
             shutil.copyfile(study_file, self.archive_dir / STUDY_FILENAME)
+        return self._table(
+            [name for name in done if self.experiments[name].status == ProfilingExperimentStatus.ARCHIVED]
+        )
 
     def add_experiment_from_directory(self, name: str, path: Path | str, labels: dict | None = None) -> None:
         """Adds an existing experiment from the specified directory.
@@ -1127,25 +1207,26 @@ class ProfilingManager(ABC, Generic[AppT]):
         self._write_record(name)
         self._log("add_experiment_from_directory", [name])
 
-    def delete_experiment(self, name: str) -> None:
-        """Deletes the specified experiment.
+    def forget_experiment(self, name: str) -> None:
+        """Forgets an experiment, without deleting any of its files.
 
-        Note that this only removes the experiment from the manager's tracking, together with its record in the
-        working directory, and adds the call to the history of the study, so that a manager built
-        later does not find it there again. It does not delete any of the experiment's own files, nor its archive: a
-        manager built later still finds an experiment that was archived, from its tarball in the archive directory.
+        This removes the experiment from the manager's tracking, together with its record in the working directory,
+        and adds the call to the history of the study, so that a manager built later does not find it there again.
+        It does not delete any of the experiment's own files, nor its archive: a manager built later still finds an
+        experiment that was archived, from its tarball in the archive directory. delete_experiments is the one that
+        deletes the files.
 
         Where the working directory cannot be written, as a colleague's study may not be, the experiment is
         forgotten in this session only, with a warning.
 
         Args:
-            name (str): Name of the experiment to delete.
+            name (str): Name of the experiment to forget.
         """
         if name in self.experiments:
             # The working directory first, so that the experiment is still held if writing it fails part way.
             try:
                 self._remove_record(name)
-                self._log("delete_experiment", [name])
+                self._log("forget_experiment", [name])
             except OSError as error:
                 logger.warning(
                     f"Could not update the working directory '{self.work_dir}' ({error}), so experiment '{name}' is "
@@ -1153,7 +1234,7 @@ class ProfilingManager(ABC, Generic[AppT]):
                 )
             del self.experiments[name]
         else:
-            logger.warning(f"Experiment '{name}' not found; cannot delete.")
+            logger.warning(f"Experiment '{name}' not found; cannot forget it.")
 
     @abstractmethod
     def _delete_experiments(self, names: list[str], dry_run: bool, **kwargs) -> None:
@@ -1391,6 +1472,44 @@ class ProfilingManager(ABC, Generic[AppT]):
             ComponentLayout | None: The layout, or None if the files do not say.
         """
         return self.application.parse_layout(path)
+
+    def status(self) -> pd.DataFrame:
+        """Returns where every experiment of the study is, asking the workflow engine afresh.
+
+        A status is not stored, so this is how a notebook sees which experiments have run, finished or failed,
+        whichever session it is in. The labels are columns of their own, since the names of the experiments say
+        nothing about them.
+
+        Returns:
+            pd.DataFrame: One row for each experiment, indexed by its name, with its status, the CPUs its job
+                occupied where they are known yet, the key of the layout it was given, and one column for each label.
+        """
+        self.update_statuses()
+        return self._table(list(self.experiments))
+
+    def _table(self, names: list[str]) -> pd.DataFrame:
+        """Returns some of the experiments as status() shows them, with the statuses they have.
+
+        Args:
+            names (list[str]): The experiments, in order.
+
+        Returns:
+            pd.DataFrame: One row for each experiment.
+        """
+        rows = []
+        for name in names:
+            experiment = self.experiments[name]
+            # A table is how the experiments are looked at, so a layout of another application is said to be one,
+            # as the manager's repr says it, and nothing is raised.
+            try:
+                key = self.layout_key(name)
+            except ValueError:
+                key = f"not a layout of {self.application.name}"
+            row = {"experiment": name, "status": experiment.status.name, "ncpus": experiment.ncpus, "layout": key}
+            rows.append(row | experiment.labels)
+        return pd.DataFrame(rows, columns=["experiment", "status", "ncpus", "layout"] if not rows else None).set_index(
+            "experiment"
+        )
 
     def update_statuses(self) -> None:
         """Brings the status of every experiment up to date with the state its run actually reached.

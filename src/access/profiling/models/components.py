@@ -7,7 +7,8 @@ A component is one code as the ACCESS models configure it: the UM decomposing it
 `um_env.yaml` states, MOM5 over the layout of `input.nml`, CICE as its partitioning says. ACCESS-ESM1.5,
 ACCESS-ESM1.6 and ACCESS-OM2 share them, each pairing them with the submodels its control declares, and
 ACCESS-OM3 runs CICE6 through the same CICE component. What a component writes is what its own code reads,
-whichever model it is coupled into, which is why each is described once here rather than once per model.
+whichever model it is coupled into, which is why each is described once here rather than once per model. MOM6,
+which only ACCESS-OM3 runs, is here too, beside MOM5.
 
 What every layout of the UM meets, `UM_CONSTRAINTS`, is stated here once too, and shared with the Rose suites of
 `access.profiling.models.um_suites`, which run the UM in components of their own.
@@ -153,6 +154,48 @@ class MOM5Component(PayuComponent):
         # renders a namelist value by str(), so a Python list writes its own brackets into the file and MOM5 is
         # handed `layout = [16, 15]`, which is not Fortran.
         return {_MOM5_NAMELIST_PATH: {"ocean_model_nml": {"layout": f"{nx}, {ny}"}}}
+
+
+@dataclass(frozen=True)
+class MOM6Component(PayuComponent):
+    """MOM6, working its own decomposition out from the ranks it is given, under AUTO_MASKTABLE.
+
+    There is no process grid to choose, so the search chooses its cores alone. A layout of it is written into
+    `MOM_input` as AUTO_MASKTABLE set and LAYOUT, IO_LAYOUT and MASKTABLE removed. A control that pins MOM6's
+    decomposition there, as the 25 km releases do with a LAYOUT of 72 x 48 and the mask table that goes with it,
+    runs on that one number of ocean ranks only, which a generated layout would not give it. Removing a setting the
+    file does not have changes nothing, so a control that pins nothing is left as it is, AUTO_MASKTABLE aside.
+
+    Its FMS clocks are read from the standard output Payu captured from the model, and are optional, since a run
+    may be configured not to write them.
+
+    Args:
+        name (str): How the component tree names it.
+        token (str): How `layout_key` abbreviates it.
+    """
+
+    name: str
+    token: str
+
+    @property
+    def domain(self) -> None:
+        return None
+
+    @property
+    def local_constraints(self) -> tuple[LocalConstraint, ...]:
+        return ()
+
+    @property
+    def logs(self) -> tuple[LogSpec, ...]:
+        return (
+            LogSpec("MOM6", payu_model_stdout(), FMSProfilingParser(has_hits=True), component=self.name, optional=True),
+        )
+
+    def config_changes(self, layout: ComponentLayout) -> dict:
+        # In experiment-generator's words: a string MOM_input reads as its boolean, and REMOVE for a key to drop.
+        return {
+            "MOM_input": {"AUTO_MASKTABLE": "True", "LAYOUT": "REMOVE", "IO_LAYOUT": "REMOVE", "MASKTABLE": "REMOVE"}
+        }
 
 
 @dataclass(frozen=True)

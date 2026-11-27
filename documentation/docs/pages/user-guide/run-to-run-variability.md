@@ -9,18 +9,18 @@ then get one value per experiment. We use the
 ## Running every experiment several times
 
 How to run an experiment several times depends on the workflow engine. With Payu, the manager runs every
-experiment [`nruns`][access.profiling.payu_manager.PayuManager.nruns] times. The runs can either follow one
+experiment as many times as the `nruns` argument of
+[`run_experiments`][access.profiling.payu_manager.PayuManager.run_experiments] says. The runs can either follow one
 another, each continuing the simulation where the previous one stopped, or be repeats of the same run.
 [Running an experiment several times](../access/payu.md#running-an-experiment-several-times) explains the
 difference, and how to choose between the two. Here we ask for three runs:
 
 ```python
-manager.nruns = 3
-manager.run_experiments()
+manager.run_experiments(nruns=3)
 ```
 
 Every experiment then runs three times. Keep in mind that this also makes the study three times more expensive!
-Be aware that you have to set `nruns` before the experiments run for the first time. The reason is that
+Be aware that you have to ask for the runs when the experiments run for the first time. The reason is that
 `run_experiments` only submits the experiments that have not run and, with `retry_failed=True`, the ones that
 failed.
 

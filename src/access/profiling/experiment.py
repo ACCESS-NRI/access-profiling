@@ -7,7 +7,8 @@ A `ProfilingExperiment` is one experiment held by a manager: the directory it ru
 and, once they are known, the cores it occupied and the layout it ran. Once finished it can be archived to a
 tarball, and it is read from the tarball after that. A `ProfilingLog` pairs one log file with the parser that
 reads it. A `ConfigurationChoice` is one configuration a study asks an experiment for, and an `ExperimentPlan` is
-an experiment a manager has decided to create, before any workflow engine has touched it. An `ExperimentCoordinate`
+an experiment a manager has decided to create, before any workflow engine has touched it. A `StudyPlan` holds the
+experiments one call planned, which a notebook shows before it creates them. An `ExperimentCoordinate`
 is a quantity of an experiment's layout that a table or a plot puts the experiments side by side by, such as the
 cores of one component, which `component_cores` reads with the help of `find_component`.
 
@@ -35,6 +36,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 
+import pandas as pd
 import xarray as xr
 from access.config.parallel_component import ComponentLayout, CoreSharing
 from access.config.parallel_domain import Domain, DomainDecompositionSpec
@@ -228,8 +230,9 @@ class ExperimentPlan:
     """One experiment a manager has decided to create, before any engine has touched it.
 
     Args:
-        name (str): The experiment's name. It is the key this manager holds it under, the branch or directory it
-            lives in, and the name written into the experiment's own configuration.
+        name (str | None): The experiment's name. It is the key this manager holds it under, the branch or directory
+            it lives in, and the name written into the experiment's own configuration. None in a `StudyPlan`, until
+            `ProfilingManager.generate` numbers the experiment, but for one being regenerated, which keeps its own.
         layout (ComponentLayout | None): The layout the experiment runs, or None for an experiment that keeps the
             layout of the control.
         changes (dict): Every configuration file change the engine is to make, keyed by the path of each file
@@ -243,13 +246,53 @@ class ExperimentPlan:
         labels (dict): The study's own keys and values for the experiment. Empty by default.
     """
 
-    name: str
+    name: str | None
     layout: ComponentLayout | None
     changes: dict
     walltime_hours: float | None
     regenerating: bool = False
     stated_changes: dict = field(default_factory=dict)
     labels: dict = field(default_factory=dict)
+
+
+@dataclass(frozen=True, eq=False, repr=False)
+class StudyPlan:
+    """The experiments a study is to create, planned and not yet created.
+
+    `ProfilingManager.plan_scaling_experiments` and `ProfilingManager.plan_experiments` make a plan and write nothing,
+    so a plan is what a notebook shows before anything is created or submitted: how many experiments there are, with
+    which layouts, walltimes and labels, and which the study already has. `ProfilingManager.generate` creates them.
+    The experiments are numbered then, and not when they are planned, against what the study holds by that time, so
+    that a plan generated in a later session, or twice, creates nothing twice.
+
+    Args:
+        call (str): The method that made the plan, which the history of the study records the experiments under.
+        experiments (tuple[ExperimentPlan, ...]): What to create, in order, unnamed but for an experiment being
+            regenerated, which keeps its name.
+        table (pd.DataFrame): One row for each experiment to create, saying what it is, which is what the plan shows.
+        held (tuple[str, ...]): The experiments the study already has for what was asked, which are left as they are.
+    """
+
+    call: str
+    experiments: tuple[ExperimentPlan, ...]
+    table: pd.DataFrame
+    held: tuple[str, ...] = ()
+
+    def __repr__(self) -> str:
+        """Returns how many experiments the plan creates, regenerates and leaves, with the table of them.
+
+        The table is cut as pandas cuts a long one, so that a plan of hundreds of layouts shows its first and last
+        rows, and keeps every column whole, since the key of a layout is what the plan is read for.
+        """
+        regenerating = sum(plan.regenerating for plan in self.experiments)
+        header = (
+            f"<StudyPlan of {self.call}: {len(self.experiments) - regenerating} new experiments, {regenerating} to "
+            f"regenerate, {len(self.held)} already held>"
+        )
+        if self.table.empty:
+            return header
+        rows = {"max_rows": pd.get_option("display.max_rows"), "min_rows": pd.get_option("display.min_rows")}
+        return f"{header}\n{self.table.to_string(**rows)}"
 
 
 @dataclass(frozen=True)
@@ -346,8 +389,8 @@ class ProfilingExperimentStatus(Enum):
             `add_experiment_from_directory`, which takes the experiment it adds to be complete. Only a DONE
             experiment is archived, and only a DONE or an ARCHIVED one is parsed.
         FAILED: Experiment ran but did not finish successfully. Set by `update_statuses` from the engine's
-            records. `run_experiments(retry_failed=True)` runs it again, and
-            `generate_scaling_experiments(regenerate_failed=True)` regenerates it first.
+            records. `run_experiments(retry_failed=True)` runs it again, and generating the plan of
+            `plan_scaling_experiments(regenerate_failed=True)` regenerates it first.
         ARCHIVED: Experiment has been archived. Set by `ProfilingExperiment.archive`, and from the start for an
             experiment created from a tarball. It is final: `update_statuses` leaves an archived experiment alone.
     """

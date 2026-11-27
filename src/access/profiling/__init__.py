@@ -30,6 +30,7 @@ from access.profiling.experiment import (
     ProfilingExperiment,
     ProfilingExperimentStatus,
     ProfilingLog,
+    StudyPlan,
     component_cores,
     find_component,
 )
@@ -37,7 +38,7 @@ from access.profiling.fms_parser import FMSProfilingParser
 from access.profiling.manager import ProfilingManager
 from access.profiling.metrics import ProfilingMetric
 from access.profiling.models.cice import CICEPartitioning, CICEPartitioningMode
-from access.profiling.models.components import CICEComponent, MOM5Component, UMComponent
+from access.profiling.models.components import CICEComponent, MOM5Component, MOM6Component, UMComponent
 from access.profiling.models.esm15 import ESM15Configuration
 from access.profiling.models.esm16 import ESM16Configuration
 from access.profiling.models.om2 import OM2Configuration
@@ -82,6 +83,7 @@ __all__ = [
     "log_at",
     "LogSpec",
     "MOM5Component",
+    "MOM6Component",
     "OM2Configuration",
     "OM3Configuration",
     "ParsedExperiment",
@@ -104,6 +106,7 @@ __all__ = [
     "RoseRanks",
     "RoseSuiteConfiguration",
     "show_versions",
+    "StudyPlan",
     "SubmodelsConfiguration",
     "UMComponent",
     "UMProfilingParser",

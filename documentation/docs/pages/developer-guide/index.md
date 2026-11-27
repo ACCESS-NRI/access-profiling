@@ -34,10 +34,12 @@ classDiagram
         work_dir
         archive_dir
         experiments
-        generate_scaling_experiments()
-        generate_experiments()
+        control_options
+        plan_scaling_experiments()
+        plan_experiments()
+        generate(plan)
         add_experiment_from_directory()
-        update_statuses()
+        status()
         parse_profiling_data()
     }
 
@@ -59,6 +61,7 @@ classDiagram
         experiment_prefix
         parallel_component
         logs
+        control_changes
         layout_key(layout)
         config_changes(layout)
         parse_layout(output_dir)
@@ -83,6 +86,7 @@ classDiagram
     ProfilingManager --> Application : application
     ProfilingManager --> ControlSource : control
     ProfilingManager --> "*" ProfilingExperiment : experiments
+    ProfilingManager ..> StudyPlan : plan_scaling_experiments()
     ProfilingManager ..> ProfilingResults : parse_profiling_data()
     ProfilingResults --> "*" ParsedExperiment : experiments
     ProfilingExperiment --> ProfilingExperimentStatus : status
@@ -90,8 +94,9 @@ classDiagram
     LogSpec --> ProfilingParser : parser
 ```
 
-A manager is generic in the type of application that its workflow engine runs. A control source only says where
-the control is, and does not depend on the workflow engine. Parsing returns the results, which hold the data of
+A manager is generic in the type of application that its workflow engine runs. Planning returns a plan, which says
+what generating it creates, and creates nothing. A control source only says where the control is, and does not
+depend on the workflow engine. Parsing returns the results, which hold the data of
 each experiment and make the selections, tables and plots. They need no manager to be read, and never change.
 
 ### The implementations for the ACCESS models
@@ -140,6 +145,7 @@ classDiagram
     SubmodelsConfiguration --> "*" PayuComponent : submodels
     PayuComponent <|-- UMComponent
     PayuComponent <|-- MOM5Component
+    PayuComponent <|-- MOM6Component
     PayuComponent <|-- CICEComponent
     PayuComponent <|-- PlainComponent
     CICEComponent --> CICEPartitioning
@@ -165,7 +171,7 @@ To extend the package, you implement one of these abstract classes:
 
 | Class | To implement | Guide |
 |---|---|---|
-| [`Application`][access.profiling.application.Application] | `parallel_component`, `logs`, `layout_key`, `config_changes` and `parse_layout`, and the `name` and `experiment_prefix` attributes | [Adding an application](adding-an-application.md) |
+| [`Application`][access.profiling.application.Application] | `parallel_component`, `logs`, `layout_key`, `config_changes` and `parse_layout`, and the `name` and `experiment_prefix` attributes. `control_changes` too, where the control needs changes for the logs to be written | [Adding an application](adding-an-application.md) |
 | [`ProfilingParser`][access.profiling.parser.ProfilingParser] | `parse`, and the `_metrics` it reports | [Adding a parser](adding-a-parser.md) |
 | [`ProfilingManager`][access.profiling.manager.ProfilingManager] | `profiling_logs`, `parse_ncpus`, `parse_status`, `_create_experiments`, `run_experiments` and `_delete_experiments` | |
 | [`ControlSource`][access.profiling.control.ControlSource] | `origin` and `provenance`, and the `directory`, `label` and `start_point` attributes | |
@@ -185,8 +191,10 @@ and the CPU count come from the same file, as `CylcRoseManager` does.
 ## Generating a study
 
 As an example of how this works, let us look at how the experiments of a study are created.
-[`generate_scaling_experiments`][access.profiling.manager.ProfilingManager.generate_scaling_experiments], in the
-base class, decides which experiments are needed. Actually creating them is left to the subclass:
+[`plan_scaling_experiments`][access.profiling.manager.ProfilingManager.plan_scaling_experiments], in the
+base class, decides which experiments are needed, and
+[`generate`][access.profiling.manager.ProfilingManager.generate] numbers them. Actually creating them is left to the
+subclass:
 
 ```mermaid
 sequenceDiagram
@@ -195,7 +203,7 @@ sequenceDiagram
     participant Search as access-config-utils
     participant Application
     participant Engine as _create_experiments
-    Study->>Manager: generate_scaling_experiments()
+    Study->>Manager: plan_scaling_experiments()
     loop every number of nodes
         Manager->>Search: iter_layouts(parallel_component, cores, allocations)
         Search-->>Manager: layouts
@@ -204,15 +212,19 @@ sequenceDiagram
             Manager->>Application: config_changes(layout)
         end
     end
-    Manager->>Engine: one plan per new experiment
+    Manager-->>Study: the plan
+    Study->>Manager: generate(plan)
+    Manager->>Engine: one plan per new experiment, named
     Engine-->>Manager: the experiments created
 ```
 
-A plan has everything that is different from one experiment to the next: its name, its layout, the changes to
-the files of the control and its walltime. The name is a number, `exp-0001` onwards. The manager tells whether it
-already holds an experiment for a layout from the key the application gives the layout, never from a name. Note that
-the manager only registers the experiments once all of them have been created. If something fails on the way,
-nothing is registered, and you can simply call the method again to create what is missing.
+A plan has everything that is different from one experiment to the next: its layout, the changes to the files of
+the control and its walltime. Its name is given when the plan is generated, and is a number, `exp-0001` onwards. The
+manager tells whether it already holds an experiment for a layout from the key the application gives the layout and
+from the changes the study stated, never from a name. It asks again when the plan is generated, so that a plan
+generated twice, or after another one, creates nothing twice. Note that the manager only registers the experiments
+once all of them have been created. If something fails on the way, nothing is registered, and you can simply generate
+the plan again to create what is missing.
 
 The numbers of the new experiments are taken before `_create_experiments` is called, and they stay taken if it
 fails, because the engine may have created some of the experiments. A subclass can avoid this for what it is able
@@ -222,8 +234,8 @@ anything, and raises there. A call that is refused in this way takes no number. 
 that it would write, so that a change that cannot be made is refused before a number is taken. By default,
 `_refuse_plans` refuses nothing.
 
-[`generate_experiments`][access.profiling.manager.ProfilingManager.generate_experiments] goes the same way, without
-a search. It makes one plan for each
+[`plan_experiments`][access.profiling.manager.ProfilingManager.plan_experiments] goes the same way, without a
+search. It plans one experiment for each
 [`ConfigurationChoice`][access.profiling.experiment.ConfigurationChoice] that the study states:
 
 - For a choice without a layout, the changes of the plan are those of the choice, and the application is not
@@ -233,7 +245,9 @@ a search. It makes one plan for each
   raise a `ValueError`.
 
 Such a plan has no walltime, since a choice states its walltime among its changes, and it may have no layout. A
-subclass of `ProfilingManager` therefore has to accept both in `_create_experiments`. The manager tells whether it
+subclass of `ProfilingManager` therefore has to accept both in `_create_experiments`. Before any experiment, the
+subclass changes the control by `_control_options()`: the control changes of the application, with the control
+options of the study merged over them. The manager tells whether it
 already holds the experiment of a choice from the key of its layout and from the changes that the choice states.
 
 Once the experiments are created, the manager writes a record for each of them, and adds the call to the study

@@ -24,9 +24,10 @@ models, which are described in [ACCESS models](../access/index.md).
 A study is defined by three independent parts:
 
 - The **application** is what is profiled, for example one configuration of a climate model. It knows how the
-  application is parallelised, which files need to be edited to change the number of cores, and which profiling
-  logs a run writes. The package ships presets for the ACCESS models, such as
-  [`ESM16_PI_CONTROL`][access.profiling.models.esm16.ESM16_PI_CONTROL]. See [ACCESS models](../access/index.md).
+  application is parallelised, which files need to be edited to change the number of cores, which profiling logs a run
+  writes, and what the control needs changed for these logs to be written. The package ships presets for the ACCESS
+  models, such as [`ESM16_PI_CONTROL`][access.profiling.models.esm16.ESM16_PI_CONTROL]. See [ACCESS
+  models](../access/index.md).
 - The **manager** is how the application is run. A
   [`ProfilingManager`][access.profiling.manager.ProfilingManager] works with one workflow engine. It creates and
   runs the experiments, keeps track of them, archives them, reads their logs and plots the results. The package
@@ -69,7 +70,8 @@ limit on the number of cores left idle. The numbers of cores it sets can be give
 same strategy can be used for every size of a study.
 
 The layouts are returned sorted by the number of cores they leave idle. Each layout becomes one experiment. The
-experiments are numbered, `exp-0001` onwards, so the name of an experiment says nothing about it. What an experiment
+manager first plans the experiments, which shows what will be created, and creates them when the plan is generated.
+The experiments are numbered, `exp-0001` onwards, so the name of an experiment says nothing about it. What an experiment
 is, is written in a record, a small file in its directory. This means that the same layout always gives the same
 experiment, and that a manager finds the experiments of a study again in a later session.
 
@@ -90,7 +92,7 @@ Each experiment held by a manager has a status:
 ```mermaid
 stateDiagram-v2
     direction LR
-    [*] --> NEW: generate_scaling_experiments, generate_experiments
+    [*] --> NEW: generate
     NEW --> RUNNING: run_experiments
     RUNNING --> DONE: the run succeeded
     RUNNING --> FAILED: the run failed
@@ -103,8 +105,9 @@ stateDiagram-v2
 
 The manager does not wait for the experiments to finish. Instead, it checks how each run went by reading the
 records that the workflow engine keeps. This happens whenever
-[`update_statuses`][access.profiling.manager.ProfilingManager.update_statuses] is called, and running, archiving
-and parsing experiments all call it first. Note that the statuses are only kept in memory. A manager created in a
+[`update_statuses`][access.profiling.manager.ProfilingManager.update_statuses] is called, and showing the
+[`status`][access.profiling.manager.ProfilingManager.status] of the study, running, archiving and parsing experiments
+all call it first. Note that the statuses are only kept in memory. A manager created in a
 new session finds the experiments of its working directory and of its archive directory again. The archived ones
 are ARCHIVED, and the others are NEW until their status is updated.
 [Managing experiments](managing-experiments.md) explains what the manager keeps on disk to find them.

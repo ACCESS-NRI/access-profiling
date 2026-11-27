@@ -116,7 +116,7 @@ This prints the change of each region as a percentage, next to its name.
 
 ## Rose suites
 
-Rose suites are generated with `generate_experiments` too, as
+Rose suites are generated from configuration choices too, as
 [Cylc Rose suites](../access/cylc-rose-suites.md#the-changes-of-an-experiment) shows, and compared in the same way.
 A suite that you prepared yourself is registered with
 [`add_rose_experiment`][access.profiling.cylc_manager.CylcRoseManager.add_rose_experiment] instead. Their regions

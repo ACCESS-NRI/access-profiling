@@ -191,8 +191,10 @@ def test_esm15_generate_scaling_experiments(mock_experiment_generator, esm15, tm
         GitControlSource("https://example.com/repo", "commit"),
         lab_dir=Path("/fake/lab"),
     )
-    manager.generate_scaling_experiments(
-        num_nodes_list=[9.0], cores_per_node=48, walltime=2.0, allocations=PREINDUSTRIAL_ALLOCATIONS
+    manager.generate(
+        manager.plan_scaling_experiments(
+            num_nodes_list=[9.0], cores_per_node=48, walltime=2.0, allocations=PREINDUSTRIAL_ALLOCATIONS
+        )
     )
 
     config = mock_experiment_generator.call_args[0][0]
@@ -210,8 +212,10 @@ def test_esm15_historical_refuses_the_study_of_the_preindustrial_configuration(m
     directories = (tmp_path / "work", tmp_path / "archive")
     control = GitControlSource("https://example.com/repo", "commit")
     study = PayuManager(*directories, ESM15_PREINDUSTRIAL, control, lab_dir=Path("/fake/lab"))
-    study.generate_scaling_experiments(
-        num_nodes_list=[9.0], cores_per_node=48, walltime=2.0, allocations=PREINDUSTRIAL_ALLOCATIONS
+    study.generate(
+        study.plan_scaling_experiments(
+            num_nodes_list=[9.0], cores_per_node=48, walltime=2.0, allocations=PREINDUSTRIAL_ALLOCATIONS
+        )
     )
 
     message = (

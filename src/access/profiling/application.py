@@ -185,6 +185,20 @@ class Application(ABC):
             ComponentLayout | None: The layout, or None if the files do not say.
         """
 
+    @property
+    def control_changes(self) -> dict:
+        """Returns the changes the control needs for any experiment of this application to be profiled.
+
+        They are made to the control before any experiment is created from it, keyed by file, in the words of the
+        workflow engine, as the changes of a `ConfigurationChoice` are. A study's own control options are merged
+        over them, and win where both change one setting. What a generated layout needs of the files is not here
+        but in `config_changes`, since an experiment that keeps the control's layout needs none of it.
+
+        Returns:
+            dict: The changes. The default is none, an empty dict.
+        """
+        return {}
+
     def component_logs(self, output_dir: Path) -> dict[str, ProfilingLog]:
         """Returns the logs present in one output directory.
 

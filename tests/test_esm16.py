@@ -246,12 +246,13 @@ def test_esm16_component_tree_bounds_layouts_on_its_own(esm16):
 def test_esm16_generate_scaling_experiments(mock_experiment_generator, manager):
     """Test that ACCESS-ESM1.6 scaling experiments can be generated end to end."""
 
-    manager.generate_scaling_experiments(
-        num_nodes_list=[PI_CONTROL_NODES],
-        control_options={},
-        cores_per_node=PI_CONTROL_CORES_PER_NODE,
-        walltime=2.0,  # hrs
-        allocations=PI_CONTROL_ALLOCATIONS,
+    manager.generate(
+        manager.plan_scaling_experiments(
+            num_nodes_list=[PI_CONTROL_NODES],
+            cores_per_node=PI_CONTROL_CORES_PER_NODE,
+            walltime=2.0,  # hrs
+            allocations=PI_CONTROL_ALLOCATIONS,
+        )
     )
 
     config = mock_experiment_generator.call_args[0][0]
