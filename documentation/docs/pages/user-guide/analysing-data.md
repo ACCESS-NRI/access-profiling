@@ -32,8 +32,9 @@ print(manager.data[name]["MOM5"].region.values)
 This prints the names of the logs, and then the regions of the MOM5 timers. An ACCESS-ESM1.6 experiment has five
 logs: `payu`, Payu's timings of the whole job, and `UM`, `UM_Total_Walltime`, `MOM5` and `CICE5`, the timers of its
 components. An ACCESS-OM3 experiment has `payu`, `MOM6`, `CICE6` and `ESMF`, each of the last three only if the run
-wrote it. Note that an optional log that is missing is skipped, with an INFO message. An optional log that the run
-wrote but that cannot be read is skipped too, with a warning that gives the reason.
+wrote it. Note that an optional log that is missing, or that is not in the format of its parser, is skipped with an
+INFO message. An optional log that its parser fails on in any other way is skipped too, with a warning that gives the
+reason.
 
 ## Repeated runs
 
@@ -145,8 +146,7 @@ collects the regions of one group, for every experiment, into a single dataset. 
 cores that each experiment gives MOM5, as a coordinate:
 
 ```python
-from access.profiling import RegionGroup
-from access.profiling import component_cores
+from access.profiling import RegionGroup, component_cores
 
 ocean = RegionGroup("MOM5", ["Total runtime"], relabel={"Total runtime": "MOM5"})
 gathered = manager.gather(ocean, [component_cores("MOM5")])

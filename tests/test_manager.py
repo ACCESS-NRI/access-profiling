@@ -700,20 +700,29 @@ def test_parse_profiling_data_optional_log_failures_are_skipped_and_logged(singl
 
     failed = [record for record in caplog.records if "Failed to parse optional profiling log" in record.message]
     not_found = [record for record in caplog.records if "not found. Skipping." in record.message]
-    assert len(failed) == 3 and len(not_found) == 2, (
-        "The dedicated FileNotFoundError branch should catch exactly the missing-log errors, including subclasses; "
-        "every other exception type, including other OSErrors, should fall through to the general branch."
+    other_format = [record for record in caplog.records if "is not in the format of its parser" in record.message]
+    assert (len(failed), len(not_found), len(other_format)) == (2, 2, 1), (
+        "The FileNotFoundError branch should catch exactly the missing-log errors, including subclasses, and the "
+        "ValueError branch a log in another format; every other exception type, including other OSErrors, should "
+        "fall through to the general branch."
     )
     assert {record.levelname for record in failed} == {"WARNING"}, (
-        "An optional log the run wrote and the parser cannot read is reported as a warning, whatever the exception."
+        "A parser that fails in a way it does not mean to is reported as a warning."
     )
-    assert {record.levelname for record in not_found} == {"INFO"}, "A run need not write an optional log."
+    assert {record.levelname for record in not_found + other_format} == {"INFO"}, (
+        "A run need not write an optional log, and a Rose suite hands every parser the log of every task."
+    )
 
-    for name, record in zip(errors, failed + not_found, strict=True):
+    by_name = {"bad_log": other_format[0], "denied_log": failed[0], "custom_log": failed[1]}
+    by_name |= {"missing_log": not_found[0], "subclass_missing_log": not_found[1]}
+    for name, record in by_name.items():
         assert f"/fake/{name}.out" in record.message, f"The record reported for '{name}' should carry its own path."
     assert failed[0].message == (
-        "Failed to parse optional profiling log '/fake/bad_log.out' with exception:\n    boom\nSkipping."
+        "Failed to parse optional profiling log '/fake/denied_log.out' with exception:\n    denied\nSkipping."
     ), "The warning should report the log path and the exception message, each on its own line."
+    assert other_format[0].message == (
+        "Optional profiling log '/fake/bad_log.out' is not in the format of its parser: boom Skipping."
+    )
     assert [record.message for record in caplog.records].count(" Done.") == 1, (
         "' Done.' should only be logged for the log which was parsed successfully."
     )

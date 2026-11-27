@@ -398,11 +398,12 @@ same second leaves the mutant's `.pyc` loaded.
   an attribute named `autospec`.
 - **Sample logs are inline**, as triple-quoted strings in module-scoped fixtures; there is no `tests/data/`. Module
   scope is for immutable data and parsers, function scope for anything mutable, such as a manager or a dataset.
-- **`conftest.py` has one fixture**, `close_figures`, which closes the figures every test drew. The rest are
-  helpers, imported with `from conftest import ...`: those that narrow an optional result with an assertion message
-  rather than an `AttributeError` (`component_of`, `layout_of`, `decomposition_of`, `grid_of`, `legend_labels`), and
-  those more than one module needs (`fake_parser`, `select_layouts` for a Payu application, `write_suite_conf`
-  for the variables of a Rose suite, and `leaf_layout` and `layout_with` for a layout built by hand). The import works because `tests/` has no `__init__.py`: don't add one.
+- **`conftest.py` has one fixture**, `close_figures`, which closes the figures every test drew. The rest are helpers,
+  imported with `from conftest import ...`: those that narrow an optional result with an assertion message rather than
+  an `AttributeError` (`component_of`, `layout_of`, `decomposition_of`, `grid_of`, `legend_labels`), and those more than
+  one module needs (`fake_parser`, `select_layouts` for a Payu application, `write_suite_conf` for the variables of a
+  Rose suite, and `leaf_layout` and `layout_with` for a layout built by hand). The import works because `tests/` has no
+  `__init__.py`: don't add one.
 - Newer files group tests in `class Test<Behaviour>:` blocks with no base class and no setup, the class docstring
   stating the behaviour. `pytest.raises` gets a `match=`. A test's docstring says what is checked and, where it is
   not obvious, why. Tests carry no type annotations.

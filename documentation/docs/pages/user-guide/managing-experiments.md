@@ -203,8 +203,8 @@ means that the history of a study is still there once its working directory is g
 An archive is written whole, to a temporary file that takes the name of the archive only once it is complete. If
 archiving stops part way, no archive is left, and you can simply archive the experiment again. You can also call
 `archive_experiments` again at any time: an experiment that is already archived is passed over with an INFO
-message, while one that is not yet DONE is passed over with a warning. An archive that
-cannot be read at all, such as an empty file, is skipped with a warning when the manager is created.
+message, while one that is not yet DONE is passed over with a warning. An archive that cannot be read at all, such
+as an empty file, is skipped with a warning when the manager is created.
 
 You can choose what goes into the archive. `exclude_dirs` and `exclude_files` leave out the directories and files
 inside the experiment that match the given patterns. `follow_symlinks` decides what happens with symlinks. A

@@ -1325,6 +1325,32 @@ class ProfilingManager(ABC, Generic[AppT]):
             self.data.pop(name, None)
         self._log("delete_experiments", names_to_delete)
 
+    @staticmethod
+    def _parse_optional(log: ProfilingLog) -> xr.Dataset | None:
+        """Parses an optional log, or says why it was skipped.
+
+        Args:
+            log (ProfilingLog): The log, which a run need not have written.
+
+        Returns:
+            xr.Dataset | None: The parsed log, or None if it was skipped.
+        """
+        try:
+            return log.parse()
+        except FileNotFoundError:
+            logger.info(f"Optional profiling log '{log.filepath}' not found. Skipping.")
+        except ValueError as e:
+            # A parser raises ValueError on a log not in its format, which an optional log often is: a Rose suite hands
+            # every parser the log of every task, and a run may be configured not to write the timers its log holds.
+            logger.info(f"Optional profiling log '{log.filepath}' is not in the format of its parser: {e} Skipping.")
+        except Exception as e:
+            # A warning, unlike a log that is not there or not in the parser's format: the parser failed in a way it
+            # does not mean to, which is one to look into before the log is missed from a plot.
+            logger.warning(
+                f"Failed to parse optional profiling log '{log.filepath}' with exception:\n    {e}\nSkipping."
+            )
+        return None
+
     def parse_profiling_data(self):
         """Parses profiling data from the experiments.
 
@@ -1350,22 +1376,10 @@ class ProfilingManager(ABC, Generic[AppT]):
                         datasets: dict[int, xr.Dataset] = {}
                         for run, log in run_logs.items():
                             logger.info(f"Parsing {log_name} profiling log for run {run}: {log.filepath}. ")
-                            if log.optional:
-                                try:
-                                    datasets[run] = log.parse()
-                                except FileNotFoundError:
-                                    logger.info(f"Optional profiling log '{log.filepath}' not found. Skipping.")
-                                    continue
-                                except Exception as e:
-                                    # A warning, unlike a log that is not there: the run wrote it, and a parser that
-                                    # cannot read it is one to look into before the log is missed from a plot.
-                                    logger.warning(
-                                        f"Failed to parse optional profiling log '{log.filepath}' with exception:\n"
-                                        f"    {e}\nSkipping."
-                                    )
-                                    continue
-                            else:
-                                datasets[run] = log.parse()
+                            dataset = self._parse_optional(log) if log.optional else log.parse()
+                            if dataset is None:
+                                continue
+                            datasets[run] = dataset
                             logger.info(" Done.")
                         # A single run is stored as is; several runs are concatenated along a new 'run' dimension.
                         if len(datasets) == 1:
