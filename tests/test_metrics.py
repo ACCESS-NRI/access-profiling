@@ -35,13 +35,14 @@ class TestRepr:
     """A metric is shown by its name and its units, since a dataset is keyed by the metric objects."""
 
     def test_it_names_the_metric_and_its_units(self):
-        assert repr(tmax) == "ProfilingMetric('maximum time', 'second')"
+        """Not as a call: one made from it would be another key, a metric being a key by identity."""
+        assert repr(tmax) == "<ProfilingMetric 'maximum time' [second]>"
 
     def test_a_key_a_dataset_does_not_hold_names_the_metrics_it_does(self):
         """What xarray suggests for a string is then the metric to use, not an address in memory."""
         ds = xr.Dataset({tmax: ("region", [1.0])}, coords={"region": ["Total"]})
 
         with pytest.raises(
-            KeyError, match=re.escape("Did you mean one of (ProfilingMetric('maximum time', 'second'),)")
+            KeyError, match=re.escape("Did you mean one of (<ProfilingMetric 'maximum time' [second]>,)")
         ):
             ds["maximum time"]

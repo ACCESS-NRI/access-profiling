@@ -99,9 +99,11 @@ class ProfilingMetric:
         """Returns the name and the units of the metric, which is how a message names it.
 
         A dataset is keyed by the metric objects, so a message about one of its variables, such as xarray's for a key
-        it does not hold, shows them by this rather than by an address in memory.
+        it does not hold, shows them by this rather than by an address in memory. It is deliberately not a call that
+        makes one: a metric is a key by identity, so a second one made with the same name is another key, and the
+        metric to use is the one its module defines, such as `tmax` in `access.profiling.metrics`.
         """
-        return f"ProfilingMetric({self._name!r}, {str(self._units)!r})"
+        return f"<ProfilingMetric {self._name!r} [{self._units}]>"
 
 
 # The metrics the parsers in this package report; the module docstring says what each one is a statistic of.

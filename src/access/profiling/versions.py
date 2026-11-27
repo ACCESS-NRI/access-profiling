@@ -32,7 +32,8 @@ def show_versions() -> None:
 
     The packages are those this package requires to run, in the order it declares them. Those only needed to develop
     or test it are left out. This package run without being installed declares nothing, and only the version of
-    Python is known.
+    Python is known. The versions and the requirements are those of the installed metadata, which an editable install
+    writes when it is installed: install it again after its requirements change, or they are not all listed.
 
     For example, in the first cell of a notebook:
 
